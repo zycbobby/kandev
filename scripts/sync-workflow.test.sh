@@ -114,6 +114,9 @@ for _ in $(seq 1 100); do
 	fi
 	sleep 0.01
 done
+if [ ! -s "$port_file" ]; then
+	fail "stub server starts"
+fi
 
 if [ -s "$port_file" ]; then
 	stub_url="http://127.0.0.1:$(<"$port_file")"
