@@ -50,6 +50,7 @@ YELLOW := \033[33m
 MAGENTA := \033[35m
 
 VERBOSE ?= 0
+URL ?= http://localhost:38429
 NODE ?= $(shell command -v node $(NULL_REDIR) || echo node)
 RUNTIME_BUNDLE_DIR ?= $(CURDIR)/dist/kandev
 RUNTIME_VERSION ?= $(shell git describe --tags --always --dirty $(NULL_REDIR) || echo dev)
@@ -123,6 +124,8 @@ help:
 	@echo "  service-config           Show service launcher/config paths"
 	@echo "  service-install PORT=3000 HOME_DIR=/path  Optional install overrides"
 	@echo "  service-install NO_BOOT_START=1  Skip Linux user-service boot hint"
+	@echo "  sync-workflow                Export all runtime workflows into workflows/ (one file per workflow)"
+	@echo "  sync-workflow URL=http://localhost:38429  Backend base URL override"
 	@echo ""
 	@echo "Build Commands:"
 	@echo "  build            Build backend and web app"
@@ -409,6 +412,12 @@ deploy:
 		--checkout "$(CURDIR)" \
 		$(SERVICE_INSTALL_FLAGS)
 	$(call success,User-domain service deployed)
+
+.PHONY: sync-workflow
+sync-workflow:
+	$(call phase,Syncing workflows from runtime)
+	@python3 scripts/sync-workflow.py "$(URL)" "$(CURDIR)/workflows"
+	$(call success,Workflows synced to $(CURDIR)/workflows)
 
 .PHONY: service-uninstall service-start service-stop service-restart service-status service-logs service-logs-follow service-config
 service-uninstall: service-cli-check
