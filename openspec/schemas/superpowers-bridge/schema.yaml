@@ -1,0 +1,303 @@
+name: superpowers-bridge
+version: 1
+description: >
+  OpenSpec-native workflow with embedded Superpowers capabilities.
+  OpenSpec remains the front door for change creation, artifact
+  lifecycle, validation, and archive. Superpowers is used only as
+  stage-local, stage-specific executors inside proposal / design+tasks / apply.
+  Artifact set stays close to stock OpenSpec: proposal, design,
+  specs, tasks, verify. No extra brainstorm.md / plan.md /
+  retrospective.md artifacts are introduced.
+
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 中文 proposal，保留 OpenSpec 原生变更入口
+    template: proposal.md
+    instruction: |
+      保持 OpenSpec proposal 阶段为唯一事实来源：最终产物是当前 change
+      目录下的 `proposal.md`，而不是额外的 brainstorm artifact。
+
+      Research-first proposal posture:
+      Before drafting the proposal, treat the request as an unknown path to be
+      validated. Identify the facts that could change Why, scope, Impact,
+      capability mapping, or non-goals. When safe, low-cost, and reversible, run
+      the smallest viable proof: read the current implementation, execute a
+      minimal command, call a side-effect-free endpoint, inspect real output, or
+      run one successful path. Confirm boundaries explicitly: what this change
+      solves, what it rejects, and which adjacent problems are out of scope.
+      Record findings in `proposal.md`'s `## Research Log` section using its
+      fixed fields (unknown / method / conclusion / evidence): successful path,
+      real input/output summary, failure modes, limits, blockers, explicit
+      rejected dependencies, and non-goals. This section is optional — omit it
+      when no bounded research was actually performed (e.g. a clear,
+      inline-direct, mechanical change). Do NOT create `research.md` or any
+      extra non-OpenSpec artifact.
+
+      Proposal-executor choice:
+      Inspect the agent-visible skills / commands for proposal executors. A
+      proposal executor is a stage-specific executor for shaping intent, scope,
+      success criteria, and capability mapping; it is not an apply-stage
+      implementation orchestrator. `superpowers:brainstorming` and
+      `grill-with-docs` are optional proposal executors, not hard dependencies.
+      If neither is available, continue with inline clarification or direct
+      proposal drafting. Do NOT fall back to any extra non-OpenSpec artifact.
+
+      Proposal 引擎（推荐）：
+      - Use **superpowers:brainstorming** for 对话式澄清：范围、约束、
+        成功标准、方案取舍。
+      - Use **grill-with-docs** when the proposal needs to be challenged
+        against existing specs, docs, terminology, or historical decisions.
+      - If no proposal executor aid is available and the request is already clear,
+        write the proposal directly and record key assumptions in `proposal.md`.
+      - Proposal 引擎输出必须直接沉淀到 `proposal.md` / spec delta，
+        不要写 `docs/superpowers/specs/`、`CONTEXT.md`、ADR，
+        也不要创建 `brainstorm.md`。
+
+      proposal.md 写作要求：
+      - 使用中文
+      - `Why`：写清问题、为什么现在做、预期收益
+      - `What Changes`：列出关键变更点；有前后对比时优先用 From/To
+      - `Capabilities`：明确 New / Modified capabilities
+      - `Impact`：列出主要代码、接口、数据、依赖影响面
+
+      这一步只产出 `proposal.md`。`design.md` 和 `tasks.md`
+      由后续 plan 阶段负责。
+    requires: []
+
+  - id: design
+    generates: design.md
+    description: 技术设计，承接 proposal 而非额外 brainstorm artifact
+    template: design.md
+    instruction: |
+      Create `design.md` for this change.
+
+      输入来源：
+      - `proposal.md`
+      - `openspec/changes/<change-name>/specs/**/*.md`（若已存在）
+
+      目标：
+      - 保持 OpenSpec plan 阶段原生语义：`design.md` 描述 HOW
+      - 不依赖 `brainstorm.md`
+      - 如变更简单，可写精简版设计，但仍需覆盖模板章节；不适用项可写 N/A
+
+      建议嵌入 Superpowers 能力：
+      - 若需要更强方案比较，可借助 `superpowers:brainstorming`
+        的对话能力继续澄清，但最终只写入 `design.md`
+
+      写作重点：
+      - Context / Goals / Non-Goals
+      - Decisions（包含替代方案与取舍）
+      - Risks / Trade-offs
+      - Migration Plan
+      - Open Questions
+    requires:
+      - proposal
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: 中文 capability delta specs
+    template: spec.md
+    instruction: |
+      Create spec deltas that define WHAT changes at the capability
+      level.
+
+      保持 capability-first 结构：
+      - 每个 capability 一个 `specs/<capability>/spec.md`
+      - 新增 capability：使用 proposal 中的 kebab-case 名称
+      - 修改 capability：对齐 `openspec/specs/<capability>/`
+
+      写作要求（偏向 master 上的设计）：
+      - 中文叙事结构优先
+      - 对复杂/易歧义行为再补 Requirements / Scenarios
+      - 不要把 requirement 列表写成唯一主体
+
+      Delta 规则：
+      - `## ADDED Requirements`
+      - `## MODIFIED Requirements`
+      - `## REMOVED Requirements`
+      - `## RENAMED Requirements`
+
+      OpenSpec validate 硬规则仍必须满足：
+      - Requirement 文本包含 SHALL 或 MUST
+      - 每个 Requirement 至少一个 `#### Scenario:`
+    requires:
+      - proposal
+
+  - id: tasks
+    generates: tasks.md
+    description: E2E-first implementation checklist and verification strategy
+    template: tasks.md
+    instruction: |
+      保持 OpenSpec plan 阶段原生语义：这一步的正式产物是 `tasks.md`
+      （以及本 change 下的 `design.md`），而不是额外 `plan.md`。
+
+      Planning-engine choice (openspec-plan Step 1.5):
+      Before generating `design.md` / `tasks.md`, the user must explicitly choose
+      one planning engine: `inline` or `superpowers:writing-plans`. This choice
+      only decides how this stage produces its own artifacts; it is unrelated to
+      how the apply stage later writes code.
+
+      Options:
+      - `inline`: run this skill directly with elevated reasoning effort.
+      - `superpowers:writing-plans`: borrow that skill's planning discipline,
+        but write results directly into `tasks.md` / `design.md`. Do NOT create
+        `plan.md` and do NOT write to `docs/superpowers/plans/`.
+
+      Unattended fallback:
+      In CI / headless / no-dialog contexts, or when the user cannot answer, use
+      the inline baseline and continue without error.
+
+      Plan-stage execution posture:
+      Planning is the point where unknown routes become executable work. Before
+      splitting tasks, confirm whether the path is viable, whether it is worth
+      taking, where the boundary stops, and how acceptance will prove success.
+      Use elevated reasoning effort on design trade-offs, task boundaries,
+      dependency exit gates, Verification Strategy, and risks, then write the
+      results only into `design.md` / `tasks.md`.
+
+      PRECHECK — bounded research / manual probe:
+      Before finalizing the plan, check whether implementation or acceptance
+      depends on knowledge outside the repository. This includes third-party
+      request/response contracts, SDK/API behavior, external services,
+      外部 CLI / external CLI commands and exit codes, and agent/runtime 响应 such as
+      transcripts, logs, model/tool outputs, or orchestration state. It also
+      includes concrete bugs, failures, regressions, or uncertain runtime
+      behavior where bounded debugging is needed before task design.
+
+      If credentials, network access, sandbox boundaries, cost, rate limits,
+      and side-effect constraints make the probe safe, run the smallest
+      reproducible research/probe/debugging step needed to validate the
+      assumption or locate the root cause. For concrete failures, follow
+      systematic-debugging discipline before turning the work into tasks.
+      Prefer a 专门 subagent when the research would consume substantial
+      main-agent context, such as third-party services, external CLI output,
+      long logs, transcripts, or agent/runtime 响应. The subagent reports local
+      facts, key output, failure modes, limits, root-cause findings, and
+      acceptance suggestions back to the main agent. Record those findings in
+      `design.md`'s `## Research Log` section using its fixed fields (unknown /
+      method / conclusion / evidence): request or response shape, CLI command
+      and exit code, agent/runtime response summary, failure modes, root cause,
+      limits, or unsupported cases. This section is optional — omit it when the
+      plan required no bounded research or probe.
+
+      Dependency exit gate (must hold before finalizing design.md / tasks.md):
+      Enumerate every potential dependency the plan leans on (third-party API,
+      SDK, external service, external CLI, agent/runtime behavior, or other
+      out-of-repo knowledge). Each MUST end in one of two terminal states,
+      never left as a guess ("it should probably work"):
+      (1) Resolved — a real probe/demo was run, not documentation inference
+      alone, producing concrete input/output evidence (request/response shape,
+      command + exit code, version, signature, error mode) recorded in
+      `design.md`'s `## Research Log` section; (2) Rejected — a documented
+      reason for not depending on it (unreachable, cost, side effects,
+      uncontrollable behavior, licensing, etc.), also recorded in the Research
+      Log, with the plan adjusted to not rely on it. Recording an "unverified
+      assumption" and finalizing anyway does NOT satisfy the gate: either obtain
+      the real input/output, or give an explicit rejection reason and revise the
+      plan.
+
+      If the probe is unsafe or unavailable, do not call it. Do not silently
+      carry an unverified assumption into acceptance: either record an explicit
+      rejection reason for that dependency in `design.md`'s `## Research Log`
+      and revise the plan to not depend on it, or mark it as a hard blocker
+      there with a later verification entry (the plan is not finalized for that
+      dependency until the blocker is resolved or rejected).
+      Do NOT create extra artifacts such as `research.md`, `debug.md`,
+      `plan.md`, or `docs/superpowers/plans/`.
+
+      任务设计原则（来自 master 分支 workflow 设计）：
+      1. **E2E 测试设计优先**：先判断测试对象类型——具体程序代码（API/CLI/UI，优先用 API
+         调用或浏览器插件观测日志/coverage）还是 agent 本身或某个 skill（必须设计沙箱创建、
+         沙箱观测能力、agent 启动配置传递）——再设计验证方式
+      2. 先明确 Verification Strategy，再拆实现任务
+      3. 每条任务都要能映射到具体文件和可验证结果
+
+      `tasks.md` 必须包含：
+      - `## Verification Strategy`
+      - `## E2E 测试图`
+      - `## 实现清单`
+      - `## 验证清单`
+
+      每个实现 task 必须：
+      - 使用 `- [ ]`
+      - 指向具体文件路径
+      - 具备明确的准出标准
+      - 粒度控制在单次实现会话可完成的范围
+    requires:
+      - design
+      - specs
+
+  - id: verify
+    generates: verify.md
+    description: Post-implementation verification report
+    template: verify.md
+    instruction: |
+      `verify.md` 是 apply 完成后的校验报告。
+
+      Use the Skill tool to invoke **openspec-verify-change** if
+      available; otherwise perform the checks manually and record them
+      in `verify.md`.
+
+      必须覆盖：
+      1. `openspec validate --all --json`
+      2. `tasks.md` 勾选完成度
+      3. delta specs 与 `openspec/specs/<capability>/spec.md` 的 sync 状态
+      4. `design.md` / specs / 实现的一致性 spot-check
+      5. 是否仍保持 OpenSpec-native artifact 集合，而没有外溢到额外 superpowers side artifacts
+    requires:
+      - tasks
+
+apply:
+  requires: [tasks]
+  tracks: tasks.md
+  instruction: |
+    OpenSpec 的 apply 阶段仍是控制骨架：
+    - 任务进度以 `tasks.md` 为准
+    - 校验结果写入 `verify.md`
+    - 后续归档仍使用 `openspec archive -y`
+
+    Superpowers 只作为实现阶段的增强能力。
+
+    0. **读取上下文**
+
+       开始任何实现前，必须读取：
+       - `proposal.md`
+       - `design.md`
+       - `tasks.md`
+       - `specs/**/*.md`
+
+    1. **Pre-flight — verify embedded Superpowers skills**
+
+       推荐检查以下能力是否可用：
+       - `superpowers:using-git-worktrees`
+       - `superpowers:subagent-driven-development`
+       - `superpowers:test-driven-development`
+       - `superpowers:requesting-code-review`
+
+       若可用，优先用它们增强实现质量；若不可用，不改变 OpenSpec
+       apply 的骨架，只是回退到手动执行。
+
+    2. **逐 task 实现**
+
+       对于当前未完成的第一条 task：
+       - 明确对应文件与准出标准
+       - 先实现，再验证
+       - 满足准出标准后把 `tasks.md` 中对应条目标记为 `[x]`
+
+       若 `superpowers:subagent-driven-development` 可用：
+       - 将 `design.md`、`tasks.md`、相关 spec 作为子代理实现上下文的一部分
+
+    3. **遇到冲突必须暂停澄清**
+
+       当出现以下情况时暂停并澄清：
+       - 设计冲突
+       - 需求边界变化
+       - 验证失败且无法直接修复
+       - 外部依赖阻塞
+
+    4. **退出条件**
+
+       所有任务完成后，必须：
+       - 确认 `tasks.md` 已更新
+       - 再进入 `verify.md` 生成流程

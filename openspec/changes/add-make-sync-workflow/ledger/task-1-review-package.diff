@@ -1,0 +1,147 @@
+# Review package Task 1 (base 3cd88733a..HEAD)
+
+## commits
+ffaa4d074 feat(sync-workflow): add runtime workflow export script
+
+## stat
+ .../add-make-sync-workflow/ledger/task-1-report.md | 52 ++++++++++++++++
+ scripts/sync-workflow.py                           | 72 ++++++++++++++++++++++
+ 2 files changed, 124 insertions(+)
+
+## diff
+diff --git a/openspec/changes/add-make-sync-workflow/ledger/task-1-report.md b/openspec/changes/add-make-sync-workflow/ledger/task-1-report.md
+new file mode 100644
+index 000000000..841fb3b02
+--- /dev/null
++++ b/openspec/changes/add-make-sync-workflow/ledger/task-1-report.md
+@@ -0,0 +1,52 @@
++# Task 1 report: `scripts/sync-workflow.py`
++
++## Implemented
++
++Added the executable Python 3 stdlib CLI `scripts/sync-workflow.py`.
++
++- Fetches workspaces, then workflows for each workspace, using the required list query parameters.
++- Sorts workspaces and workflows by ID.
++- Exports each workflow as raw response bytes to a uniquely predictable `.yml` filename.
++- Preserves existing files and only writes or overwrites generated workflow files.
++- Reports HTTP and unreachable-backend failures to stderr with the base URL and exits non-zero.
++- Prints the synchronized workflow count on success.
++
++## Tests
++
++Commands and observed output:
++
++```text
++$ python3 -m py_compile scripts/sync-workflow.py
++# exit 0
++
++$ rm -rf /tmp/sync-smoke; python3 scripts/sync-workflow.py http://localhost:38429 /tmp/sync-smoke
++synced 8 workflow(s) to /tmp/sync-smoke
++# exit 0
++
++$ find /tmp/sync-smoke -maxdepth 1 -type f -name '*.yml' -printf '%f\\n' | sort
++development.yml
++dev-openspec-workflow.yml
++explore.yml
++fix.yml
++kanban.yml
++spec-driven-development.yml
++spec.yml
++tdd.yml
++
++$ python3 scripts/sync-workflow.py http://localhost:1 /tmp/sync-failure
++# exit 1
++# stderr: sync-workflow: backend unreachable at http://localhost:1: <urlopen error [Errno 111] Connection refused>
++```
++
++## Files changed
++
++- `scripts/sync-workflow.py` (new, executable)
++- `openspec/changes/add-make-sync-workflow/ledger/task-1-report.md` (this report)
++
++## Self-review
++
++Read the complete script after the smoke tests and reviewed the implementation against the task brief. Fixed an initial Python f-string quoting syntax error before verification. No remaining concerns identified.
++
++## Concerns
++
++None.
+diff --git a/scripts/sync-workflow.py b/scripts/sync-workflow.py
+new file mode 100755
+index 000000000..88381453f
+--- /dev/null
++++ b/scripts/sync-workflow.py
+@@ -0,0 +1,72 @@
++#!/usr/bin/env python3
++"""Reverse-export runtime workflows to versionable YAML files."""
++
++import json
++import os
++import re
++import sys
++import urllib.error
++import urllib.request
++
++
++def slug(name):
++    value = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
++    return value or "workflow"
++
++
++def get(url, path):
++    try:
++        with urllib.request.urlopen(url.rstrip("/") + path, timeout=10) as response:
++            return response.read()
++    except urllib.error.HTTPError as error:
++        sys.exit(
++            f"sync-workflow: backend at {url} returned HTTP {error.code} for {path}"
++        )
++    except Exception as error:
++        sys.exit(f"sync-workflow: backend unreachable at {url}: {error}")
++
++
++def main():
++    if len(sys.argv) != 3:
++        sys.exit("usage: sync-workflow.py <url> <out_dir>")
++
++    url, out_dir = sys.argv[1:]
++    os.makedirs(out_dir, exist_ok=True)
++
++    workspaces = json.loads(get(url, "/api/v1/workspaces"))["workspaces"]
++    workspaces = sorted(workspaces, key=lambda workspace: workspace["id"])
++    used = set()
++    count = 0
++
++    for workspace in workspaces:
++        workspace_id = workspace["id"]
++        path = (
++            "/api/v1/workflows?workspace_id="
++            + str(workspace_id)
++            + "&include_hidden=true&exclude_office=false"
++        )
++        workflows = json.loads(get(url, path))["workflows"]
++        workflows = sorted(workflows, key=lambda workflow: workflow["id"])
++
++        for workflow in workflows:
++            base = slug(workflow["name"])
++            workspace_slug = slug(workspace["name"])
++            filename = base
++            if filename in used:
++                filename = f"{base}--{workspace_slug}"
++                suffix = 2
++                while filename in used:
++                    filename = f"{base}--{workspace_slug}--{suffix}"
++                    suffix += 1
++            used.add(filename)
++
++            body = get(url, f"/api/v1/workflows/{workflow['id']}/export")
++            with open(os.path.join(out_dir, filename + ".yml"), "wb") as output:
++                output.write(body)
++            count += 1
++
++    print(f"synced {count} workflow(s) to {out_dir}")
++
++
++if __name__ == "__main__":
++    main()
