@@ -263,17 +263,23 @@ Reinstalling an already active Linux unit performs `enable --now`, which does no
 
 ## Run a source checkout as a service
 
-The repository Make targets build a release-style bundle under `dist/kandev` and install that snapshot. They do not run live source files.
+The repository Make targets build a release-style bundle and install that snapshot. They do not run live source files or the Vite development server.
+
+Use `make deploy` to update the user-domain daemon you actually use. It builds the production SPA into the `kandev` binary, copies the runtime to `<live-home>/runtime` (typically `~/.kandev/runtime`), then reinstalls and restarts the user service. `make dev` stays isolated under `.kandev-dev` and does not replace that daemon.
 
 ```bash
-make service-install
+make deploy
 make service-status
 make service-logs
 ```
 
-Available user-service targets include `service-start`, `service-stop`, `service-restart`, `service-logs-follow`, `service-config`, and `service-uninstall`. `make service-install-system` installs the built checkout as a system service. `HOME_DIR=/path` and `NO_BOOT_START=1` pass their corresponding installer flags. `PORT=...` is exposed by the Makefile but has the native-launcher limitation described above.
+`HOME_DIR=/path`, `PORT=...`, and `NO_BOOT_START=1` are the same optional overrides as `make service-install`. `make deploy` never installs a system (`--system`) unit.
 
-After changing source or checking out another revision, rerun `make service-install`, then `make service-restart`. These targets are intended for development and still do not create service metadata for Settings-based update application.
+`make service-install` still exists for a checkout-local install whose unit can execute `<checkout>/dist/kandev/bin/kandev`. Prefer `make deploy` when the live daemon must survive `make clean`, a branch switch, or a task worktree going away.
+
+Available user-service targets include `service-start`, `service-stop`, `service-restart`, `service-logs-follow`, `service-config`, and `service-uninstall`. `make service-install-system` installs the built checkout as a system service. `PORT=...` is exposed by the Makefile but has the native-launcher limitation described above.
+
+These source-checkout targets do not create service metadata for Settings-based update application.
 
 ## Uninstall and data cleanup
 

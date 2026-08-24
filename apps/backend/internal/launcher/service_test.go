@@ -53,6 +53,45 @@ func TestRenderSystemdUnitPinsSelectedConfigWithoutOverridingYAML(t *testing.T) 
 	}
 }
 
+func TestRenderSystemdUnitSetsWorkingDirectoryToHome(t *testing.T) {
+	// @covers AC-LAUNCHER-SOURCE-DEPLOY-003.2
+	tests := []struct {
+		name string
+		in   nativeServiceUnitInput
+	}{
+		{
+			name: "user",
+			in: nativeServiceUnitInput{
+				Executable: "/home/alice/.kandev/runtime/bin/kandev",
+				HomeDir:    "/home/alice/.kandev",
+				LogDir:     "/home/alice/.kandev/logs",
+			},
+		},
+		{
+			name: "system",
+			in: nativeServiceUnitInput{
+				Executable: "/var/lib/kandev/runtime/bin/kandev",
+				HomeDir:    "/var/lib/kandev",
+				LogDir:     "/var/lib/kandev/logs",
+				System:     true,
+				SystemUser: "kandev",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unit := renderSystemdUnit(tt.in)
+			want := "WorkingDirectory=" + tt.in.HomeDir
+			if !strings.Contains(unit, want) {
+				t.Fatalf("unit missing %q:\n%s", want, unit)
+			}
+			if strings.Contains(unit, "KANDEV_WEB_DIST_DIR") {
+				t.Fatalf("unit set KANDEV_WEB_DIST_DIR:\n%s", unit)
+			}
+		})
+	}
+}
+
 func TestRenderSystemdUnitIncludesBundleMetadata(t *testing.T) {
 	unit := renderSystemdUnit(nativeServiceUnitInput{
 		Executable: "/opt/kandev/bin/kandev",

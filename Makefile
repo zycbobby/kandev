@@ -109,6 +109,8 @@ help:
 	@echo "  start-windows    cmd.exe-safe start for native Windows (no printf/find/cp/exec)"
 	@echo ""
 	@echo "Service Commands:"
+	@echo "  deploy                   Build current checkout and update the live user-domain daemon"
+	@echo "  deploy PORT=3000 HOME_DIR=/path  Optional deploy overrides (same as service-install)"
 	@echo "  service-install          Install deps, build current checkout, install user service"
 	@echo "  service-install-system   Install deps, build current checkout, install system service"
 	@echo "  service-status           Show current user service status"
@@ -393,6 +395,21 @@ service-install: service-bundle
 service-install-system: service-bundle
 	@sudo env $(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service install --system $(SERVICE_INSTALL_FLAGS)
 
+.PHONY: deploy
+deploy:
+	$(call phase,Deploying user-domain service)
+	@$(MAKE) -s install-backend
+	@printf "$(CYAN)Installing web dependencies...$(RESET)\n"
+	@(cd $(APPS_DIR) && $(PNPM) install --silent 2>/dev/null) || (cd $(APPS_DIR) && $(PNPM) install)
+	@$(MAKE) -s runtime-bundle \
+		RUNTIME_BUNDLE_DIR="$(SERVICE_BUNDLE_DIR)" \
+		RUNTIME_VERSION="$(SERVICE_VERSION)"
+	@scripts/deploy-user-service.sh \
+		--bundle-dir "$(SERVICE_BUNDLE_DIR)" \
+		--checkout "$(CURDIR)" \
+		$(SERVICE_INSTALL_FLAGS)
+	$(call success,User-domain service deployed)
+
 .PHONY: service-uninstall service-start service-stop service-restart service-status service-logs service-logs-follow service-config
 service-uninstall: service-cli-check
 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service uninstall
@@ -563,6 +580,8 @@ test-scripts:
 	@bash scripts/pr-await.test.sh
 	@bash scripts/run-quiet.test.sh
 	@bash scripts/dev-prod-db-path.test.sh
+	@bash scripts/deploy-user-service.test.sh
+	@bash scripts/make-deploy.test.sh
 	@bash scripts/opencode-code-review.test.sh
 	@python3 scripts/opencode-code-review.test.py
 	@python3 scripts/lint-harness-files.test.py

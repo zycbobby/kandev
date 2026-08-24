@@ -73,6 +73,16 @@ Product-wide capabilities that are not tied to a single feature area.
 | [health-endpoint-version](health-endpoint-version/spec.md) | building |
 | [go-dev-launcher](go-dev-launcher/spec.md) | draft |
 
+## launcher/ — source-checkout launch and deploy
+
+The launcher system has a system index and new authoritative requirement and
+design paths in [launcher/README.md](launcher/README.md). Source-checkout
+`make deploy` into the user-domain daemon is specified there. Legacy
+[native-kandev-cli](native-kandev-cli/spec.md) and
+[go-dev-launcher](go-dev-launcher/spec.md) remain authoritative for the public
+`kandev` command surface, existing `kandev service` behavior, and `make dev`
+until they are migrated into that system.
+
 ## tasks/ — task & workflow model
 
 The task and workflow system has a system index and new authoritative
