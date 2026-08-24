@@ -1,0 +1,364 @@
+# Final review package (merge-base 3cd88733a..HEAD)
+
+## commits
+89a24f5be test(sync-workflow): fail when stub startup stalls
+7d89b1d77 test(sync-workflow): add sync-workflow script tests
+f57071c04 feat(sync-workflow): add make sync-workflow target
+ffaa4d074 feat(sync-workflow): add runtime workflow export script
+
+## stat
+ Makefile                                           |  10 ++
+ .../add-make-sync-workflow/ledger/task-1-report.md |  52 ++++++
+ scripts/sync-workflow.py                           |  72 ++++++++
+ scripts/sync-workflow.test.sh                      | 182 +++++++++++++++++++++
+ 4 files changed, 316 insertions(+)
+
+## diff (product files)
+diff --git a/Makefile b/Makefile
+index d40a1828a..db53176d1 100644
+--- a/Makefile
++++ b/Makefile
+@@ -45,16 +45,17 @@ BOLD := \033[1m
+ DIM := \033[2m
+ GREEN := \033[32m
+ BLUE := \033[34m
+ CYAN := \033[36m
+ YELLOW := \033[33m
+ MAGENTA := \033[35m
+ 
+ VERBOSE ?= 0
++URL ?= http://localhost:38429
+ NODE ?= $(shell command -v node $(NULL_REDIR) || echo node)
+ RUNTIME_BUNDLE_DIR ?= $(CURDIR)/dist/kandev
+ RUNTIME_VERSION ?= $(shell git describe --tags --always --dirty $(NULL_REDIR) || echo dev)
+ SERVICE_BUNDLE_DIR ?= $(CURDIR)/dist/kandev
+ SERVICE_LAUNCHER = $(SERVICE_BUNDLE_DIR)/bin/kandev
+ SERVICE_VERSION ?= $(RUNTIME_VERSION)
+ SERVICE_ENV = KANDEV_BUNDLE_DIR="$(SERVICE_BUNDLE_DIR)" KANDEV_VERSION="$(SERVICE_VERSION)"
+ PORT_FLAG := $(if $(PORT),--port $(PORT),)
+@@ -118,16 +119,18 @@ help:
+ 	@echo "  service-logs-follow      Follow current user service logs"
+ 	@echo "  service-start            Start current user service"
+ 	@echo "  service-stop             Stop current user service"
+ 	@echo "  service-restart          Restart current user service"
+ 	@echo "  service-uninstall        Uninstall current user service"
+ 	@echo "  service-config           Show service launcher/config paths"
+ 	@echo "  service-install PORT=3000 HOME_DIR=/path  Optional install overrides"
+ 	@echo "  service-install NO_BOOT_START=1  Skip Linux user-service boot hint"
++	@echo "  sync-workflow                Export all runtime workflows into workflows/ (one file per workflow)"
++	@echo "  sync-workflow URL=http://localhost:38429  Backend base URL override"
+ 	@echo ""
+ 	@echo "Build Commands:"
+ 	@echo "  build            Build backend and web app"
+ 	@echo "  build-backend    Build backend binary"
+ 	@echo "  build-web        Build web app for production"
+ 	@echo "  runtime-bundle   Build the package-manager runtime bundle (deps must exist)"
+ 	@echo "  desktop-runtime  Build/copy runtime resources for the macOS desktop app"
+ 	@echo "  desktop-build    Build the macOS Tauri app bundle/DMG"
+@@ -405,16 +408,22 @@ deploy:
+ 		RUNTIME_BUNDLE_DIR="$(SERVICE_BUNDLE_DIR)" \
+ 		RUNTIME_VERSION="$(SERVICE_VERSION)"
+ 	@scripts/deploy-user-service.sh \
+ 		--bundle-dir "$(SERVICE_BUNDLE_DIR)" \
+ 		--checkout "$(CURDIR)" \
+ 		$(SERVICE_INSTALL_FLAGS)
+ 	$(call success,User-domain service deployed)
+ 
++.PHONY: sync-workflow
++sync-workflow:
++	$(call phase,Syncing workflows from runtime)
++	@python3 scripts/sync-workflow.py "$(URL)" "$(CURDIR)/workflows"
++	$(call success,Workflows synced to $(CURDIR)/workflows)
++
+ .PHONY: service-uninstall service-start service-stop service-restart service-status service-logs service-logs-follow service-config
+ service-uninstall: service-cli-check
+ 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service uninstall
+ 
+ service-start: service-cli-check
+ 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service start
+ 
+ service-stop: service-cli-check
+@@ -577,16 +586,17 @@ test-scripts:
+ 	@printf "$(CYAN)Running script tests...$(RESET)\n"
+ 	@python3 .github/scripts/lint-action-pinning_test.py
+ 	@bash scripts/pr-state.test.sh
+ 	@bash scripts/pr-await.test.sh
+ 	@bash scripts/run-quiet.test.sh
+ 	@bash scripts/dev-prod-db-path.test.sh
+ 	@bash scripts/deploy-user-service.test.sh
+ 	@bash scripts/make-deploy.test.sh
++	@bash scripts/sync-workflow.test.sh
+ 	@bash scripts/opencode-code-review.test.sh
+ 	@python3 scripts/opencode-code-review.test.py
+ 	@python3 scripts/lint-harness-files.test.py
+ 	@python3 scripts/lint-spec-files.test.py
+ 	@python3 scripts/lint-architecture.test.py
+ 	@python3 scripts/playwright-blob-audit.test.py
+ 	@bash scripts/release-desktop.test.sh
+ 	@bash scripts/release/runtime-bundle.test.sh
+diff --git a/scripts/sync-workflow.py b/scripts/sync-workflow.py
+new file mode 100755
+index 000000000..88381453f
+--- /dev/null
++++ b/scripts/sync-workflow.py
+@@ -0,0 +1,72 @@
++#!/usr/bin/env python3
++"""Reverse-export runtime workflows to versionable YAML files."""
++
++import json
++import os
++import re
++import sys
++import urllib.error
++import urllib.request
++
++
++def slug(name):
++    value = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
++    return value or "workflow"
++
++
++def get(url, path):
++    try:
++        with urllib.request.urlopen(url.rstrip("/") + path, timeout=10) as response:
++            return response.read()
++    except urllib.error.HTTPError as error:
++        sys.exit(
++            f"sync-workflow: backend at {url} returned HTTP {error.code} for {path}"
++        )
++    except Exception as error:
++        sys.exit(f"sync-workflow: backend unreachable at {url}: {error}")
++
++
++def main():
++    if len(sys.argv) != 3:
++        sys.exit("usage: sync-workflow.py <url> <out_dir>")
++
++    url, out_dir = sys.argv[1:]
++    os.makedirs(out_dir, exist_ok=True)
++
++    workspaces = json.loads(get(url, "/api/v1/workspaces"))["workspaces"]
++    workspaces = sorted(workspaces, key=lambda workspace: workspace["id"])
++    used = set()
++    count = 0
++
++    for workspace in workspaces:
++        workspace_id = workspace["id"]
++        path = (
++            "/api/v1/workflows?workspace_id="
++            + str(workspace_id)
++            + "&include_hidden=true&exclude_office=false"
++        )
++        workflows = json.loads(get(url, path))["workflows"]
++        workflows = sorted(workflows, key=lambda workflow: workflow["id"])
++
++        for workflow in workflows:
++            base = slug(workflow["name"])
++            workspace_slug = slug(workspace["name"])
++            filename = base
++            if filename in used:
++                filename = f"{base}--{workspace_slug}"
++                suffix = 2
++                while filename in used:
++                    filename = f"{base}--{workspace_slug}--{suffix}"
++                    suffix += 1
++            used.add(filename)
++
++            body = get(url, f"/api/v1/workflows/{workflow['id']}/export")
++            with open(os.path.join(out_dir, filename + ".yml"), "wb") as output:
++                output.write(body)
++            count += 1
++
++    print(f"synced {count} workflow(s) to {out_dir}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/sync-workflow.test.sh b/scripts/sync-workflow.test.sh
+new file mode 100644
+index 000000000..1b330844d
+--- /dev/null
++++ b/scripts/sync-workflow.test.sh
+@@ -0,0 +1,182 @@
++#!/usr/bin/env bash
++# sync-workflow.test.sh — exercise workflow export against a local HTTP stub.
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++status=0
++
++pass() {
++	printf 'ok    %s\n' "$1"
++}
++
++fail() {
++	printf 'FAIL  %s\n' "$1" >&2
++	status=1
++}
++
++help_out="$(make -C "$ROOT_DIR" --no-print-directory help)"
++if printf '%s\n' "$help_out" | grep -Eq '^[[:space:]]+sync-workflow[[:space:]]'; then
++	pass "make help lists sync-workflow"
++else
++	fail "make help lists sync-workflow"
++fi
++
++dry_out=""
++if dry_out="$(make -C "$ROOT_DIR" --no-print-directory -n sync-workflow 2>/dev/null)" && printf '%s\n' "$dry_out" | grep -Fq 'python3 scripts/sync-workflow.py'; then
++	pass "make -n sync-workflow invokes sync-workflow.py"
++else
++	fail "make -n sync-workflow invokes sync-workflow.py"
++fi
++
++server_dir="$(mktemp -d)"
++output_dir="$(mktemp -d)"
++port_file="$server_dir/port"
++server_pid=""
++cleanup() {
++	if [ -n "$server_pid" ]; then
++		kill "$server_pid" 2>/dev/null || true
++		wait "$server_pid" 2>/dev/null || true
++	fi
++	rm -rf "$server_dir" "$output_dir"
++}
++trap cleanup EXIT
++
++python3 - "$port_file" <<'PY' &
++import json
++import sys
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from urllib.parse import parse_qs, urlparse
++
++port_file = sys.argv[1]
++exports = {
++    "wf-1": "Kanban",
++    "wf-2": "PR Review",
++    "wf-3": "Kanban",
++}
++
++class Handler(BaseHTTPRequestHandler):
++    def do_GET(self):
++        parsed = urlparse(self.path)
++        if parsed.path == "/api/v1/workspaces":
++            body = {"workspaces": [
++                {"id": "ws-1", "name": "Alpha", "owner_id": "", "task_prefix": "KAN"},
++                {"id": "ws-2", "name": "Beta", "owner_id": "", "task_prefix": "KAN"},
++                {"id": "ws-3", "name": "Empty", "owner_id": "", "task_prefix": "KAN"},
++            ], "total": 3}
++            self.send_json(body)
++            return
++        if parsed.path == "/api/v1/workflows":
++            workspace_id = parse_qs(parsed.query).get("workspace_id", [""])[0]
++            workflows = {
++                "ws-1": [{"id": "wf-1", "name": "Kanban"}, {"id": "wf-2", "name": "PR Review"}],
++                "ws-2": [{"id": "wf-3", "name": "Kanban"}],
++                "ws-3": [],
++            }.get(workspace_id, [])
++            self.send_json({"workflows": workflows, "total": len(workflows)})
++            return
++        if parsed.path.startswith("/api/v1/workflows/") and parsed.path.endswith("/export"):
++            workflow_id = parsed.path.split("/")[4]
++            name = exports.get(workflow_id)
++            if name is not None:
++                body = ("version: 1\ntype: kandev_workflow\nworkflows:\n"
++                        f"    - name: {name}\n      steps: []\n").encode()
++                self.send_response(200)
++                self.send_header("Content-Type", "application/x-yaml")
++                self.send_header("Content-Length", str(len(body)))
++                self.end_headers()
++                self.wfile.write(body)
++                return
++        self.send_error(404)
++
++    def send_json(self, value):
++        body = json.dumps(value).encode()
++        self.send_response(200)
++        self.send_header("Content-Type", "application/json")
++        self.send_header("Content-Length", str(len(body)))
++        self.end_headers()
++        self.wfile.write(body)
++
++    def log_message(self, *_args):
++        pass
++
++server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
++with open(port_file, "w", encoding="ascii") as file:
++    file.write(str(server.server_port))
++    file.flush()
++server.serve_forever()
++PY
++server_pid=$!
++for _ in $(seq 1 100); do
++	if [ -s "$port_file" ]; then break; fi
++	if ! kill -0 "$server_pid" 2>/dev/null; then
++		fail "stub server starts"
++		break
++	fi
++	sleep 0.01
++done
++if [ ! -s "$port_file" ]; then
++	fail "stub server starts"
++fi
++
++if [ -s "$port_file" ]; then
++	stub_url="http://127.0.0.1:$(<"$port_file")"
++	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
++		pass "sync-workflow exports from stub"
++	else
++		fail "sync-workflow exports from stub"
++	fi
++
++	expected_files=("kanban.yml" "pr-review.yml" "kanban--beta.yml")
++	actual_files="$(find "$output_dir" -maxdepth 1 -type f -printf '%f\n' | sort)"
++	expected_listing="$(printf '%s\n' "${expected_files[@]}" | sort)"
++	if [ "$actual_files" = "$expected_listing" ]; then
++		pass "sync-workflow writes expected filenames"
++	else
++		fail "sync-workflow writes expected filenames: $actual_files"
++	fi
++
++	for file in "${expected_files[@]}"; do
++		if grep -Fq 'type: kandev_workflow' "$output_dir/$file"; then
++			pass "$file contains workflow type"
++		else
++			fail "$file contains workflow type"
++		fi
++		name_count="$(grep -Ec '^[[:space:]]+- name:' "$output_dir/$file")"
++		if [ "$name_count" -eq 1 ]; then
++			pass "$file contains one workflow name"
++		else
++			fail "$file contains one workflow name"
++		fi
++	done
++
++	if [ ! -e "$output_dir/empty.yml" ]; then
++		pass "empty workspace produces no file"
++	else
++		fail "empty workspace produces no file"
++	fi
++fi
++
++# Stop the live server, then reuse its now-closed port for the failure path.
++if [ -n "$server_pid" ]; then
++	kill "$server_pid" 2>/dev/null || true
++	wait "$server_pid" 2>/dev/null || true
++	server_pid=""
++fi
++if [ -n "${stub_url:-}" ]; then
++	failure_stderr="$server_dir/failure.stderr"
++	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$server_dir/failure-output" >/dev/null 2>"$failure_stderr"; then
++		fail "closed backend URL fails"
++	else
++		pass "closed backend URL fails"
++	fi
++	if grep -Fq "$stub_url" "$failure_stderr"; then
++		pass "closed backend error includes URL"
++	else
++		fail "closed backend error includes URL"
++	fi
++fi
++
++if [ "$status" -eq 0 ]; then
++	echo "All sync-workflow checks passed."
++fi
++exit "$status"

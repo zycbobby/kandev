@@ -1,0 +1,86 @@
+# Review package Task 2 (base ffaa4d074..HEAD)
+
+## commits
+f57071c04 feat(sync-workflow): add make sync-workflow target
+
+## stat
+ Makefile | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+## diff
+diff --git a/Makefile b/Makefile
+index d40a1828a..8b91df2cb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -43,20 +43,21 @@ endif
+ RESET := \033[0m
+ BOLD := \033[1m
+ DIM := \033[2m
+ GREEN := \033[32m
+ BLUE := \033[34m
+ CYAN := \033[36m
+ YELLOW := \033[33m
+ MAGENTA := \033[35m
+ 
+ VERBOSE ?= 0
++URL ?= http://localhost:38429
+ NODE ?= $(shell command -v node $(NULL_REDIR) || echo node)
+ RUNTIME_BUNDLE_DIR ?= $(CURDIR)/dist/kandev
+ RUNTIME_VERSION ?= $(shell git describe --tags --always --dirty $(NULL_REDIR) || echo dev)
+ SERVICE_BUNDLE_DIR ?= $(CURDIR)/dist/kandev
+ SERVICE_LAUNCHER = $(SERVICE_BUNDLE_DIR)/bin/kandev
+ SERVICE_VERSION ?= $(RUNTIME_VERSION)
+ SERVICE_ENV = KANDEV_BUNDLE_DIR="$(SERVICE_BUNDLE_DIR)" KANDEV_VERSION="$(SERVICE_VERSION)"
+ PORT_FLAG := $(if $(PORT),--port $(PORT),)
+ SERVICE_HOME_DIR_FLAG := $(if $(HOME_DIR),--home-dir "$(HOME_DIR)",)
+ SERVICE_NO_BOOT_START_FLAG := $(if $(filter 1 true yes,$(NO_BOOT_START)),--no-boot-start,)
+@@ -116,20 +117,22 @@ help:
+ 	@echo "  service-status           Show current user service status"
+ 	@echo "  service-logs             Show current user service logs"
+ 	@echo "  service-logs-follow      Follow current user service logs"
+ 	@echo "  service-start            Start current user service"
+ 	@echo "  service-stop             Stop current user service"
+ 	@echo "  service-restart          Restart current user service"
+ 	@echo "  service-uninstall        Uninstall current user service"
+ 	@echo "  service-config           Show service launcher/config paths"
+ 	@echo "  service-install PORT=3000 HOME_DIR=/path  Optional install overrides"
+ 	@echo "  service-install NO_BOOT_START=1  Skip Linux user-service boot hint"
++	@echo "  sync-workflow                Export all runtime workflows into workflows/ (one file per workflow)"
++	@echo "  sync-workflow URL=http://localhost:38429  Backend base URL override"
+ 	@echo ""
+ 	@echo "Build Commands:"
+ 	@echo "  build            Build backend and web app"
+ 	@echo "  build-backend    Build backend binary"
+ 	@echo "  build-web        Build web app for production"
+ 	@echo "  runtime-bundle   Build the package-manager runtime bundle (deps must exist)"
+ 	@echo "  desktop-runtime  Build/copy runtime resources for the macOS desktop app"
+ 	@echo "  desktop-build    Build the macOS Tauri app bundle/DMG"
+ 	@echo "  desktop-open     Build and open the macOS app"
+ 	@echo "  desktop-launch   Alias for desktop-open"
+@@ -403,20 +406,26 @@ deploy:
+ 	@(cd $(APPS_DIR) && $(PNPM) install --silent 2>/dev/null) || (cd $(APPS_DIR) && $(PNPM) install)
+ 	@$(MAKE) -s runtime-bundle \
+ 		RUNTIME_BUNDLE_DIR="$(SERVICE_BUNDLE_DIR)" \
+ 		RUNTIME_VERSION="$(SERVICE_VERSION)"
+ 	@scripts/deploy-user-service.sh \
+ 		--bundle-dir "$(SERVICE_BUNDLE_DIR)" \
+ 		--checkout "$(CURDIR)" \
+ 		$(SERVICE_INSTALL_FLAGS)
+ 	$(call success,User-domain service deployed)
+ 
++.PHONY: sync-workflow
++sync-workflow:
++	$(call phase,Syncing workflows from runtime)
++	@python3 scripts/sync-workflow.py "$(URL)" "$(CURDIR)/workflows"
++	$(call success,Workflows synced to $(CURDIR)/workflows)
++
+ .PHONY: service-uninstall service-start service-stop service-restart service-status service-logs service-logs-follow service-config
+ service-uninstall: service-cli-check
+ 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service uninstall
+ 
+ service-start: service-cli-check
+ 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service start
+ 
+ service-stop: service-cli-check
+ 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service stop
+ 
