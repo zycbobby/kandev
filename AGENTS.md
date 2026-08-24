@@ -273,3 +273,26 @@ When a change is scoped to a single subtree, update the scoped `AGENTS.md` inste
 ## Remote cloud environment
 
 For developing in ephemeral cloud VMs (Cursor Cloud, Codex, GitHub Codespaces, etc.), see [`docs/remote-cloud-environment.md`](docs/remote-cloud-environment.md) — covers runtime requirements, generated-file gotchas, dev-mode setup, key commands, and Firecracker-specific caveats.
+
+<!-- Source: superpowers-bridge/templates/adopters/CLAUDE.md.fragment.md -->
+
+## Workflow routing (read on session start)
+
+This repo uses `superpowers-bridge`: keep OpenSpec as the front door, and use Superpowers only as embedded capability inside OpenSpec stages.
+
+### Entry routing
+
+| Trigger | What to do |
+|---|---|
+| New feature / capability / architectural change | Use `/opsx:propose` with `--schema superpowers-bridge` |
+| Already inside an active change | Use `/opsx:plan`, `/opsx:apply`, `/opsx:verify`, `/opsx:archive` |
+| Discussing ideas narratively | Use `superpowers:brainstorming`; write the outcome into `proposal.md` |
+| Explicit bug fix / typo / tiny config tweak | Direct PR, no change |
+
+### Hard rules
+
+Do not create `brainstorm.md`, `plan.md`, or `retrospective.md`; do not write planning/design output to `docs/superpowers/specs/` or `docs/superpowers/plans/`.
+
+### Archive policy
+
+Merge conservatively by capability; prefer `openspec/specs/<capability>/spec.md`; avoid new top-level capability folders unless necessary.

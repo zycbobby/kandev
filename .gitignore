@@ -162,3 +162,9 @@ apps/web/e2e/.restart-screenshots/
 
 # Manual dev-environment scratch repos (apps/web/e2e/manual-seed-*.ts)
 apps/backend/.manual-env/
+
+# Local Kandev workflow export archive (runtime snapshot from ~/.kandev/data/kandev.db, see .claude/skills/debug-kandev)
+/workflow/
+
+
+.claude-sessions
