@@ -591,6 +591,7 @@ test-scripts:
 	@bash scripts/dev-prod-db-path.test.sh
 	@bash scripts/deploy-user-service.test.sh
 	@bash scripts/make-deploy.test.sh
+	@bash scripts/sync-workflow.test.sh
 	@bash scripts/opencode-code-review.test.sh
 	@python3 scripts/opencode-code-review.test.py
 	@python3 scripts/lint-harness-files.test.py
