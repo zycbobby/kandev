@@ -176,11 +176,12 @@ var workflowTestCases = []workflowTestCase{
 		StartStep:     "In Progress",
 		IsPassthrough: true,
 		Events: []testEvent{
-			// Passthrough: reset fires, auto_start writes prompt to PTY stdin
-			// (not queued via message queue). Session is not set to WaitingForInput
-			// because the agent is processing the stdin prompt.
+			// Passthrough: reset fires, and because the fresh CLI is still
+			// booting, the auto-start prompt is queued rather than written
+			// inline into a PTY that is not reading yet. The fresh CLI's first
+			// idle agent.ready delivers it via stdin.
 			{Trigger: engine.TriggerOnTurnComplete, ExpectStep: "New Context",
-				ExpectTransitioned: true, ExpectQueued: false, ExpectResets: 1},
+				ExpectTransitioned: true, ExpectQueued: true, ExpectResets: 1},
 		},
 	},
 }

@@ -2263,7 +2263,23 @@ func (s *Service) processOnEnter(ctx context.Context, taskID string, session *mo
 		// By the time processOnEnter runs (from an on_turn_complete transition),
 		// the agent has finished its previous turn and the PTY is waiting for input.
 		effectivePrompt := s.buildWorkflowPrompt(ctx, taskDescription, step, taskID, sessionID, isPassthrough)
-		if err := s.autoStartPassthroughPrompt(ctx, taskID, session, step.Name, effectivePrompt); err != nil {
+		if step.HasOnEnterAction(wfmodels.OnEnterResetAgentContext) {
+			// The reset_agent_context action above just restarted the passthrough
+			// CLI, so the PTY is not waiting for input yet — it is still booting.
+			// Writing the prompt inline would type it into a TUI that is not
+			// reading yet and lose it. Queue instead: the fresh CLI's first idle
+			// agent.ready delivers queued passthrough prompts via
+			// deliverPassthroughPrompt (handleAgentReady's passthrough branch).
+			if err := s.queueAutoStartPrompt(ctx, taskID, sessionID, effectivePrompt, hasPlanMode, nil, workflowOriginFromStep(step), false, nil); err != nil {
+				s.logger.Error("failed to queue passthrough auto-start prompt after context reset",
+					zap.String("task_id", taskID),
+					zap.String("session_id", sessionID),
+					zap.String("step_name", step.Name),
+					zap.Error(err))
+				s.setSessionWaitingForInput(ctx, taskID, sessionID, session)
+				s.publishSessionWaitingEvent(ctx, taskID, sessionID, step.ID, session)
+			}
+		} else if err := s.autoStartPassthroughPrompt(ctx, taskID, session, step.Name, effectivePrompt); err != nil {
 			s.logger.Error("failed to auto-start passthrough agent for step",
 				zap.String("task_id", taskID),
 				zap.String("session_id", sessionID),
