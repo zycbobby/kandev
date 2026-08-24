@@ -66,7 +66,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(body)
             return
         if parsed.path == "/api/v1/workflows":
-            workspace_id = parse_qs(parsed.query).get("workspace_id", [""])[0]
+            query = parse_qs(parsed.query)
+            workspace_id = query.get("workspace_id", [""])[0]
+            if query.get("include_hidden") != ["true"] or query.get("exclude_office") != ["false"]:
+                self.send_json({"workflows": [], "total": 0})
+                return
             workflows = {
                 "ws-1": [{"id": "wf-1", "name": "Kanban"}, {"id": "wf-2", "name": "PR Review"}],
                 "ws-2": [{"id": "wf-3", "name": "Kanban"}],
@@ -106,7 +110,7 @@ with open(port_file, "w", encoding="ascii") as file:
 server.serve_forever()
 PY
 server_pid=$!
-for _ in $(seq 1 100); do
+for _ in $(seq 1 500); do
 	if [ -s "$port_file" ]; then break; fi
 	if ! kill -0 "$server_pid" 2>/dev/null; then
 		fail "stub server starts"
@@ -120,6 +124,7 @@ fi
 
 if [ -s "$port_file" ]; then
 	stub_url="http://127.0.0.1:$(<"$port_file")"
+	printf 'stale workflow\n' >"$output_dir/stale.yml"
 	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
 		pass "sync-workflow exports from stub"
 	else
@@ -127,13 +132,30 @@ if [ -s "$port_file" ]; then
 	fi
 
 	expected_files=("kanban.yml" "pr-review.yml" "kanban--beta.yml")
-	actual_files="$(find "$output_dir" -maxdepth 1 -type f -printf '%f\n' | sort)"
-	expected_listing="$(printf '%s\n' "${expected_files[@]}" | sort)"
+	expected_listing="$(printf '%s\n' "${expected_files[@]}" stale.yml | sort)"
+	actual_files="$(cd "$output_dir" && ls -1 | sort)"
 	if [ "$actual_files" = "$expected_listing" ]; then
 		pass "sync-workflow writes expected filenames"
 	else
 		fail "sync-workflow writes expected filenames: $actual_files"
 	fi
+	if [ -e "$output_dir/stale.yml" ]; then
+		pass "stale workflow is preserved"
+	else
+		fail "stale workflow is preserved"
+	fi
+	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
+		pass "sync-workflow overwrites idempotently"
+	else
+		fail "sync-workflow overwrites idempotently"
+	fi
+	second_listing="$(cd "$output_dir" && ls -1 | sort)"
+	if [ "$second_listing" = "$expected_listing" ]; then
+		pass "sync-workflow preserves listing on repeat"
+	else
+		fail "sync-workflow preserves listing on repeat: $second_listing"
+	fi
+
 
 	for file in "${expected_files[@]}"; do
 		if grep -Fq 'type: kandev_workflow' "$output_dir/$file"; then
