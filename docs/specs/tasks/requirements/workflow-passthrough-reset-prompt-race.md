@@ -1,7 +1,9 @@
 ---
 status: draft
+system: tasks
 created: 2026-08-24
-owner: kandev
+owners:
+  - kandev
 ---
 
 # Workflow Passthrough Reset Prompt Race
@@ -43,6 +45,17 @@ This is unlike the ACP path, where `autoStartStepPrompt` calls
 `queueAutoStartPromptIfRunning` and defers the prompt to the queue until
 `agent.ready` / `agent.boot_ready` drains it.
 
+The first fix (queue instead of inline write) closed the boot-race but left the
+delivery leg open: when a task is **manually moved** into a reset + auto-start
+step while its passthrough session is `WAITING_FOR_INPUT` (idle, no turn in
+flight), the restarted CLI's first idle signal is a turn-end `agent.ready`.
+`handleAgentReady` rejects that event because `session.State` is not
+`RUNNING`/`STARTING` (`event_handlers_agent.go` ready guard), so the queued
+prompt is never drained and the step stalls. The same boot-vs-turn ambiguity
+also produces a premature advance on a **non**-signal-gated reset step whose
+`on_turn_complete` is `move_to_next`: the fresh CLI's first idle is treated as
+a turn end even though no turn ran.
+
 ## What
 
 - A passthrough workflow step that combines `reset_agent_context` and
@@ -52,6 +65,12 @@ This is unlike the ACP path, where `autoStartStepPrompt` calls
 - The prompt is preserved across the restart: it is queued (or otherwise
   deferred) and drained by the same readiness path that delivers queued
   workflow prompts today, rather than written inline.
+- Delivery works regardless of the session's state when the step is entered:
+  both a `RUNNING` session (natural `on_turn_complete` transition) and a
+  `WAITING_FOR_INPUT` session (manual move of an idle task) must deliver the
+  queued prompt exactly once on the restarted CLI's first readiness signal.
+  The restarted CLI's first idle is a *boot* signal, not a *turn-end* signal;
+  it must not be gated on `RUNNING`/`STARTING` session state.
 - The ordinary (non-reset) passthrough auto-start path is unchanged: a PTY that
   just finished its previous turn still gets its prompt written inline.
 - A passthrough session that is `CREATED` (never prompted) is unchanged: no
@@ -89,6 +108,11 @@ This is unlike the ACP path, where `autoStartStepPrompt` calls
   signal-gated, **WHEN** the fresh CLI reaches readiness, **THEN** the prompt is
   delivered but the step does not advance until the agent emits
   `step_complete_kandev`.
+- **GIVEN** a `WAITING_FOR_INPUT` passthrough session (an idle task manually
+  moved into the step), **WHEN** the task enters a step whose `on_enter` has
+  both `reset_agent_context` and `auto_start_agent` and the restarted CLI
+  reaches its first readiness, **THEN** the queued prompt is delivered to the
+  fresh CLI exactly once and the step does not stall.
 
 ## Out of scope
 

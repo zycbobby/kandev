@@ -86,6 +86,7 @@ signals, and task-scoped scheduling contracts.
 - [Runtime cleanup](requirements/runtime-cleanup.md)
 - [Workflow cycle guardrails](requirements/workflow-cycle-guardrails.md)
 - [Workflow duplication](requirements/workflow-duplication.md)
+- [Workflow passthrough reset prompt race](requirements/workflow-passthrough-reset-prompt-race.md)
 - [Workflow quorum decision recording](requirements/workflow-quorum-decision-recording.md)
 - [Workflow quorum decision recording: agent surface](requirements/workflow-quorum-decision-recording-agent-surface.md)
 - [Workflow quorum decision recording: concurrency](requirements/workflow-quorum-decision-recording-concurrency.md)

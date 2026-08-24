@@ -476,6 +476,16 @@ func (s *Service) handleAgentReady(ctx context.Context, data watcher.AgentEventD
 	// the emitting execution is the active one for this session.
 
 	if session.State != models.TaskSessionStateRunning && session.State != models.TaskSessionStateStarting {
+		// A passthrough session that is WAITING_FOR_INPUT when agent.ready fires
+		// has received the freshly-restarted CLI's first idle — a *boot* signal,
+		// not a turn end. There is no turn to complete, so deliver a queued
+		// workflow auto-start prompt directly (mirroring handleAgentBootReady's
+		// no-RUNNING-guard drain). This closes the delivery leg of the reset +
+		// auto_start passthrough fix.
+		if s.agentManager.IsPassthroughSession(ctx, data.SessionID) {
+			s.deliverQueuedPassthroughPrompt(ctx, data.SessionID)
+			return
+		}
 		s.logger.Debug("ignoring agent.ready while session is not running or starting",
 			zap.String("task_id", data.TaskID),
 			zap.String("session_id", data.SessionID),

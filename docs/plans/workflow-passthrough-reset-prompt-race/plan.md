@@ -1,6 +1,41 @@
 # Plan: Workflow Passthrough Reset Prompt Race
 
-Status: `implemented`
+Status: `implemented` — task-01 (inline-write race) and task-02 (idle delivery
+leg) are both done.
+
+## Follow-up (2026-08-24): deliver the queued prompt on an idle reset
+
+The first fix (task-01) queues the prompt but does not make it drain for the
+`WAITING_FOR_INPUT` case. Confirmed on a local run (task
+`Add Makefile reload for daemon updates`, session `cc78b3a3`, timestamps +0800):
+
+- The backend restarted (~13:13:45), lazy-recovering the passthrough session as
+  a `fresh-start resume` (no resume token). The session sat `WAITING_FOR_INPUT`.
+- A manual `Review → Apply` move at 13:15:23 ran `reset_agent_context`
+  (CLI killed, `exit 143`) then `queueAutoStartPrompt` (`message queued`,
+  `content_length 593`).
+- The restarted CLI reached `agent.ready` at 13:15:28 and again at 13:15:47, but
+  the queued prompt was **never delivered**: no `deliverPassthroughPrompt`, no
+  new `task_session_messages` row (the last user message is an earlier 295-byte
+  prompt), and the session stuck `WAITING_FOR_INPUT` with the task at
+  `state=REVIEW` / `workflow_step_id=Apply`.
+
+Root cause: `handleAgentReady` drops `agent.ready` when `session.State` is not
+`RUNNING`/`STARTING` (`event_handlers_agent.go:478`). A fresh CLI's first idle
+after a reset is a *boot* signal, not a *turn end* — there is no turn to
+complete — but it routes through turn-end semantics and is gated on that state.
+The lifecycle manager already documents this (`manager_events.go:141-148`) and
+works around it for the wakeup-turn case, but the passthrough reset path has no
+equivalent. `handleAgentBootReady` (`event_handlers_agent.go:273`) is the correct
+drain path (no `RUNNING` guard; it drains queued prompts for `WAITING_FOR_INPUT`
+sessions), but `restartPassthroughProcess` publishes only `AgentContextReset`,
+never a boot-ready, so the fresh CLI's idle is reported as `agent.ready`.
+
+The existing test seeds `RUNNING` (`seedSession`), so `markIdleAfterReset` skips
+the flip and the delivery gap is invisible; it also never asserts delivery.
+
+See `task-02-deliver-queued-prompt-on-idle-reset.md`.
+
 
 ## Validation recorded
 
@@ -11,13 +46,15 @@ go test ./internal/orchestrator/ -count=1                                       
 gofmt -l <changed files>                                                                                            # clean
 ```
 
-Known residual (out of scope, pre-existing): for a **non**-signal-gated step
-that combines reset + auto-start + `on_turn_complete: move_to_next`, the fresh
-CLI's first idle `agent.ready` still routes through `handleAgentReady` (turn-end
-semantics) rather than a boot-ready signal, so a premature advance can occur.
-This is the boot-vs-turn ambiguity the ACP path avoids by publishing
-`AgentBootReady`; the passthrough restart path does not yet publish an
-equivalent. The observed regression (signal-gated `Apply` stall) is fixed.
+Known residual (now tracked as task-02): the fresh CLI's first idle
+`agent.ready` routes through `handleAgentReady` (turn-end semantics) rather than
+a boot-ready signal. This is the boot-vs-turn ambiguity the ACP path avoids by
+publishing `AgentBootReady`; the passthrough restart path does not yet publish
+an equivalent. Two symptoms follow: a signal-gated step stalls because the
+queued prompt is never delivered (the `WAITING_FOR_INPUT` case above), and a
+non-signal-gated `move_to_next` step can advance prematurely. The original
+note claimed the signal-gated `Apply` stall was fixed — that was wrong; it is
+the exact failure the follow-up reproduces.
 
 
 ## Confirmed root cause
@@ -52,7 +89,7 @@ path has neither the queue nor the readiness gate.
 
 ## Affected spec
 
-`docs/specs/workflow-passthrough-reset-prompt-race/spec.md` (new repair spec).
+`docs/specs/tasks/requirements/workflow-passthrough-reset-prompt-race.md` (new repair spec).
 
 ## Fix approach
 
@@ -99,7 +136,10 @@ A companion assertion keeps the non-reset path honest: a passthrough step with
 ## Tasks
 
 - `task-01-defer-prompt-after-passthrough-reset.md` — regression test + the
-  orchestrator deferral fix.
+  orchestrator deferral fix (done).
+- `task-02-deliver-queued-prompt-on-idle-reset.md` — make the queued prompt
+  drain on the fresh CLI's first readiness for a `WAITING_FOR_INPUT` session
+  (follow-up).
 
 ## Validation
 

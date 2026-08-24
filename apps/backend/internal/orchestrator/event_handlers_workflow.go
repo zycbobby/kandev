@@ -2800,6 +2800,25 @@ func (s *Service) deliverPassthroughPrompt(ctx context.Context, sessionID, conte
 	return nil
 }
 
+// deliverQueuedPassthroughPrompt reserves and delivers the next queued prompt
+// to a passthrough session's PTY stdin. It serves the freshly-restarted CLI's
+// first idle (boot) signal: the session is WAITING_FOR_INPUT and there is no
+// turn to complete, so handleAgentReady's turn-end bookkeeping must not run.
+// The reset-deferred auto-start prompt is always a non-durable workflow
+// message, so the durable-lifecycle reservation path (owned by the turn-end
+// branch in handleAgentReady) is not needed here.
+func (s *Service) deliverQueuedPassthroughPrompt(ctx context.Context, sessionID string) {
+	queuedMsg, exists := s.messageQueue.ReserveQueued(ctx, sessionID)
+	if !exists || queuedMsg.Content == "" {
+		return
+	}
+	if err := s.deliverPassthroughPrompt(ctx, sessionID, queuedMsg.Content); err != nil {
+		s.logger.Warn("failed to deliver queued message to passthrough",
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+	}
+}
+
 // autoStartPassthroughPrompt writes a workflow prompt to the PTY stdin of a
 // passthrough session and marks it as running. TUI agents read stdin line-by-line;
 // the idle timeout fires when output stops, triggering turn complete.
