@@ -8,6 +8,16 @@ owners:
 
 # Workflow Passthrough Reset Prompt Race
 
+## Requirements
+
+### REQ-TASKS-WORKFLOW-PASSTHROUGH-RESET-PROMPT-RACE-001: Workflow Passthrough Reset Prompt Race
+
+**Intent:** Preserve the observable task or workflow behavior recorded below.
+
+#### Acceptance criteria
+
+- **AC-TASKS-WORKFLOW-PASSTHROUGH-RESET-PROMPT-RACE-001.1:** When a consumer uses this capability, the system shall provide the observable behavior and exclusions documented below.
+
 ## Why
 
 A workflow step whose `on_enter` combines `reset_agent_context` with
