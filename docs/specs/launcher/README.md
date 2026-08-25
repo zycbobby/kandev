@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 system: launcher
 specification_version: 1
 migration: in_progress
@@ -11,57 +11,51 @@ owners:
 
 ## Purpose
 
-The launcher system owns how operators start, install, and update a Kandev
-process from a source checkout or an installed runtime: `make dev`, `make start`,
-`kandev service`, and source-checkout deploy of the live user-domain daemon.
+The launcher system starts and supervises Kandev processes for the `dev`,
+`start`, `run`, and service entrypoints. It also owns source-checkout deploy of
+the live user-domain daemon. It gives operators one startup result, one
+reachable access URL, and useful failure evidence.
 
 ## Ownership
 
-This system owns operator-facing launch entrypoints, the native `kandev`
-launcher commands that those entrypoints invoke, user-domain service install
-and reinstall from a source checkout, and the contract that a deployed
-production process stays isolated from development mode.
+This system owns launch-mode dispatch, managed-process startup and shutdown,
+port selection, backend readiness probes, startup output, supervisor handoffs,
+and source-checkout deploy of the live user-domain daemon.
 
 ## Exclusions
 
-- Task worktrees, databases, and session lifecycle belong to the
-  [task system](../tasks/README.md).
-- Homebrew, npm, and Scoop release packaging remain in their legacy
-  specifications until migrated.
-- Desktop/Tauri packaging belongs to the desktop application specifications.
-- Docker and Kubernetes deployment belong to the public operations documents
-  and are not a launcher-system install path.
-- System (`--system`) service account and home-ownership rules remain in the
-  legacy [native Kandev CLI](../native-kandev-cli/spec.md) specification until
-  that document is migrated here.
-- `make dev` isolation details remain in the legacy
-  [Go dev launcher](../go-dev-launcher/spec.md) specification until migrated.
+- The backend owns HTTP routes and the `/health` response.
+- The common configuration system owns configuration discovery, precedence,
+  parsing, and validation.
+- Authentication owns forwarded-header trust after the backend accepts a
+  request.
+- Agent runtime launch and ACP probes are not backend startup readiness.
 
 ## Specification map
 
 ### Requirements
 
 - [Source-checkout user-service deploy](requirements/source-deploy.md)
+- [Startup recovery](requirements/startup-recovery.md)
 
 ### System design
 
 - [Source-checkout user-service deploy](system-design/source-deploy.md)
+- [Startup recovery](system-design/startup-recovery.md)
 
 ## Migration status
 
-This system is new. Only the source-deploy capability is specified in the
-system layout. Legacy [native-kandev-cli](../native-kandev-cli/spec.md) and
-[go-dev-launcher](../go-dev-launcher/spec.md) remain authoritative for the
-public `kandev` command surface, existing `kandev service` behavior, and
-`make dev` until they are extracted into this system.
+The startup-recovery documents are authoritative for bind-aware readiness and
+launcher failure output. The source-deploy documents specify source-checkout
+deploy of the live user-domain daemon. Configuration discovery and precedence
+are defined by
+[startup configuration parity](../platform/requirements/startup-configuration-parity.md).
+The native launcher migration also incorporates the
+[Go development launcher](../platform/requirements/go-dev-launcher.md)
+requirement. No removed legacy path remains authoritative.
 
 ## Related systems
 
-- [Native Kandev CLI](../native-kandev-cli/spec.md): public `kandev` commands
-  and `kandev service install` (user and system).
-- [Go dev launcher](../go-dev-launcher/spec.md): `make dev` and `.kandev-dev`
-  isolation.
-- [Startup configuration parity](../platform/startup-configuration-parity.md):
-  config file discovery and environment/YAML precedence.
-- [Homebrew Core](../homebrew-core/spec.md): source-built runtime bundle for
-  package managers, not `make deploy`.
+- [Platform specifications](../platform/): define cross-cutting startup
+  configuration and diagnostic-log behavior.
+- [Authentication specifications](../auth/): define trusted-proxy behavior.
