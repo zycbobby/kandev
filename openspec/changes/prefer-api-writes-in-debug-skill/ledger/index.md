@@ -24,4 +24,18 @@
 
 **护栏备注（`make -C apps/backend test`）**：套件在 `internal/worktree` 报 6 个 FAIL，A/B 对照证明为环境性 pre-existing——同一包在 BASE 提交（4522efdee，主 checkout）以完全相同错误签名失败（`Filename too long`、git 2.34.1 的 `isFetchRefusedCheckedOut` 措辞不匹配、prune exit 129）。本 change 前后套件结果零差异，护栏「零差异」语义成立；diff 范围证据（仅 2 个 markdown 文件）确认无后端代码被触碰。shell PATH 无 go（mise shim 不受信）属环境项，以 `~/.gvm/gos/go1.26.7/bin` 重跑取得上述结果。
 
-三项门禁全部满足，apply 阶段退出条件达成。下一步：`openspec-verify-change`（漂移检查）。
+三项门禁全部满足，apply 阶段退出条件达成。
+
+## Final Whole-Branch Review（SDD 终审）
+
+- 审查范围：`4522efdee..cfb7613a8`（本 apply session 全部 2 个 commit），最强模型独立复核
+- 结论：**Ready to merge — Yes**；零 Critical / 零 Important；4 条 Minor 全部不阻塞
+- 事实复核：映射表 12 个 REST 端点、20 个 MCP 工具名、`server.port` 默认值、`features.auth` 三 profile 默认关、`/health` 免鉴权、step 缓存 TTL 5s、parity 测试、`task.plan.*` WS 动作——逐项对照代码全部成立
+- 4 条 Minor 交接（详情与处理建议见 `.superpowers/sdd/tasks/progress.md` 终审段）：
+  1. spec delta `specs/runtime-debugging/spec.md:12`「etc 价」→「等价」（apply 禁改 spec delta，留待 archive 修）
+  2. SKILL.md 速查出处注可补 `workflow/handlers/workflow_handlers.go`
+  3. SKILL.md 多实例行选注释可点名 `HOME_DIR`/`REPO_PATH` 列（与 spec scenario 对齐）
+  4. SKILL.md `GET /api/v1/workflows` 行可注明默认 exclude_office
+- 全部 controller rulings 经终审技术复核认可
+
+下一步：`openspec-verify-change`（漂移检查）。
