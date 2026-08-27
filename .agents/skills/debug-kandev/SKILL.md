@@ -143,7 +143,7 @@ grep -o '"aiTitle":"[^"]*"' ~/.claude/projects/<slug>/<session-id>.jsonl | head 
 先解析端口，别硬套 38429：
 
 ```bash
-PORT=$(./scripts/kandev-instances | awk 'NR==2{print $2}')  # 多实例时按行自选
+PORT=$(./scripts/kandev-instances | awk 'NR==2{print $2}')  # 多实例时按 HOME_DIR / REPO_PATH 列选行
 PORT=${PORT:-38429}                                         # server.port 默认值
 curl -s "http://127.0.0.1:$PORT/health"                     # 可达性自检（公共端点）
 ```
@@ -172,7 +172,8 @@ REST 与 MCP 两个写面等价（共享 service 层与事件 publisher，有 pa
 ## 写需求 → API 速查
 
 端口 `$PORT` 的解析与鉴权见「数据修改写策略」。出处：REST 路由注册在
-`apps/backend/internal/workflow/handlers/handlers.go`（workflow/steps）与
+`apps/backend/internal/workflow/handlers/handlers.go`（workflow steps）、
+`apps/backend/internal/task/handlers/workflow_handlers.go`（workflow 列查）与
 `apps/backend/internal/task/handlers/task_handlers.go`（tasks）；MCP 工具面在
 `apps/backend/internal/mcp/handlers/`。
 
@@ -182,7 +183,7 @@ REST 与 MCP 两个写面等价（共享 service 层与事件 publisher，有 pa
 | 建 / 删 step | `POST /api/v1/workflow/steps`、`DELETE /api/v1/workflow/steps/<id>` | `create_workflow_step_kandev`、`delete_workflow_step_kandev` |
 | step 重排 | `PUT /api/v1/workflows/<id>/workflow/steps/reorder` | `reorder_workflow_steps_kandev` |
 | workflow 导出 / 导入 | `GET /api/v1/workflows/<id>/export`、`POST /api/v1/workspaces/<id>/workflows/import` | `export_workflow_kandev`、`import_workflow_kandev` |
-| 写前先读（列查） | `GET /api/v1/workflows`、`GET /api/v1/workflows/<id>/workflow/steps` | `list_workflows_kandev`、`list_workflow_steps_kandev` |
+| 写前先读（列查） | `GET /api/v1/workflows`（默认排除 office workflow，`?exclude_office=false` 可见）、`GET /api/v1/workflows/<id>/workflow/steps` | `list_workflows_kandev`、`list_workflow_steps_kandev` |
 | task 改字段 / 状态 | `PATCH /api/v1/tasks/<id>` | `update_task_kandev`、`update_task_state_kandev` |
 | task 移动 step | `POST /api/v1/tasks/<id>/move`（批量 `POST /api/v1/tasks/bulk-move`） | `move_task_kandev` |
 | task 归档 / 删除 | `POST /api/v1/tasks/<id>/archive`、`POST /api/v1/tasks/<id>/unarchive`、`DELETE /api/v1/tasks/<id>` | `archive_task_kandev`、`delete_task_kandev` |
