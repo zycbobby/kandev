@@ -9,7 +9,7 @@
 ## 方案与决策
 
 - **读/写分离**：读路径保留 SQLite 直查（排障时后端可能在跑也可能没跑，只读无一致性风险）；写路径强制 API-first。
-- **两个 API 面 etc 价**：REST（gin 路由）与 MCP（`internal/mcp/handlers`）共享同一 service 层与 `stepevents.Publisher`（有 parity 测试），skill 不规定偏好哪个面，由调试会话可用性决定（shell 有 curl 走 REST；会话本身挂着 kandev MCP 就走 MCP 工具）。
+- **两个 API 面等价**：REST（gin 路由）与 MCP（`internal/mcp/handlers`）共享同一 service 层与 `stepevents.Publisher`（有 parity 测试），skill 不规定偏好哪个面，由调试会话可用性决定（shell 有 curl 走 REST；会话本身挂着 kandev MCP 就走 MCP 工具）。
 - **例外显式化**：无写 API 的仅 engine 追加的审计表（`task_step_transitions`、`session_step_history`）；后端未运行属操作性例外，须带警告与重启后校验指引。
 - **参数发现取代硬编码**：端口经 `scripts/kandev-instances` 发现（覆盖 systemd 与 dev 实例），失败回退 `server.port` 默认 38429；auth 开启时带 PAT bearer。
 - **映射表保持可验证**：写场景 → 端点/工具名的映射表附仓库内出处（路由注册文件），映射未覆盖的写需求先 grep 路由再考虑例外，防止映射表变成新的过期源。
