@@ -164,7 +164,7 @@ apps/web/e2e/.restart-screenshots/
 apps/backend/.manual-env/
 
 # Local Kandev workflow export archive (runtime snapshot from ~/.kandev/data/kandev.db, see .claude/skills/debug-kandev)
-/workflow/
+/workflows/
 
 
 .claude-sessions
