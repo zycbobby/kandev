@@ -103,3 +103,6 @@ SELECT substr(id,1,8), title, state, created_at FROM tasks ORDER BY created_at D
 -- 哪个 workflow 最近被改过（判断 signal-gating 是否事后才开）
 SELECT name, created_at, updated_at FROM workflows ORDER BY updated_at DESC;
 ```
+
+> **本文件所列的表都是读接口。** 写操作见 SKILL.md「数据修改写策略（API 优先）」与
+> 「写需求 → API 速查」；`task_step_transitions` / `session_step_history` 为审计表，只读。

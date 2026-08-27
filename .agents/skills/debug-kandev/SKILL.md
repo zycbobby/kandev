@@ -133,6 +133,62 @@ cat ~/.claude/session-index/<session-id>.json
 grep -o '"aiTitle":"[^"]*"' ~/.claude/projects/<slug>/<session-id>.jsonl | head -1
 ```
 
+## 数据修改写策略（API 优先）
+
+**读 SQLite 自由，写必须走 API。** 后端 mutation 都经 service 层发布事件（`task.*` /
+`workflow_step.*`）：WS 网关靠事件刷新 UI，orchestrator 靠事件失效编译态 step 缓存
+（TTL 5s 只是兜底）并重评估队列 admission。直接 `UPDATE` SQLite 的结果是「DB 改了、
+运行时没变」——UI 不刷新、引擎用旧 step spec、队列不重排，制造新的疑难杂症。
+
+先解析端口，别硬套 38429：
+
+```bash
+PORT=$(./scripts/kandev-instances | awk 'NR==2{print $2}')  # 多实例时按行自选
+PORT=${PORT:-38429}                                         # server.port 默认值
+curl -s "http://127.0.0.1:$PORT/health"                     # 可达性自检（公共端点）
+```
+
+鉴权：auth 是 opt-in runtime flag（`features.auth`），默认关 = 本机裸调即可；开启后
+所有请求带 `Authorization: Bearer $KANDEV_API_TOKEN`（PAT，勿写进命令行历史或日志）。
+
+REST 与 MCP 两个写面等价（共享 service 层与事件 publisher，有 parity 测试）：shell 里
+用 curl 走 REST；会话本身挂着 kandev MCP 就直接调对应 `*_kandev` 工具。
+
+**例外（确实没有 API 才允许直接写 DB，且仅限以下两类）：**
+
+1. `task_step_transitions` / `session_step_history` —— engine 追加的审计表，无写 API
+   也不应改；只读，它们是排障证据链本身。
+2. 后端未运行时的数据修复 —— 先确认进程已停（`kandev-instances` 无该实例行），写完
+   重启后必须复查；此路径绕过了校验与事件发布，是最后手段，优先拉起后端再走 API。
+
+映射表未覆盖的写需求：先 grep 路由注册（`apps/backend/internal/*/handlers/*.go` 里的
+`api.(GET|POST|PUT|PATCH|DELETE)`）或 MCP 工具名（`apps/backend/internal/mcp/handlers/`），
+确实没有再考虑例外路径。
+
+**live 实例不要做有副作用的实验。** 需要试写时用 `scripts/dev-isolated` 起隔离实例
+（全新 SQLite + mock providers，端口随机），用完按其输出的 teardown 命令回收；实例
+识别、诊断包等纪律见 `debug` skill 的 `references/instance.md`。
+
+## 写需求 → API 速查
+
+端口 `$PORT` 的解析与鉴权见「数据修改写策略」。出处：REST 路由注册在
+`apps/backend/internal/workflow/handlers/handlers.go`（workflow/steps）与
+`apps/backend/internal/task/handlers/task_handlers.go`（tasks）；MCP 工具面在
+`apps/backend/internal/mcp/handlers/`。
+
+| 写场景 | REST | MCP |
+|---|---|---|
+| 改 step（prompt / events / `auto_advance_requires_signal` 等） | `PUT /api/v1/workflow/steps/<id>` | `update_workflow_step_kandev` |
+| 建 / 删 step | `POST /api/v1/workflow/steps`、`DELETE /api/v1/workflow/steps/<id>` | `create_workflow_step_kandev`、`delete_workflow_step_kandev` |
+| step 重排 | `PUT /api/v1/workflows/<id>/workflow/steps/reorder` | `reorder_workflow_steps_kandev` |
+| workflow 导出 / 导入 | `GET /api/v1/workflows/<id>/export`、`POST /api/v1/workspaces/<id>/workflows/import` | `export_workflow_kandev`、`import_workflow_kandev` |
+| 写前先读（列查） | `GET /api/v1/workflows`、`GET /api/v1/workflows/<id>/workflow/steps` | `list_workflows_kandev`、`list_workflow_steps_kandev` |
+| task 改字段 / 状态 | `PATCH /api/v1/tasks/<id>` | `update_task_kandev`、`update_task_state_kandev` |
+| task 移动 step | `POST /api/v1/tasks/<id>/move`（批量 `POST /api/v1/tasks/bulk-move`） | `move_task_kandev` |
+| task 归档 / 删除 | `POST /api/v1/tasks/<id>/archive`、`POST /api/v1/tasks/<id>/unarchive`、`DELETE /api/v1/tasks/<id>` | `archive_task_kandev`、`delete_task_kandev` |
+| task plan CRUD | —（无 REST 路由；WS 网关有 `task.plan.*` 动作） | `create/get/update/delete_task_plan_kandev` |
+| session 停止 / 发消息 / 再拉起 | —（走 WS / orchestrator） | `stop_task_kandev`、`message_task_kandev`、`spawn_session_kandev` |
+
 ## 工作流 step 推进机制（排障核心）
 
 Kandev 工作流是状态机，每个 step 有 `events` 定义「进入/回合结束/退出」时做什么：
@@ -173,12 +229,15 @@ ADR 0015（`docs/decisions/0015-explicit-completion-signal-for-auto-advance.md`�
 信号指令，但 step prompt 自带指令更可靠，也能消除与 legacy 措辞的矛盾（ADR 0015 承认系统提示
 prepend 在不同 client/CLI 上不可靠）。
 
-改法用 REST API，不要直接写 SQLite（后端会原子更新 + 发事件，且无缓存不一致）：
-`PUT http://127.0.0.1:38429/api/v1/workflow/steps/<step_id>`，body `{"prompt":"..."}`
-或 `{"auto_advance_requires_signal":true}`。REST 无鉴权（本机）。
+改法走 API（总则见上文「数据修改写策略」）：
+`PUT http://127.0.0.1:$PORT/api/v1/workflow/steps/<step_id>`，body `{"prompt":"..."}`
+或 `{"auto_advance_requires_signal":true}`；auth 开启时带 Bearer 头。不要直接 UPDATE
+SQLite——后端经 API 会原子更新 + 发事件 + 失效 step 缓存，直写三者全绕过。
 
 ## 参考
 
 - `references/db-schema.md` —— 关键表的字段速查（workflows / workflow_steps / tasks /
   task_sessions / task_step_transitions / session_step_history / task_plans / agents / executors）。
 - ADR 0015 全文：`docs/decisions/0015-explicit-completion-signal-for-auto-advance.md`（仓库内）。
+- `debug` skill 的 `references/instance.md` —— 实例识别（`scripts/kandev-instances`）、
+  隔离实例（`scripts/dev-isolated`）、诊断包与日志获取；live 实例纪律（Never mutate）。
