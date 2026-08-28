@@ -9,6 +9,7 @@ const mockDeleteTask = vi.fn();
 const mockUpdateTask = vi.fn();
 const mockDeleteQuickTerminalTab = vi.fn();
 const mockUpdateQuickTerminalTab = vi.fn();
+const recordRecentUseMock = vi.fn();
 let mockAppState: ReturnType<typeof makeAppState>;
 
 vi.mock("@/components/state-provider", () => ({
@@ -23,6 +24,10 @@ vi.mock("@/components/toast-provider", () => ({
 
 vi.mock("@/lib/api/domains/workspace-api", () => ({
   startQuickChat: (...args: unknown[]) => mockStartQuickChat(...args),
+}));
+
+vi.mock("@/lib/agent-profile-recent-use", () => ({
+  recordAgentProfileRecentUseBestEffort: (...args: unknown[]) => recordRecentUseMock(...args),
 }));
 
 vi.mock("@/lib/api/domains/kanban-api", () => ({
@@ -77,6 +82,7 @@ function makeAppState() {
     removeQuickTerminal: vi.fn(),
     renameQuickChatSession: vi.fn(),
     openQuickChat: vi.fn(),
+    applyAgentProfileRecentUse: vi.fn(),
     setQuickChatTabOrder: vi.fn(),
     clearQuickChatTabOrder: vi.fn(),
     setQuickChatTabOrderSyncState: vi.fn(),
@@ -103,6 +109,7 @@ function makeStore(overrides: Partial<MockStore> = {}): MockStore {
     removeQuickTerminal: vi.fn(),
     renameQuickChatSession: vi.fn(),
     openQuickChat: vi.fn(),
+    applyAgentProfileRecentUse: vi.fn(),
     agentProfiles: [
       { id: "agent-a", label: "Agent A", agent_id: "a", agent_name: "Agent A" },
       { id: "agent-b", label: "Agent B", agent_id: "b", agent_name: "Agent B" },
@@ -128,6 +135,7 @@ beforeEach(() => {
     status: "running",
   });
   mockAppState = makeAppState();
+  recordRecentUseMock.mockReset();
 });
 
 describe("useQuickChatModal — terminal close lifecycle", () => {
@@ -409,6 +417,7 @@ describe("useAgentSelection — happy path", () => {
     );
     expect(store.renameQuickChatSession).toHaveBeenCalledWith("sess-a", expect.any(String));
     expect(mockDeleteTask).not.toHaveBeenCalled();
+    expect(recordRecentUseMock).toHaveBeenCalledWith("quick_chat", "agent-a", expect.any(Function));
     expect(result.current.pendingAgentId).toBeNull();
   });
 
@@ -525,6 +534,8 @@ describe("useAgentSelection — supersession", () => {
       await flushPromises();
     });
     expect(mockDeleteTask).toHaveBeenCalledWith("task-a");
+    expect(recordRecentUseMock).toHaveBeenCalledTimes(1);
+    expect(recordRecentUseMock).toHaveBeenCalledWith("quick_chat", "agent-b", expect.any(Function));
     expect(store.openQuickChat).not.toHaveBeenCalledWith(
       "sess-a",
       expect.anything(),

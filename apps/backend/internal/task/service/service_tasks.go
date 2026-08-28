@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 	"go.uber.org/zap"
 
+	"github.com/kandev/kandev/internal/auth/authn"
 	"github.com/kandev/kandev/internal/events"
 	"github.com/kandev/kandev/internal/repoclone"
 	"github.com/kandev/kandev/internal/steptelemetry"
@@ -274,7 +274,7 @@ func (s *Service) prepareTaskForCreation(ctx context.Context, req *CreateTaskReq
 	}
 
 	workflowStepID := s.resolveWorkflowStep(ctx, req)
-	task := s.buildTask(req, workflowStepID)
+	task := s.buildTask(ctx, req, workflowStepID)
 	task.ExternalID = externalID
 
 	// Auto-assign identifier for office tasks
@@ -723,7 +723,7 @@ func (s *Service) resolveWorkflowStep(ctx context.Context, req *CreateTaskReques
 }
 
 // buildTask constructs a Task model from the CreateTaskRequest.
-func (s *Service) buildTask(req *CreateTaskRequest, workflowStepID string) *models.Task {
+func (s *Service) buildTask(ctx context.Context, req *CreateTaskRequest, workflowStepID string) *models.Task {
 	state := v1.TaskStateCreated
 	if req.State != nil {
 		state = *req.State
@@ -743,19 +743,26 @@ func (s *Service) buildTask(req *CreateTaskRequest, workflowStepID string) *mode
 		// so callers (e.g. onboarding) can omit it.
 		priority = defaultPriority
 	}
-	metadata := req.Metadata
+	metadata := cloneTaskMetadata(req.Metadata)
+	delete(metadata, models.MetaKeyDeferredLaunch)
 	if req.DeferredLaunch != nil {
 		if metadata == nil {
 			metadata = make(map[string]interface{})
 		}
-		launch := req.DeferredLaunch
+		launch := cloneTaskMetadata(req.DeferredLaunch)
+		delete(launch, models.DeferredLaunchUserIDKey)
+		delete(launch, models.DeferredLaunchRecordRecentUseKey)
+		if req.RecordAgentProfileRecentUse {
+			if identity, ok := authn.IdentityFromContext(ctx); ok && identity.UserID != "" {
+				launch[models.DeferredLaunchUserIDKey] = identity.UserID
+				launch[models.DeferredLaunchRecordRecentUseKey] = true
+			}
+		}
 		if ResolveStartWhenUnblocked(req) {
 			// Mark the intent as a dependency-chain step. The record is the same
 			// one WIP overflow persists — reused so "launch exactly once" and
 			// restart survival are inherited — and the flag is what lets
 			// dependency resolution recognise its own intents.
-			launch = make(map[string]interface{}, len(req.DeferredLaunch)+1)
-			maps.Copy(launch, req.DeferredLaunch)
 			launch[models.DeferredLaunchStartWhenUnblockedKey] = true
 		}
 		metadata[models.MetaKeyDeferredLaunch] = launch
@@ -1650,7 +1657,7 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 		task.Position = *req.Position
 	}
 	if req.Metadata != nil {
-		task.Metadata = req.Metadata
+		task.Metadata = protectedTaskMetadataUpdate(task.Metadata, req.Metadata)
 	}
 	if req.Title != nil {
 		task.Title = *req.Title
