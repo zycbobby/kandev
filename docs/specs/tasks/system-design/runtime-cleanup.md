@@ -4,7 +4,7 @@ system: tasks
 requirements:
   - REQ-TASKS-RUNTIME-CLEANUP-001
 created: 2026-06-22
-updated: 2026-08-27
+updated: 2026-08-28
 owners:
   - cfl
 ---
@@ -114,6 +114,10 @@ worktrees, or executor rows behind and the machine slowly runs out of memory.
 - Archive, delete, cascade, workspace-delete, and quick-chat expiration persist a
   cleanup intent and resource snapshot before mutating or deleting task state.
   Cleanup is performed by a durable worker rather than a detached goroutine.
+- Stop-owner registration is advisory. It uses a non-blocking attempt to acquire
+  the per-session `cancelInFlightGuard` before it records teardown ownership.
+- If that guard is in use, registration skips the claim and the requested stop
+  continues. Durable cleanup and idempotent runtime teardown handle later races.
 - A durable cleanup job makes at most eight attempts. Failed attempts back off
   for 1 minute, 5 minutes, 15 minutes, 1 hour, 3 hours, 6 hours, and 12 hours
   before the next claim. An eighth failed attempt becomes terminal `failed`
@@ -137,32 +141,22 @@ worktrees, or executor rows behind and the machine slowly runs out of memory.
 
 ## Archive cleanup disposition
 
-The cleanup job trigger defines the resource disposition. Direct archive and
-cascade archive use the same disposition. A caller-specific Boolean must not
-change that disposition.
-
-Archive cleanup performs these actions:
+Direct and cascade archive use the same cleanup disposition. A caller-specific
+Boolean must not change it:
 
 - Stop the task runtimes and remove executor-specific runtime resources.
 - Remove the physical worktree directory and mark its repository row deleted.
-- Preserve the owning `task_environments` row.
-- Preserve every `task_environment_repos` row, including its worktree ID,
-  path, branch, and branch slug.
-- Preserve the local Git branch ref. This keeps committed work recoverable when
-  a hosting provider deletes the remote branch after merge.
+- Preserve the owning `task_environments` row, every
+  `task_environment_repos` row (including worktree ID, path, branch, and slug),
+  and the local Git branch ref.
 
-The worktree can appear in both the environment snapshot and the batch
-worktree snapshot. Both cleanup passes must use the archive disposition. A
-later pass must not delete a branch that an earlier pass preserved.
+If a worktree appears in both snapshots, every pass uses this disposition and
+must not delete a branch preserved earlier.
 
-Unarchive does not invent a new workspace owner. It keeps the preserved
-environment link. When the repository row is not live, resume enters normal
-preparation and reactivates that row. The recreated worktree uses the preserved
-local branch first, then the existing remote or pull-request recovery paths.
-
-Delete behavior remains separate. A delete trigger can remove durable owner
-rows after it captures the cleanup snapshot. This archive rule does not weaken
-delete cleanup.
+Unarchive keeps the preserved environment link. If its repository row is not
+live, normal preparation reactivates it and uses the preserved local branch
+before remote or pull-request recovery. Delete remains separate and may remove
+owner rows after capturing its cleanup snapshot.
 
 ## Data Model
 
@@ -260,6 +254,10 @@ type ExecutorRunningRepository interface {
 primary stop operation when `agent_execution_id` is available. Fallback cleanup is
 runtime-specific and must be bounded by context.
 
+`TaskExecutionStopper.RegisterExecutionStopOwner(sessionID, executionID, force)`
+must not wait for the per-session cancellation guard. Registration can skip a
+contended claim because it is advisory and does not replace the stop operation.
+
 ## State Machine
 
 Runtime cleanup for a task follows this lifecycle:
@@ -301,6 +299,8 @@ The durable cleanup job wraps that resource lifecycle:
   the task only if existing product behavior requires it, but destructive runtime
   cleanup must fail closed: do not remove runtime rows or worktrees based on an
   empty or partial inventory.
+- If stop-owner registration finds the session guard in use, it skips the claim.
+  The explicit stop continues, and durable cleanup preserves any retryable work.
 - If stopping a runtime execution times out, the process manager escalates to a
   process-group kill and waits for confirmation. If confirmation still fails, the
   runtime row remains retryable.
