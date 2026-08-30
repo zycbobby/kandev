@@ -60,9 +60,7 @@ Architecture notes and per-area conventions live alongside the code they describ
 
 ### Engineering language
 
-Use English for all engineering text, including specs, plans, PRs, docs,
-comments, and docstrings. Translate non-English input before recording it.
-Only required product localization and product data can use another language.
+Use English for all engineering text (specs, plans, PRs, docs, comments, docstrings). Translate non-English input before recording it. Only required product localization and product data can use another language.
 
 ### Commit Conventions (enforced by CI)
 
@@ -164,9 +162,7 @@ history and remains immutable.
 
 ### Plan Implementation
 
-- Requirements and system designs define durable behavior and technical
-  boundaries. Plans and work orders define implementation scope, dependency
-  order, and task-level validation. Keep their statuses and results accurate.
+- Requirements and system designs define durable behavior and technical boundaries. Plans and work orders define implementation scope, dependency order, and task-level validation. Keep their statuses and results accurate.
 
 ### Observability
 
@@ -177,9 +173,7 @@ history and remains immutable.
 
 Skills use `gh` CLI by default. If a `gh` command fails (not installed, not authenticated, etc.), use whatever GitHub tools are available in the environment (MCP GitHub tools, API tools, etc.) to accomplish the same operation. The goal is the same — the tool may differ.
 
-For multiline Markdown issue or PR bodies, write the body to a file and pass it
-with the relevant `gh ... --body-file <path>` option. Do not send escaped
-newlines through `--body`; GitHub will render them literally.
+For multiline Markdown issue or PR bodies, write the body to a file and pass it with the relevant `gh ... --body-file <path>` option. Do not send escaped newlines through `--body`; GitHub will render them literally.
 
 For PR review/fixup workflows, prefer the repo helpers before manually querying GitHub/GraphQL: `scripts/pr-await <PR>` to block until CI is terminal and get one report (do not manually poll `pr-state` on a timer in the primary conversation; preserve the documented `pr-poller` fallback when `pr-await` is unavailable), `scripts/pr-state --summary <PR>` for checks and unresolved-thread state, `scripts/pr-state --comment <comment_id>` for a full review-comment body, `scripts/pr-resolve list <PR>` for actionable unresolved review threads, and `scripts/pr-resolve reply <PR> <comment_id> <thread_id> "<body>"` to reply, resolve, and react in one call.
 
