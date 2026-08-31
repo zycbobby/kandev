@@ -77,6 +77,9 @@ function InlineSteps({
   );
 }
 
+const POPOVER_CONTENT_CLASS =
+  "w-auto min-w-[300px] max-w-none p-1 max-h-[var(--radix-popover-content-available-height)] overflow-y-auto overscroll-contain";
+
 type WorkflowSelectorRowProps = {
   workflows: Array<{
     id: string;
@@ -125,7 +128,7 @@ export const WorkflowSelectorRow = memo(function WorkflowSelectorRow({
           <IconChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto min-w-[300px] max-w-none p-1" align="start">
+      <PopoverContent className={POPOVER_CONTENT_CLASS} align="start">
         <div className="text-muted-foreground px-2 py-1.5 text-xs border-b">
           {t("workflows:workflow")}
         </div>
