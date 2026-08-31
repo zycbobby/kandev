@@ -1,0 +1,7 @@
+{
+  "activeRound": 1,
+  "activeCheckpoint": "cp-001",
+  "status": "finalized",
+  "mode": "post-apply",
+  "applyBlocked": false
+}

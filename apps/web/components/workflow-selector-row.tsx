@@ -9,6 +9,7 @@ import { Button } from "@kandev/ui/button";
 import type { WorkflowSnapshotData } from "@/lib/state/slices/kanban/types";
 import type { AgentProfileOption } from "@/lib/state/slices";
 import { AgentLogo } from "@/components/agent-logo";
+import { useTaskCreateDialogPopoverContainer } from "@/hooks/use-task-create-dialog-popover-container";
 
 type StepItem = {
   id: string;
@@ -77,6 +78,9 @@ function InlineSteps({
   );
 }
 
+const POPOVER_CONTENT_CLASS =
+  "w-auto min-w-[300px] max-w-none p-1 max-h-[var(--radix-popover-content-available-height)] overflow-y-auto overscroll-contain pointer-events-auto";
+
 type WorkflowSelectorRowProps = {
   workflows: Array<{
     id: string;
@@ -92,6 +96,76 @@ type WorkflowSelectorRowProps = {
   placeholder?: string;
 };
 
+function WorkflowOptionList({
+  workflows,
+  snapshots,
+  selectedWorkflowId,
+  onWorkflowChange,
+  agentProfiles,
+  closePopover,
+}: {
+  workflows: WorkflowSelectorRowProps["workflows"];
+  snapshots: WorkflowSelectorRowProps["snapshots"];
+  selectedWorkflowId: string | null;
+  onWorkflowChange: (workflowId: string) => void;
+  agentProfiles: AgentProfileOption[];
+  closePopover: () => void;
+}) {
+  return (
+    <>
+      {workflows.map((wf) => {
+        const isSelected = wf.id === selectedWorkflowId;
+        const snapshot = snapshots[wf.id];
+        const steps = snapshot ? [...snapshot.steps].sort((a, b) => a.position - b.position) : [];
+        return (
+          <button
+            key={wf.id}
+            type="button"
+            onClick={() => {
+              onWorkflowChange(wf.id);
+              closePopover();
+            }}
+            className="relative flex min-h-11 w-full cursor-pointer flex-col gap-1 rounded-sm px-2 py-1.5 pr-8 text-left transition-colors hover:bg-muted"
+          >
+            <div className="flex items-center gap-2">
+              <IconLogicBuffer className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-sm">{wf.name}</span>
+              {wf.agent_profile_id &&
+                (() => {
+                  const wfProfile = agentProfiles.find((p) => p.id === wf.agent_profile_id);
+                  return wfProfile ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span data-testid="workflow-agent-logo">
+                            <AgentLogo
+                              agentName={wfProfile.agent_name}
+                              size={14}
+                              className="shrink-0"
+                            />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>{wfProfile.label}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : null;
+                })()}
+            </div>
+            {steps.length > 0 && (
+              <div className="pl-[calc(0.875rem+0.5rem)]">
+                <InlineSteps steps={steps} agentProfiles={agentProfiles} />
+              </div>
+            )}
+            {isSelected && (
+              <IconCheck className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4" />
+            )}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
 export const WorkflowSelectorRow = memo(function WorkflowSelectorRow({
   workflows,
   snapshots,
@@ -103,6 +177,7 @@ export const WorkflowSelectorRow = memo(function WorkflowSelectorRow({
 }: WorkflowSelectorRowProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const portalContainer = useTaskCreateDialogPopoverContainer();
 
   const selectedWorkflow = useMemo(
     () => workflows.find((w) => w.id === selectedWorkflowId),
@@ -125,7 +200,12 @@ export const WorkflowSelectorRow = memo(function WorkflowSelectorRow({
           <IconChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto min-w-[300px] max-w-none p-1" align="start">
+      <PopoverContent
+        className={POPOVER_CONTENT_CLASS}
+        align="start"
+        portalContainer={portalContainer}
+        onWheel={(event) => event.stopPropagation()}
+      >
         <div className="text-muted-foreground px-2 py-1.5 text-xs border-b">
           {t("workflows:workflow")}
         </div>
@@ -141,55 +221,14 @@ export const WorkflowSelectorRow = memo(function WorkflowSelectorRow({
             {clearLabel}
           </button>
         ) : null}
-        {workflows.map((wf) => {
-          const isSelected = wf.id === selectedWorkflowId;
-          const snapshot = snapshots[wf.id];
-          const steps = snapshot ? [...snapshot.steps].sort((a, b) => a.position - b.position) : [];
-          return (
-            <button
-              key={wf.id}
-              type="button"
-              onClick={() => {
-                onWorkflowChange(wf.id);
-                setOpen(false);
-              }}
-              className="relative flex min-h-11 w-full cursor-pointer flex-col gap-1 rounded-sm px-2 py-1.5 pr-8 text-left transition-colors hover:bg-muted"
-            >
-              <div className="flex items-center gap-2">
-                <IconLogicBuffer className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="text-sm">{wf.name}</span>
-                {wf.agent_profile_id &&
-                  (() => {
-                    const wfProfile = agentProfiles.find((p) => p.id === wf.agent_profile_id);
-                    return wfProfile ? (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span data-testid="workflow-agent-logo">
-                              <AgentLogo
-                                agentName={wfProfile.agent_name}
-                                size={14}
-                                className="shrink-0"
-                              />
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>{wfProfile.label}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    ) : null;
-                  })()}
-              </div>
-              {steps.length > 0 && (
-                <div className="pl-[calc(0.875rem+0.5rem)]">
-                  <InlineSteps steps={steps} agentProfiles={agentProfiles} />
-                </div>
-              )}
-              {isSelected && (
-                <IconCheck className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4" />
-              )}
-            </button>
-          );
-        })}
+        <WorkflowOptionList
+          workflows={workflows}
+          snapshots={snapshots}
+          selectedWorkflowId={selectedWorkflowId}
+          onWorkflowChange={onWorkflowChange}
+          agentProfiles={agentProfiles}
+          closePopover={() => setOpen(false)}
+        />
       </PopoverContent>
     </Popover>
   );

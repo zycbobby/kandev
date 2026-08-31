@@ -608,6 +608,44 @@ test.describe("Task creation", () => {
     // Sidebar shows the task under "Turn Finished" section
     await expect(session.sidebarSection("Turn Finished")).toBeVisible();
   });
+
+  test("scrolls the workflow selector when many workflows are configured", async ({
+    testPage,
+    apiClient,
+    seedData,
+  }) => {
+    const created = [];
+    for (let i = 0; i < 15; i += 1) {
+      created.push(
+        await apiClient.createWorkflow(seedData.workspaceId, `Scroll WF ${i}`, "simple"),
+      );
+    }
+    try {
+      const kanban = new KanbanPage(testPage);
+      await kanban.goto();
+      await kanban.createTaskButton.first().click();
+
+      const dialog = testPage.getByTestId("create-task-dialog");
+      await expect(dialog).toBeVisible();
+      await dialog.getByTestId("workflow-selector-trigger").click();
+
+      const popover = testPage.locator('[data-slot="popover-content"]').filter({
+        hasText: "Scroll WF",
+      });
+      await expect(popover).toBeVisible();
+
+      const overflows = await popover.evaluate((el) => el.scrollHeight > el.clientHeight);
+      expect(overflows).toBe(true);
+
+      const last = popover.getByRole("button", { name: /Scroll WF 14/ });
+      await last.scrollIntoViewIfNeeded();
+      await last.click();
+
+      await expect(dialog.getByTestId("workflow-selector-trigger")).toContainText("Scroll WF 14");
+    } finally {
+      await Promise.all(created.map((wf) => apiClient.deleteWorkflow(wf.id).catch(() => {})));
+    }
+  });
 });
 
 /**
