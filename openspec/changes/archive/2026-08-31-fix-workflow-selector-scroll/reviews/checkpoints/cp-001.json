@@ -1,0 +1,17 @@
+{
+  "id": "cp-001",
+  "changeId": "fix-workflow-selector-scroll",
+  "trigger": "post-apply",
+  "createdAt": "2026-08-31T15:16:00+08:00",
+  "completedTasks": ["Task 1", "Task 2", "Task 3", "Task 4"],
+  "pendingTasks": [],
+  "modifiedFiles": [
+    "apps/web/components/workflow-selector-row.tsx",
+    "apps/web/components/workflow-selector-row.test.tsx",
+    "apps/web/e2e/tests/task/create-task.spec.ts",
+    "apps/web/e2e/tests/task/mobile-create-task-workflow-selector.spec.ts"
+  ],
+  "gitCommit": "7b71da01c",
+  "allowApply": false,
+  "requiresReconcile": true
+}
