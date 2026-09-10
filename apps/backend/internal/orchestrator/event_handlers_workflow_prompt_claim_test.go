@@ -190,7 +190,7 @@ func TestWorkflowAutoStartPromptClaimRejectsSessionTerminalizedAfterPromotion(t 
 	errCh := make(chan error, 1)
 	go func() {
 		_, _, _, _, _, claimErr := svc.claimSessionRunningForPrompt(
-			ctx, session.TaskID, session.ID, "", false, nil, nil, "", true,
+			ctx, session.TaskID, session.ID, "", false, nil, nil, "", true, nil,
 		)
 		errCh <- claimErr
 	}()
@@ -227,7 +227,7 @@ func TestWorkflowAutoStartRejectsSessionTerminalizedBeforeResume(t *testing.T) {
 		allowClaim:           make(chan struct{}),
 	}
 	agentMgr := &mockAgentManager{repoForExecutionLookup: repo}
-	queue := messagequeue.NewServiceMemory(testLogger())
+	queue := newAuthoritativeMemoryQueue(repo, testLogger())
 	if _, err := queue.QueueMessage(ctx, session.ID, session.TaskID, "handoff", "", messagequeue.QueuedByUser, true, nil); err != nil {
 		t.Fatalf("queue handoff: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestWorkflowAutoStartRejectsSessionTerminalizedBeforeResume(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false)
+		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false, nil)
 	}()
 
 	<-barrierRepo.claimReached
@@ -277,7 +277,7 @@ func TestWorkflowAutoStartRollsBackPromptClaimWhenPostClaimReloadFails(t *testin
 		err:                  reloadErr,
 	}
 	agentMgr := &mockAgentManager{repoForExecutionLookup: repo, isAgentRunning: true}
-	queue := messagequeue.NewServiceMemory(testLogger())
+	queue := newAuthoritativeMemoryQueue(repo, testLogger())
 	if _, err := queue.QueueMessage(ctx, session.ID, session.TaskID, "handoff", "", messagequeue.QueuedByUser, true, nil); err != nil {
 		t.Fatalf("queue handoff: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestWorkflowAutoStartRollsBackPromptClaimWhenPostClaimReloadFails(t *testin
 		repo:                  failingRepo,
 	}
 
-	err = svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false)
+	err = svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false, nil)
 	if !errors.Is(err, reloadErr) {
 		t.Fatalf("auto-start error = %v, want post-claim reload error", err)
 	}
@@ -333,7 +333,7 @@ func TestWorkflowAutoStartRollsBackPromptClaimWhenTerminalizedAfterClaim(t *test
 		allowReload:          make(chan struct{}),
 	}
 	agentMgr := &mockAgentManager{repoForExecutionLookup: repo, isAgentRunning: true}
-	queue := messagequeue.NewServiceMemory(testLogger())
+	queue := newAuthoritativeMemoryQueue(repo, testLogger())
 	if _, err := queue.QueueMessage(ctx, session.ID, session.TaskID, "handoff", "", messagequeue.QueuedByUser, true, nil); err != nil {
 		t.Fatalf("queue handoff: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestWorkflowAutoStartRollsBackPromptClaimWhenTerminalizedAfterClaim(t *test
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false)
+		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false, nil)
 	}()
 
 	<-barrierRepo.claimReached
@@ -433,6 +433,10 @@ func testProcessOnEnterTerminalizedAfterPromptClaim(t *testing.T, terminalState 
 		State: v1.TaskStateInProgress,
 	}
 	stepGetter := newMockStepGetter()
+	sourceStep := &wfmodels.WorkflowStep{
+		ID: "step-source", WorkflowID: "wf1", Name: "Source", AgentProfileID: source.AgentProfileID,
+	}
+	stepGetter.steps[sourceStep.ID] = sourceStep
 	step := &wfmodels.WorkflowStep{
 		ID:             "step-target",
 		WorkflowID:     "wf1",
@@ -459,7 +463,7 @@ func testProcessOnEnterTerminalizedAfterPromptClaim(t *testing.T, terminalState 
 
 	done := make(chan struct{})
 	go func() {
-		svc.processOnEnter(ctx, source.TaskID, source, step, "Test", 0)
+		svc.processOnEnter(ctx, source.TaskID, source, step, "Test", 0, sourceStep)
 		close(done)
 	}()
 
@@ -524,7 +528,7 @@ func TestWorkflowAutoStartReleasesTerminalGuardAfterPromptAdmission(t *testing.T
 	svc.executor = executor.NewExecutor(agentMgr, repo, testLogger(), executor.ExecutorConfig{})
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false)
+		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, &wfmodels.WorkflowStep{}, "review the task", false, false, nil)
 	}()
 
 	<-agentMgr.dispatched
@@ -614,7 +618,7 @@ func TestWorkflowAutoStartCreatedTerminalizedGuard(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, step, "review the task", false, false)
+		errCh <- svc.autoStartStepPrompt(ctx, session.TaskID, session, step, "review the task", false, false, nil)
 	}()
 
 	<-barrierRepo.lockAcquired
@@ -756,7 +760,7 @@ func testProcessOnEnterImplicitProfileSwitchTerminalizedGuard(
 
 	done := make(chan struct{})
 	go func() {
-		svc.processOnEnter(ctx, source.TaskID, source, step, "Test", 0)
+		svc.processOnEnter(ctx, source.TaskID, source, step, "Test", 0, stepGetter.steps["step-source"])
 		close(done)
 	}()
 

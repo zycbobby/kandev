@@ -142,23 +142,26 @@ func (s *Service) drainHistoryQueue() {
 }
 
 // EnqueueStepTransition records transition history outside the caller's
-// event-reader path. The queue is bounded. A full queue, or an enqueue after
-// Close has begun, is logged as a dropped best-effort telemetry row while the
-// workflow mutation itself succeeds.
-func (s *Service) EnqueueStepTransition(sessionID, fromStepID, toStepID string, trigger models.StepTransitionTrigger, actorID *string, metadata map[string]interface{}) {
+// event-reader path. The queue is bounded. It returns false when a full queue,
+// an empty session ID, or shutdown prevents enqueueing, so callers carrying
+// signal data can use a bounded synchronous fallback instead of silently
+// losing that payload.
+func (s *Service) EnqueueStepTransition(sessionID, fromStepID, toStepID string, trigger models.StepTransitionTrigger, actorID *string, metadata map[string]interface{}) bool {
 	if sessionID == "" {
-		return
+		return false
 	}
 	s.historyMu.RLock()
 	defer s.historyMu.RUnlock()
 	if s.historyClosed {
 		s.logger.Warn("dropped step transition enqueued after shutdown", zap.String("session_id", sessionID))
-		return
+		return false
 	}
 	select {
 	case s.historyQueue <- historyWrite{sessionID: sessionID, fromStepID: fromStepID, toStepID: toStepID, trigger: trigger, actorID: actorID, metadata: metadata}:
+		return true
 	default:
 		s.logger.Warn("step transition history queue is full", zap.String("session_id", sessionID))
+		return false
 	}
 }
 
@@ -385,6 +388,8 @@ func (s *Service) CreateStepsFromTemplate(ctx context.Context, workflowID, templ
 			ShowInCommandPanel:         stepDef.ShowInCommandPanel,
 			AutoArchiveAfterHours:      stepDef.AutoArchiveAfterHours,
 			AgentProfileID:             stepDef.AgentProfileID,
+			ProfileSessionStartPolicy:  taskmodels.NormalizeWorkflowProfileSessionStartPolicy(string(stepDef.ProfileSessionStartPolicy)),
+			ProfileSessionEndPolicy:    taskmodels.NormalizeWorkflowProfileSessionEndPolicy(string(stepDef.ProfileSessionEndPolicy)),
 			AutoAdvanceRequiresSignal:  stepDef.AutoAdvanceRequiresSignal,
 			CancelTriggersTurnComplete: stepDef.CancelTriggersTurnComplete,
 			WIPLimit:                   stepDef.WIPLimit,
@@ -599,8 +604,9 @@ func (s *Service) ReorderSteps(ctx context.Context, workflowID string, stepIDs [
 
 // CreateStepTransition creates a new step transition history entry. metadata
 // is optional (nil for a plain move) and carries the ADR 0015 consumed-signal
-// shape ({"signal_source", "signal_summary"}) when a completion signal drove
-// the transition.
+// shape ({"signal_source", "signal_summary"}, plus "signal_handoff" and
+// "signal_blockers" when the signal carried a non-blank value for either)
+// when a completion signal drove the transition.
 func (s *Service) CreateStepTransition(ctx context.Context, sessionID string, fromStepID, toStepID string, trigger models.StepTransitionTrigger, actorID *string, metadata map[string]interface{}) error {
 	history := &models.SessionStepHistory{
 		SessionID: sessionID,
@@ -817,17 +823,20 @@ func (s *Service) importSingleWorkflow(ctx context.Context, workspaceID string, 
 // queue work on.
 //
 // Transition targets need no check here. An export names them by position:
-// WorkflowExport.Validate rejects a raw `step_id` under on_turn_start and
-// on_turn_complete and requires each position to exist in the document, and
-// ConvertPositionToStepID then maps every one onto a step this import just
-// created. The Phase 2 triggers carry no reference at all, because that
-// converter drops those lists. If either of those stops being true, the
-// same-workflow check for step targets belongs here.
+// WorkflowExport.Validate rejects a raw `step_id` under on_turn_start,
+// on_turn_complete, and the seven ADR-0004 Phase 2 GenericAction triggers
+// (validateGenericStepPositionRefs), and requires each position to exist in
+// the document. ConvertPositionToStepID then maps every one — including the
+// Phase 2 triggers' move_to_step actions — onto a step this import just
+// created. If either of those stops being true, the same-workflow check for
+// step targets belongs here.
 //
 // A queue_run task target has no positional form, and an on_enter action is
 // copied through the conversion verbatim, so a hand-written document can name
 // any task in the install — authorize it against the importing caller exactly
-// as the step-write API does.
+// as the step-write API does. CollectStepEventReferences already walks the
+// Phase 2 triggers' queue_run actions alongside on_enter, so no separate pass
+// is needed for those.
 func (s *Service) validateImportedStepReferences(
 	ctx context.Context, step *models.WorkflowStep, name string,
 ) error {
@@ -866,6 +875,8 @@ func (s *Service) stepFromPortableWithMatcher(workflowID string, sp models.StepP
 		ShowInCommandPanel:         sp.ShowInCommandPanel,
 		AllowManualMove:            sp.AllowManualMove,
 		AutoArchiveAfterHours:      sp.AutoArchiveAfterHours,
+		ProfileSessionStartPolicy:  taskmodels.NormalizeWorkflowProfileSessionStartPolicy(string(sp.ProfileSessionStartPolicy)),
+		ProfileSessionEndPolicy:    taskmodels.NormalizeWorkflowProfileSessionEndPolicy(string(sp.ProfileSessionEndPolicy)),
 		AutoAdvanceRequiresSignal:  sp.AutoAdvanceRequiresSignal,
 		CancelTriggersTurnComplete: sp.CancelTriggersTurnComplete,
 		WIPLimit:                   sp.WIPLimit,

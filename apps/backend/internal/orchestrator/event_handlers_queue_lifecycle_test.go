@@ -3,14 +3,99 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kandev/kandev/internal/orchestrator/executor"
 	"github.com/kandev/kandev/internal/orchestrator/messagequeue"
+	"github.com/kandev/kandev/internal/orchestrator/watcher"
 	"github.com/kandev/kandev/internal/task/models"
+	sqliterepo "github.com/kandev/kandev/internal/task/repository/sqlite"
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 )
+
+type bootReadyRequeueBarrierRepo struct {
+	*sqliterepo.Repository
+	lookupStarted chan struct{}
+	allowLookup   chan struct{}
+	lookupOnce    sync.Once
+}
+
+func (r *bootReadyRequeueBarrierRepo) GetExecutorRunningBySessionID(
+	ctx context.Context,
+	sessionID string,
+) (*models.ExecutorRunning, error) {
+	r.lookupOnce.Do(func() {
+		close(r.lookupStarted)
+		<-r.allowLookup
+	})
+	return nil, models.ErrExecutorRunningNotFound
+}
+
+func TestAgentBootReadyDrainsAfterInFlightRuntimeUnavailableRequeue(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := setupTestRepo(t)
+	seedTaskAndSession(t, baseRepo, "t1", "s1", models.TaskSessionStateWaitingForInput)
+	repo := &bootReadyRequeueBarrierRepo{
+		Repository:    baseRepo,
+		lookupStarted: make(chan struct{}),
+		allowLookup:   make(chan struct{}),
+	}
+	agentMgr := &mockAgentManager{repoForExecutionLookup: baseRepo}
+	svc := createTestServiceWithAgent(baseRepo, newMockStepGetter(), newMockTaskRepo(), agentMgr)
+	svc.repo = repo
+	svc.executor = executor.NewExecutor(agentMgr, baseRepo, testLogger(), executor.ExecutorConfig{})
+
+	if _, err := svc.messageQueue.QueueMessage(ctx, "s1", "t1", "queued prompt", "", messagequeue.QueuedByUser, false, nil); err != nil {
+		t.Fatalf("queue prompt: %v", err)
+	}
+	queued, ok := svc.messageQueue.ReserveQueued(ctx, "s1")
+	if !ok {
+		t.Fatal("reserve queued prompt")
+	}
+	reservation := svc.markQueuedDispatchInFlightWithSource("s1", queued.ID, queued)
+
+	var completions atomic.Int32
+	secondExecutionDone := make(chan struct{})
+	svc.onQueuedMessageExecutionComplete = func() {
+		if completions.Add(1) == 2 {
+			close(secondExecutionDone)
+		}
+	}
+	go svc.executeQueuedMessageWithReservation("s1", queued, reservation)
+	select {
+	case <-repo.lookupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runtime lookup barrier")
+	}
+
+	svc.handleAgentBootReady(ctx, watcher.AgentEventData{TaskID: "t1", SessionID: "s1"})
+	close(repo.allowLookup)
+
+	select {
+	case <-secondExecutionDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("boot-ready did not retry after in-flight requeue, executions=%d", completions.Load())
+	}
+	if got := svc.messageQueue.GetStatus(ctx, "s1").Count; got != 1 {
+		t.Fatalf("runtime-unavailable retry queue count = %d, want 1", got)
+	}
+}
+
+type turnStartSignalService struct {
+	TurnService
+	started chan<- struct{}
+}
+
+func (s *turnStartSignalService) StartTurn(ctx context.Context, sessionID string) (*models.Turn, error) {
+	turn, err := s.TurnService.StartTurn(ctx, sessionID)
+	if err == nil {
+		s.started <- struct{}{}
+	}
+	return turn, err
+}
 
 func TestExecuteQueuedMessage_LifecycleReselectsReplacementSession(t *testing.T) {
 	ctx := context.Background()
@@ -122,6 +207,97 @@ func TestExecuteQueuedMessage_LifecycleNonPromptableSessionRequeues(t *testing.T
 	}
 	if got := len(agentMgr.capturedPromptCalls); got != 0 {
 		t.Fatalf("non-promptable lifecycle prompts = %d, want 0", got)
+	}
+}
+
+// A reset can cancel a lifecycle turn while task-state reconciliation is
+// blocked. The queue must retry that entry instead of dispatching the stale
+// turn or recording a duplicate visible message.
+func TestExecuteQueuedMessage_LifecycleResetAfterTurnCreationRequeues(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, manager, session := newActiveResetTestService(t)
+	setupTurnValue, ok := svc.activeTurns.Load(session.ID)
+	if !ok {
+		t.Fatal("test setup did not create an active turn")
+	}
+	setupTurnID, ok := setupTurnValue.(string)
+	if !ok || setupTurnID == "" {
+		t.Fatalf("active turn cache value = %#v, want turn ID", setupTurnValue)
+	}
+	if err := svc.turnService.CompleteTurn(ctx, setupTurnID); err != nil {
+		t.Fatalf("complete setup turn: %v", err)
+	}
+	svc.activeTurns.Delete(session.ID)
+	if err := repo.UpdateTaskSessionState(ctx, session.ID, models.TaskSessionStateWaitingForInput, ""); err != nil {
+		t.Fatalf("set session waiting: %v", err)
+	}
+	session.State = models.TaskSessionStateWaitingForInput
+	manager.isAgentRunning = true
+	svc.messageCreator = &mockMessageCreator{}
+	svc.executor = executor.NewExecutor(manager, repo, testLogger(), executor.ExecutorConfig{})
+
+	turnStarted := make(chan struct{}, 1)
+	svc.turnService = &turnStartSignalService{
+		TurnService: svc.turnService,
+		started:     turnStarted,
+	}
+	_, _, accepted, err := svc.messageQueue.QueueLifecycleMessageWithCoalesceKey(
+		ctx, session.ID, session.TaskID, "merged lifecycle prompt", "", messagequeue.QueuedByWorkflow,
+		false, nil, map[string]interface{}{"origin": githubPRAutomationOrigin},
+		"github-pr:repo:1:merged", true,
+	)
+	if err != nil || !accepted {
+		t.Fatalf("queue lifecycle entry: accepted=%v err=%v", accepted, err)
+	}
+	reserved, ok := svc.messageQueue.ReserveQueued(ctx, session.ID)
+	if !ok {
+		t.Fatal("reserve lifecycle entry")
+	}
+	svc.markQueuedDispatchInFlight(session.ID, reserved.ID)
+
+	svc.taskRuntimeStateMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			svc.taskRuntimeStateMu.Unlock()
+		}
+	}()
+	dispatchDone := make(chan struct{})
+	go func() {
+		svc.executeQueuedMessage(session.ID, reserved)
+		close(dispatchDone)
+	}()
+	select {
+	case <-turnStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle turn creation")
+	}
+
+	resetDone := make(chan bool, 1)
+	go func() {
+		resetDone <- svc.resetAgentContext(ctx, session.TaskID, session, "Successor")
+	}()
+	requireResetEvents(t, manager.events, "cancel", "reset")
+	if resetOK := <-resetDone; !resetOK {
+		t.Fatal("resetAgentContext returned false")
+	}
+
+	svc.taskRuntimeStateMu.Unlock()
+	locked = false
+	select {
+	case <-dispatchDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for lifecycle dispatch")
+	}
+
+	if got := len(manager.capturedPromptCalls); got != 0 {
+		t.Fatalf("prompts after reset cancelled lifecycle turn = %d, want 0", got)
+	}
+	if got := len(svc.messageCreator.(*mockMessageCreator).userMessages); got != 0 {
+		t.Fatalf("visible lifecycle messages after reset = %d, want 0", got)
+	}
+	if got := svc.messageQueue.GetStatus(ctx, session.ID).Count; got != 1 {
+		t.Fatalf("lifecycle retries after reset = %d, want 1", got)
 	}
 }
 

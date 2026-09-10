@@ -23,7 +23,7 @@ apps/
 - **Web-only scripts** live in `apps/web/package.json`; run them from `apps/web` (for example `pnpm run i18n:check` or `pnpm run i18n:ratchet`) or use `pnpm --filter @kandev/web ...`, not from `apps/`.
 - **Desktop**: Tauri shell (`cd apps && pnpm --filter @kandev/desktop build|e2e`; Rust tests from `apps/desktop/src-tauri`)
 - **UI**: Shadcn components via `@kandev/ui`
-- **E2E**: Playwright (`cd apps/web && pnpm e2e:raw`). The `containers` project (gated on `KANDEV_E2E_CONTAINERS=1`, formerly `docker`) covers both the Docker executor and the SSH executor — anything that needs a real Docker daemon on the host lives there. See `apps/web/e2e/README.md`.
+- **E2E**: Playwright (`cd apps/web && pnpm e2e:run` or the guarded `pnpm e2e:raw`). Local runners enforce one worker per shard and a memory-aware shard budget; do not pass all-worker overrides or overlap full suites. The `containers` project (gated on `KANDEV_E2E_CONTAINERS=1`, formerly `docker`) covers Docker, SSH, and Kind-backed Kubernetes executor scenarios — anything that needs a real Docker daemon on the host lives there. See `apps/web/e2e/README.md`.
 - **GitHub repo**: `https://github.com/kdlbs/kandev`
 - **Container image**: `ghcr.io/kdlbs/kandev` (GitHub Container Registry)
 
@@ -81,9 +81,19 @@ Static analysis runs in CI and pre-commit. Each subtree has its own thresholds:
 
 When you hit a limit: extract a helper function, custom hook, or sub-component. Prefer composition over growing a single function.
 
+Production comments state the invariant, not the argument for it: no `AC-NN` reference, no "Review round N", no "BLOCKING FINDING", no narration of a bug's history. That context belongs in the spec, the plan, or the PR body — a comment that has to argue the code is correct usually means the code is not constrained enough to be obviously correct.
+
 ### Testing
 
 Every code change must include tests for new or changed logic. Backend: `*_test.go` files alongside the source. Frontend: `*.test.ts` files for utility functions, hooks, API clients, and store slices. Exceptions: config files, generated code, React component markup. Use `/tdd` for test-driven development.
+
+Every built-in SQL schema owner also belongs in
+`apps/backend/internal/persistence/requiredstores` and the fixed
+`apps/backend/internal/persistence/storeconformance` adapter set. Persistence
+changes must run the SQL guard, fresh/replay conformance, and the relevant
+SQLite/PostgreSQL boot or upgrade tests. Disabled features keep their required
+schema; external provider credentials and remote APIs remain a separate,
+degradable startup phase.
 
 ### Internationalization
 
@@ -168,6 +178,7 @@ history and remains immutable.
 
 - In dev mode (`KANDEV_MOCK_AGENT=true` or `debug.pprofEnabled`), `/debug/vars` exposes the stdlib expvar handler. Office provider-routing metrics live under `routing_*` (route attempts, fallbacks, parked runs, provider degraded/recovered counters). The metrics are also still emitted as structured `routing.metric.*` zap logs for human debugging.
 - ADR 0015's step-completion-signal telemetry lives under `workflow_*`: `workflow_step_completion_signal_received_total` (`internal/workflow/signalmetrics/`), labelled by `source` and `agent_type`, counts accepted `step_complete_kandev` signals. Its separate `workflow_step_completion_signal_fallback_used_total` counter is labelled by `agent_type` and counts manual fallback uses. The fallback button does not have a production increment site yet, so the counter remains zero until that UI ships.
+- Office stall detection (REQ-OFFICE-STALL-VISIBILITY) lives under `office_stall_*`: `office_stall_stranded_signal_total` (labelled by `gate`, which names which of the two watchdog gate sites saw it), `office_stall_decision_waiting_total`, and `office_stall_detector_skipped_total` (labelled by `reason`, so a detector that fails closed is visible rather than silent). Detection only: these counters never accompany a transition, a synthesized decision, or a queued run, because Office tasks are surfaced and never reclaimed. Also emitted as structured zap logs.
 
 ### GitHub Operations
 
@@ -279,21 +290,4 @@ For developing in ephemeral cloud VMs (Cursor Cloud, Codex, GitHub Codespaces, e
 
 ## Workflow routing (read on session start)
 
-This repo uses `superpowers-bridge`: keep OpenSpec as the front door, and use Superpowers only as embedded capability inside OpenSpec stages.
-
-### Entry routing
-
-| Trigger | What to do |
-|---|---|
-| New feature / capability / architectural change | Use `/opsx:propose` with `--schema superpowers-bridge` |
-| Already inside an active change | Use `/opsx:plan`, `/opsx:apply`, `/opsx:verify`, `/opsx:archive` |
-| Discussing ideas narratively | Use `superpowers:brainstorming`; write the outcome into `proposal.md` |
-| Explicit bug fix / typo / tiny config tweak | Direct PR, no change |
-
-### Hard rules
-
-Do not create `brainstorm.md`, `plan.md`, or `retrospective.md`; do not write planning/design output to `docs/superpowers/specs/` or `docs/superpowers/plans/`.
-
-### Archive policy
-
-Merge conservatively by capability; prefer `openspec/specs/<capability>/spec.md`; avoid new top-level capability folders unless necessary.
+OpenSpec is the front door (`--schema superpowers-bridge`); Superpowers is embedded capability only. New capability: `/opsx:propose`. Active change: `/opsx:plan|apply|verify|archive`. Narrative ideas: `superpowers:brainstorming` into `proposal.md`. Tiny bug or typo: direct PR. Do not create `brainstorm.md`, `plan.md`, or `retrospective.md`, and do not write planning output under `docs/superpowers/`. Archive conservatively into `openspec/specs/<capability>/spec.md`.

@@ -184,7 +184,8 @@ A reviewer rejecting a Review:
 
 `office_runs` is renamed `runs`. Universal queue for engine-emitted
 launches. Every `queue_run` action creates a row. Coalescing (5s
-window for same agent + reason), idempotency (24h dedup window),
+window for same agent + reason), idempotency (a 24h lookup plus a durable
+unique key),
 per-agent serialisation (one claimed run per agent), cooldown
 (per-agent, default 10s), and atomic task checkout (one agent per
 task at a time) all apply — same machinery as today's office_runs.
@@ -264,7 +265,11 @@ history visible. Default actions for office workflows:
     "target": "agent_profile_id:{workspace.ceo_agent}",
     "task_id": "this",
     "reason": "agent_error",
-    "payload": { "failed_agent_id": "...", "error_message": "..." } },
+    "payload": {
+      "failed_agent_id": "...",
+      "failed_session_id": "...",
+      "error": "..."
+    } },
   { "kind": "create_inbox_item", "kind": "agent_error" }
 ]
 ```

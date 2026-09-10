@@ -40,7 +40,7 @@ func TestPassthroughResetAutoStart_QueuesPromptInsteadOfInlineWrite(t *testing.T
 		t.Fatalf("get session: %v", err)
 	}
 
-	svc.processOnEnter(ctx, "t1", session, step, "test task")
+	svc.processOnEnter(ctx, "t1", session, step, "test task", 0, nil)
 
 	if got := len(agentMgr.passthroughStdinCalls); got != 0 {
 		t.Fatalf("expected prompt to be queued, not written inline; got %d stdin writes", got)
@@ -77,7 +77,7 @@ func TestPassthroughAutoStartNoReset_WritesInline(t *testing.T) {
 		t.Fatalf("get session: %v", err)
 	}
 
-	svc.processOnEnter(ctx, "t1", session, step, "test task")
+	svc.processOnEnter(ctx, "t1", session, step, "test task", 0, nil)
 
 	if got := len(agentMgr.passthroughStdinCalls); got == 0 {
 		t.Fatal("expected prompt to be written inline for non-reset passthrough auto-start")
@@ -127,7 +127,7 @@ func TestPassthroughResetAutoStart_DeliversQueuedPromptForWaitingSession(t *test
 	if err != nil {
 		t.Fatalf("get session: %v", err)
 	}
-	svc.processOnEnter(ctx, "t1", session, step, "test task")
+	svc.processOnEnter(ctx, "t1", session, step, "test task", 0, nil)
 
 	// The prompt is queued, not written inline (task-01 behavior).
 	if got := svc.messageQueue.GetStatus(ctx, "s1").Count; got != 1 {
