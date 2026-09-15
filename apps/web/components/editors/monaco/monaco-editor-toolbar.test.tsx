@@ -136,6 +136,53 @@ describe("MonacoEditorToolbar preview action", () => {
     screen.getByRole("button", { name: "Preview HTML" }).click();
     expect(onPreviewHtml).toHaveBeenCalledOnce();
   });
+
+  it("labels and invokes Markdown preview", () => {
+    const onTogglePreview = vi.fn();
+    render(
+      <TooltipProvider>
+        <MonacoEditorToolbar
+          {...baseProps}
+          previewKind="markdown"
+          onTogglePreview={onTogglePreview}
+        />
+      </TooltipProvider>,
+    );
+
+    screen.getByTestId("markdown-preview-toggle").click();
+    expect(onTogglePreview).toHaveBeenCalledOnce();
+  });
+
+  it("renders no preview control when the preview kind is none", () => {
+    render(
+      <TooltipProvider>
+        <MonacoEditorToolbar {...baseProps} previewKind="none" onTogglePreview={vi.fn()} />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByTestId("markdown-preview-toggle")).toBeNull();
+    expect(screen.queryByTestId("html-preview-toggle")).toBeNull();
+  });
+
+  it("renders a host-supplied source action despite previewKind none", () => {
+    const onShowImage = vi.fn();
+    render(
+      <TooltipProvider>
+        <MonacoEditorToolbar
+          {...baseProps}
+          path="assets/logo.svg"
+          sourcePreviewAction={{
+            label: "Preview SVG",
+            testId: "svg-preview-toggle",
+            onClick: onShowImage,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    screen.getByTestId("svg-preview-toggle").click();
+    expect(onShowImage).toHaveBeenCalledOnce();
+  });
 });
 
 describe("MonacoEditorToolbar download action", () => {

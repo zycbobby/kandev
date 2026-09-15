@@ -14,7 +14,6 @@ import {
   IconTextWrapDisabled,
   IconMessagePlus,
   IconRefresh,
-  IconEye,
 } from "@tabler/icons-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
 import { formatDiffStats } from "@/lib/utils/file-diff";
@@ -27,6 +26,11 @@ import {
   ExternalVcsFileLink,
   useExternalVcsFileStatus,
 } from "@/components/editors/external-vcs-file-link";
+import {
+  PreviewActionButton,
+  resolvePreviewAction,
+  type PreviewAction,
+} from "@/components/editors/preview-action";
 import { registerCodeMirrorCursorRevealer } from "@/hooks/file-editor-cursor";
 import { useCodeMirrorEditorState } from "./use-codemirror-editor-state";
 import { useCodeMirrorWalkthroughRange } from "./use-codemirror-walkthrough-range";
@@ -60,6 +64,7 @@ type FileEditorContentProps = {
   onTogglePreview?: () => void;
   onPreviewHtml?: () => void;
   isPublishingHtmlPreview?: boolean;
+  sourcePreviewAction?: PreviewAction;
   onChange: (newContent: string) => void;
   onSave: () => void;
   onReloadFromAgent?: () => void;
@@ -228,47 +233,54 @@ function CodeMirrorPreviewButton({
   onToggle,
   onPreviewHtml,
   isPublishingHtmlPreview,
+  sourcePreviewAction,
 }: {
   previewKind: FilePreviewKind;
   onToggle?: () => void;
   onPreviewHtml?: () => void;
   isPublishingHtmlPreview?: boolean;
+  sourcePreviewAction?: PreviewAction;
 }) {
   const { t } = useTranslation();
-  if (previewKind === "none") return null;
-  const isHtml = previewKind === "html";
-  const action = isHtml ? onPreviewHtml : onToggle;
-  if (!action) return null;
-  const label = isHtml ? t("editors:previewHtml") : t("editors:previewMarkdown");
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={action}
-          disabled={isHtml && isPublishingHtmlPreview}
-          aria-label={label}
-          title={isHtml ? t("task:htmlPreviewTrustedCode") : undefined}
-          className="h-8 w-8 p-0 cursor-pointer"
-          data-testid={isHtml ? "html-preview-toggle" : "markdown-preview-toggle"}
-        >
-          {isHtml && isPublishingHtmlPreview ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconEye className="h-4 w-4" />
-          )}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{label}</p>
-        {isHtml && (
-          <p className="mt-1 max-w-xs text-muted-foreground">{t("task:htmlPreviewTrustedCode")}</p>
-        )}
-      </TooltipContent>
-    </Tooltip>
+  const action = resolvePreviewAction(
+    {
+      previewKind,
+      onTogglePreview: onToggle,
+      onPreviewHtml,
+      isPublishingHtmlPreview,
+      sourceAction: sourcePreviewAction,
+    },
+    t,
   );
+  if (!action) return null;
+  return <PreviewActionButton action={action} />;
 }
+
+type CodeMirrorToolbarProps = {
+  path: string;
+  worktreePath?: string;
+  isDirty: boolean;
+  isSaving: boolean;
+  diffStats: { additions: number; deletions: number } | null;
+  wrapEnabled: boolean;
+  enableComments: boolean;
+  sessionId?: string;
+  taskId?: string | null;
+  repositoryId?: string | null;
+  repositoryName?: string;
+  commentCount: number;
+  hasRemoteUpdate?: boolean;
+  onToggleWrap: () => void;
+  onSave: () => void;
+  onReloadFromAgent?: () => void;
+  onDelete?: () => void;
+  onDownload?: () => void;
+  previewKind?: FilePreviewKind;
+  onTogglePreview?: () => void;
+  onPreviewHtml?: () => void;
+  isPublishingHtmlPreview?: boolean;
+  sourcePreviewAction?: PreviewAction;
+};
 
 /** Toolbar for the CodeMirror code editor. */
 function CodeMirrorToolbar({
@@ -294,30 +306,8 @@ function CodeMirrorToolbar({
   onTogglePreview,
   onPreviewHtml,
   isPublishingHtmlPreview,
-}: {
-  path: string;
-  worktreePath?: string;
-  isDirty: boolean;
-  isSaving: boolean;
-  diffStats: { additions: number; deletions: number } | null;
-  wrapEnabled: boolean;
-  enableComments: boolean;
-  sessionId?: string;
-  taskId?: string | null;
-  repositoryId?: string | null;
-  repositoryName?: string;
-  commentCount: number;
-  hasRemoteUpdate?: boolean;
-  onToggleWrap: () => void;
-  onSave: () => void;
-  onReloadFromAgent?: () => void;
-  onDelete?: () => void;
-  onDownload?: () => void;
-  previewKind?: FilePreviewKind;
-  onTogglePreview?: () => void;
-  onPreviewHtml?: () => void;
-  isPublishingHtmlPreview?: boolean;
-}) {
+  sourcePreviewAction,
+}: CodeMirrorToolbarProps) {
   const fileStatus = useExternalVcsFileStatus(path, sessionId, repositoryName);
   return (
     <PanelHeaderBarSplit
@@ -340,12 +330,13 @@ function CodeMirrorToolbar({
             sessionId={sessionId}
             commentCount={commentCount}
           />
-          {(onTogglePreview || onPreviewHtml) && (
+          {(onTogglePreview || onPreviewHtml || sourcePreviewAction) && (
             <CodeMirrorPreviewButton
               previewKind={previewKind}
               onToggle={onTogglePreview}
               onPreviewHtml={onPreviewHtml}
               isPublishingHtmlPreview={isPublishingHtmlPreview}
+              sourcePreviewAction={sourcePreviewAction}
             />
           )}
           <CodeMirrorWrapButton wrapEnabled={wrapEnabled} onToggleWrap={onToggleWrap} />
@@ -477,6 +468,7 @@ export function CodeMirrorCodeEditor(props: FileEditorContentProps) {
     onTogglePreview,
     onPreviewHtml,
     isPublishingHtmlPreview,
+    sourcePreviewAction,
     onSave,
     onReloadFromAgent,
     onDelete,
@@ -510,6 +502,7 @@ export function CodeMirrorCodeEditor(props: FileEditorContentProps) {
         onTogglePreview={onTogglePreview}
         onPreviewHtml={onPreviewHtml}
         isPublishingHtmlPreview={isPublishingHtmlPreview}
+        sourcePreviewAction={sourcePreviewAction}
       />
       <div ref={editorAreaRef} className="flex-1 overflow-hidden relative">
         <CodeMirror

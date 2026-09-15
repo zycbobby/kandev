@@ -5,6 +5,7 @@ import { useEditorProvider } from "@/hooks/use-editor-resolver";
 import { useHtmlPreviewPublisher } from "@/hooks/use-html-preview-publisher";
 import { MonacoCodeEditor } from "@/components/editors/monaco/monaco-code-editor";
 import { CodeMirrorCodeEditor } from "@/components/editors/codemirror/codemirror-code-editor";
+import type { PreviewAction } from "@/components/editors/preview-action";
 import { useDockviewStore } from "@/lib/state/dockview-store";
 import type { FilePreviewKind } from "@/lib/utils/file-types";
 import { HtmlPreviewContent } from "./html-preview-content";
@@ -27,6 +28,7 @@ export type FileEditorContentProps = {
   previewKind?: FilePreviewKind;
   renderedPreview?: boolean;
   onTogglePreview?: () => void;
+  sourcePreviewAction?: PreviewAction;
   onChange: (newContent: string) => void;
   onSave: () => void;
   onReloadFromAgent?: () => void;

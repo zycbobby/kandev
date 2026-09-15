@@ -8,17 +8,47 @@ vi.mock("./file-image-viewer", () => ({
   FileImageViewer: ({
     path,
     content,
+    isBinary,
     worktreePath,
     headerActions,
+    onShowSource,
   }: {
     path: string;
     content: string;
+    isBinary?: boolean;
     worktreePath?: string;
     headerActions?: React.ReactNode;
+    onShowSource?: () => void;
   }) => (
-    <div data-testid="image-viewer" data-path={path} data-worktree-path={worktreePath}>
+    <div
+      data-testid="image-viewer"
+      data-path={path}
+      data-is-binary={String(isBinary)}
+      data-worktree-path={worktreePath}
+    >
       {content}
       {headerActions}
+      {onShowSource && (
+        <button type="button" onClick={onShowSource}>
+          Show code
+        </button>
+      )}
+    </div>
+  ),
+}));
+
+vi.mock("./file-editor-content", () => ({
+  FileEditorContent: ({
+    sourcePreviewAction,
+  }: {
+    sourcePreviewAction?: { testId: string; onClick: () => void };
+  }) => (
+    <div data-testid="file-editor-content" data-source-action-testid={sourcePreviewAction?.testId}>
+      {sourcePreviewAction && (
+        <button type="button" onClick={sourcePreviewAction.onClick}>
+          {sourcePreviewAction.testId}
+        </button>
+      )}
     </div>
   ),
 }));
@@ -88,6 +118,64 @@ function seedImage(path: string, content: string, repo?: string) {
     repo,
   });
 }
+
+describe("FileEditorPanel SVG source toggle", () => {
+  const SVG_PATH = "assets/logo.svg";
+  const SVG_CONTENT = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+
+  function seedTextFile(path: string, content: string) {
+    useDockviewStore.getState().setFileState(buildRepoScopedItemId(path, undefined), {
+      ...makeImageState(path, content),
+      isBinary: false,
+    });
+  }
+
+  it("renders a text SVG in the image viewer by default", () => {
+    act(() => seedTextFile(SVG_PATH, SVG_CONTENT));
+
+    render(
+      <TooltipProvider>
+        <FileEditorPanel panelId={PREVIEW_PANEL_ID} params={{ path: SVG_PATH }} />
+      </TooltipProvider>,
+    );
+
+    const viewer = screen.getByTestId(IMAGE_VIEWER_TEST_ID);
+    expect(viewer.textContent).toContain(SVG_CONTENT);
+    expect(viewer.getAttribute("data-is-binary")).toBe("false");
+    expect(screen.queryByTestId("file-editor-content")).toBeNull();
+  });
+
+  it("switches to the source editor and offers a way back to the image", () => {
+    act(() => seedTextFile(SVG_PATH, SVG_CONTENT));
+
+    render(
+      <TooltipProvider>
+        <FileEditorPanel panelId={PREVIEW_PANEL_ID} params={{ path: SVG_PATH }} />
+      </TooltipProvider>,
+    );
+
+    act(() => screen.getByRole("button", { name: "Show code" }).click());
+    expect(
+      screen.getByTestId("file-editor-content").getAttribute("data-source-action-testid"),
+    ).toBe("svg-preview-toggle");
+    expect(screen.queryByTestId(IMAGE_VIEWER_TEST_ID)).toBeNull();
+
+    act(() => screen.getByRole("button", { name: "svg-preview-toggle" }).click());
+    expect(screen.getByTestId(IMAGE_VIEWER_TEST_ID)).toBeTruthy();
+  });
+
+  it("does not offer the source toggle for a binary image", () => {
+    act(() => seedImage("docs/photo.png", "QUJD"));
+
+    render(
+      <TooltipProvider>
+        <FileEditorPanel panelId={PREVIEW_PANEL_ID} params={{ path: "docs/photo.png" }} />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Show code" })).toBeNull();
+  });
+});
 
 describe("FileEditorPanel image preview", () => {
   beforeEach(() => {

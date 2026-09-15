@@ -13,11 +13,15 @@ import {
   IconMessagePlus,
   IconArrowsDiff,
   IconRefresh,
-  IconEye,
 } from "@tabler/icons-react";
 import { formatDiffStats } from "@/lib/utils/file-diff";
 import { toRelativePath } from "@/lib/utils";
 import { FileActionsDropdown } from "@/components/editors/file-actions-dropdown";
+import {
+  PreviewActionButton,
+  resolvePreviewAction,
+  type PreviewAction,
+} from "@/components/editors/preview-action";
 import {
   ExternalVcsFileLink,
   useExternalVcsFileStatus,
@@ -238,46 +242,27 @@ function PreviewButton({
   onTogglePreview,
   onPreviewHtml,
   isPublishingHtmlPreview,
+  sourcePreviewAction,
 }: {
   previewKind: FilePreviewKind;
   onTogglePreview?: () => void;
   onPreviewHtml?: () => void;
   isPublishingHtmlPreview?: boolean;
+  sourcePreviewAction?: PreviewAction;
 }) {
   const { t } = useTranslation();
-  if (previewKind === "none") return null;
-  const isHtml = previewKind === "html";
-  const action = isHtml ? onPreviewHtml : onTogglePreview;
-  if (!action) return null;
-  const label = isHtml ? t("editors:previewHtml") : t("editors:previewMarkdown");
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={action}
-          disabled={isHtml && isPublishingHtmlPreview}
-          aria-label={label}
-          title={isHtml ? t("task:htmlPreviewTrustedCode") : undefined}
-          className="h-8 w-8 p-0 cursor-pointer"
-          data-testid={isHtml ? "html-preview-toggle" : "markdown-preview-toggle"}
-        >
-          {isHtml && isPublishingHtmlPreview ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconEye className="h-4 w-4" />
-          )}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{label}</p>
-        {isHtml && (
-          <p className="mt-1 max-w-xs text-muted-foreground">{t("task:htmlPreviewTrustedCode")}</p>
-        )}
-      </TooltipContent>
-    </Tooltip>
+  const action = resolvePreviewAction(
+    {
+      previewKind,
+      onTogglePreview,
+      onPreviewHtml,
+      isPublishingHtmlPreview,
+      sourceAction: sourcePreviewAction,
+    },
+    t,
   );
+  if (!action) return null;
+  return <PreviewActionButton action={action} />;
 }
 
 interface MonacoEditorToolbarProps {
@@ -309,6 +294,7 @@ interface MonacoEditorToolbarProps {
   onTogglePreview?: () => void;
   onPreviewHtml?: () => void;
   isPublishingHtmlPreview?: boolean;
+  sourcePreviewAction?: PreviewAction;
 }
 
 export function MonacoEditorToolbar({
@@ -340,6 +326,7 @@ export function MonacoEditorToolbar({
   onTogglePreview,
   onPreviewHtml,
   isPublishingHtmlPreview,
+  sourcePreviewAction,
 }: MonacoEditorToolbarProps) {
   const fileStatus = useExternalVcsFileStatus(path, sessionId, repositoryName);
   return (
@@ -373,12 +360,13 @@ export function MonacoEditorToolbar({
               onToggle={onToggleDiffIndicators}
             />
           )}
-          {(onTogglePreview || onPreviewHtml) && (
+          {(onTogglePreview || onPreviewHtml || sourcePreviewAction) && (
             <PreviewButton
               previewKind={previewKind}
               onTogglePreview={onTogglePreview}
               onPreviewHtml={onPreviewHtml}
               isPublishingHtmlPreview={isPublishingHtmlPreview}
+              sourcePreviewAction={sourcePreviewAction}
             />
           )}
           <WrapButton wrapEnabled={wrapEnabled} onToggleWrap={onToggleWrap} />

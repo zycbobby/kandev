@@ -9,7 +9,11 @@ import { useAppStore } from "@/components/state-provider";
 import { useDockviewStore, type FileEditorState } from "@/lib/state/dockview-store";
 import { useFileEditors } from "@/hooks/use-file-editors";
 import { useSessionGitStatus } from "@/hooks/domains/session/use-session-git-status";
-import { getFileCategory, getFilePreviewKind } from "@/lib/utils/file-types";
+import {
+  getFilePreviewKind,
+  resolveFileViewerKind,
+  type FileViewerKind,
+} from "@/lib/utils/file-types";
 import { getWebSocketClient } from "@/lib/ws/connection";
 import { requestFileContent } from "@/lib/ws/workspace-files";
 import { calculateHash } from "@/lib/utils/file-diff";
@@ -20,34 +24,36 @@ import { FileViewerDownloadButton, FileViewerExternalLink } from "./file-viewer-
 import { triggerFileDownload } from "@/lib/utils/file-download";
 import { getSessionWorkspacePath } from "@/lib/session-workspace-path";
 import { useTranslation } from "react-i18next";
+import { textImagePreviewAction } from "@/components/editors/preview-action";
+import { useTextImageSourceToggle } from "@/hooks/use-text-image-source-toggle";
 
-type FileCategory = "image" | "binary" | "text";
-
-function resolveFileCategory(isBinary: boolean, path: string): FileCategory {
-  if (!isBinary) return "text";
-  return getFileCategory(path) === "image" ? "image" : "binary";
-}
+type FileCategory = FileViewerKind;
 
 function ImagePanel({
   fileKey,
   path,
   worktreePath,
   headerActions,
+  onShowSource,
 }: {
   fileKey: string;
   path: string;
   worktreePath: string | undefined;
   headerActions?: React.ReactNode;
+  onShowSource?: () => void;
 }) {
   const content = useDockviewStore((s) => s.openFiles.get(fileKey)?.content ?? "");
+  const isBinary = useDockviewStore((s) => s.openFiles.get(fileKey)?.isBinary ?? false);
   return (
     <PanelRoot>
       <PanelBody padding={false} scroll={false}>
         <FileImageViewer
           path={path}
           content={content}
+          isBinary={isBinary}
           worktreePath={worktreePath}
           headerActions={headerActions}
+          onShowSource={onShowSource}
         />
       </PanelBody>
     </PanelRoot>
@@ -63,6 +69,7 @@ type StaticFilePanelProps = {
   taskId: string | null;
   repositoryId?: string;
   repositoryName?: string;
+  onShowSource?: () => void;
 };
 
 /**
@@ -156,6 +163,7 @@ function StaticFilePanel({
   taskId,
   repositoryId,
   repositoryName,
+  onShowSource,
 }: StaticFilePanelProps) {
   const onDownload = useOpenFileDownload(fileKey, path);
   const headerActions = (
@@ -177,6 +185,7 @@ function StaticFilePanel({
         path={path}
         worktreePath={worktreePath}
         headerActions={headerActions}
+        onShowSource={onShowSource}
       />
     );
   }
@@ -369,6 +378,7 @@ function LoadingFilePanel() {
 
 type LoadedFilePanelProps = {
   category: FileCategory;
+  showSource: boolean;
   fileKey: string;
   path: string;
   worktreePath: string | undefined;
@@ -377,10 +387,12 @@ type LoadedFilePanelProps = {
   repositoryId: string | undefined;
   repositoryName: string | undefined;
   editorProps: FileEditorContentProps;
+  onShowSource?: () => void;
 };
 
 function LoadedFilePanel({
   category,
+  showSource,
   fileKey,
   path,
   worktreePath,
@@ -389,8 +401,9 @@ function LoadedFilePanel({
   repositoryId,
   repositoryName,
   editorProps,
+  onShowSource,
 }: LoadedFilePanelProps) {
-  if (category !== "text") {
+  if (category !== "text" && !showSource) {
     return (
       <StaticFilePanel
         category={category}
@@ -401,11 +414,12 @@ function LoadedFilePanel({
         taskId={taskId}
         repositoryId={repositoryId}
         repositoryName={repositoryName}
+        onShowSource={onShowSource}
       />
     );
   }
   return (
-    <PanelRoot>
+    <PanelRoot data-testid="file-source-panel">
       <PanelBody padding={false} scroll={false}>
         <FileEditorContent {...editorProps} />
       </PanelBody>
@@ -433,7 +447,7 @@ function resolveFileEditorPanelState({
   activeTaskId: string | null;
 }) {
   return {
-    category: resolveFileCategory(isBinary, path),
+    category: resolveFileViewerKind(path, isBinary),
     previewKind: getFilePreviewKind(path, isBinary),
     panelProps: {
       worktreePath: getSessionWorkspacePath(activeSession),
@@ -447,6 +461,7 @@ function resolveFileEditorPanelState({
 
 type LoadedFileEditorPanelProps = {
   category: FileCategory;
+  showSource: boolean;
   fileKey: string;
   panelProps: Pick<
     LoadedFilePanelProps,
@@ -468,28 +483,34 @@ type LoadedFileEditorPanelProps = {
     | "previewKind"
     | "renderedPreview"
     | "onTogglePreview"
+    | "sourcePreviewAction"
   >;
   actions: Pick<
     FileEditorContentProps,
     "onChange" | "onSave" | "onReloadFromAgent" | "onDelete" | "onDownload"
   >;
+  onShowSource?: () => void;
 };
 
 function LoadedFileEditorPanel({
   category,
+  showSource,
   fileKey,
   panelProps,
   buffer,
   options,
   actions,
+  onShowSource,
 }: LoadedFileEditorPanelProps) {
   return (
     <LoadedFilePanel
       category={category}
+      showSource={showSource}
       fileKey={fileKey}
       path={buffer.path}
       {...panelProps}
       editorProps={{ ...buffer, ...options, ...actions }}
+      onShowSource={onShowSource}
     />
   );
 }
@@ -501,6 +522,7 @@ export const FileEditorPanel = memo(function FileEditorPanel({
   const path = params.path as string;
   const repo = params.repo as string | undefined;
   const fileKey = buildRepoScopedItemId(path, repo);
+  const { t } = useTranslation();
 
   const file = useFileEditorBuffer(fileKey);
   const setFileState = useDockviewStore((s) => s.setFileState);
@@ -541,6 +563,8 @@ export const FileEditorPanel = memo(function FileEditorPanel({
       },
     });
   const onDownload = useLoadedFileDownloadForBuffer(file, path);
+  const fileIdentity = `${activeSessionId ?? ""} ${repo ?? ""} ${path}`;
+  const sourceToggle = useTextImageSourceToggle(fileIdentity, file.isBinary, path);
 
   if (!file.hasFile || !file.originalHash) {
     return <LoadingFilePanel />;
@@ -554,10 +578,12 @@ export const FileEditorPanel = memo(function FileEditorPanel({
     activeSessionId,
     activeTaskId,
   });
+  const showSource = category === "image" && sourceToggle.showSource;
 
   return (
     <LoadedFileEditorPanel
       category={category}
+      showSource={showSource}
       fileKey={fileKey}
       panelProps={panelProps}
       buffer={{
@@ -579,6 +605,9 @@ export const FileEditorPanel = memo(function FileEditorPanel({
         previewKind,
         renderedPreview: previewKind !== "none" && file.renderedPreview,
         onTogglePreview: previewKind === "markdown" ? onTogglePreview : undefined,
+        sourcePreviewAction: showSource
+          ? textImagePreviewAction(sourceToggle.showImage, t)
+          : undefined,
       }}
       actions={{
         onChange,
@@ -587,6 +616,7 @@ export const FileEditorPanel = memo(function FileEditorPanel({
         onDelete,
         onDownload,
       }}
+      onShowSource={sourceToggle.enabled ? sourceToggle.showSourceCode : undefined}
     />
   );
 });

@@ -31,6 +31,8 @@ const REPORT_CONTENT = "<h1>Report</h1>";
 const README_PATH = "README.md";
 const REPORT_PATH = "reports/index.html";
 const FILE_CONTENT_TEST_ID = "file-content";
+const IMAGE_VIEWER_TEST_ID = "image-viewer";
+const SOURCE_ACTION_TEST_ID = "svg-preview-toggle";
 
 vi.mock("@/components/state-provider", () => ({
   useAppStore: (selector: (value: typeof state) => unknown) => selector(state),
@@ -59,7 +61,23 @@ vi.mock("@/hooks/use-html-preview-publisher", () => ({
   useHtmlPreviewPublisher: () => htmlPreview,
   getHtmlPreviewPublishErrorKey: () => "task:htmlPreviewPublishFailed",
 }));
-vi.mock("../file-image-viewer", () => ({ FileImageViewer: () => null }));
+vi.mock("../file-image-viewer", () => ({
+  FileImageViewer: ({
+    isBinary,
+    onShowSource,
+  }: {
+    isBinary?: boolean;
+    onShowSource?: () => void;
+  }) => (
+    <div data-testid="image-viewer" data-is-binary={String(isBinary)}>
+      {onShowSource && (
+        <button type="button" onClick={onShowSource}>
+          Show code
+        </button>
+      )}
+    </div>
+  ),
+}));
 vi.mock("../file-binary-viewer", () => ({
   FileBinaryViewer: ({ worktreePath }: { worktreePath?: string }) => (
     <span data-testid="binary-viewer" data-worktree-path={worktreePath} />
@@ -196,6 +214,76 @@ describe("MobileFileViewerPanel Markdown preview mode", () => {
 
     expect(screen.getByTestId(FILE_CONTENT_TEST_ID)).toBeTruthy();
     expect(screen.queryByTestId("markdown-preview")).toBeNull();
+  });
+});
+
+describe("MobileFileViewerPanel SVG source toggle", () => {
+  const SVG_PATH = "assets/logo.svg";
+  const SVG_CONTENT = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+
+  function renderSvg() {
+    return render(
+      <TooltipProvider>
+        <MobileFileViewerPanel
+          file={{
+            path: SVG_PATH,
+            name: "logo.svg",
+            content: SVG_CONTENT,
+            originalContent: SVG_CONTENT,
+            originalHash: "hash",
+            isDirty: false,
+          }}
+          sessionId="session-1"
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("renders the image by default and offers Show code", () => {
+    renderSvg();
+
+    expect(screen.getByTestId(IMAGE_VIEWER_TEST_ID)).toBeTruthy();
+    expect(screen.queryByTestId(FILE_CONTENT_TEST_ID)).toBeNull();
+    expect(screen.getByRole("button", { name: "Show code" })).toBeTruthy();
+  });
+
+  it("switches to the source viewer and returns via a touch-sized control", () => {
+    renderSvg();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show code" }));
+    expect(screen.getByTestId(FILE_CONTENT_TEST_ID)).toBeTruthy();
+    expect(screen.queryByTestId(IMAGE_VIEWER_TEST_ID)).toBeNull();
+
+    const back = screen.getByTestId(SOURCE_ACTION_TEST_ID);
+    expect(back.className).toContain("h-11");
+    expect(back.className).toContain("w-11");
+
+    fireEvent.click(back);
+    expect(screen.getByTestId(IMAGE_VIEWER_TEST_ID)).toBeTruthy();
+  });
+
+  it("keeps a text file with a binary image extension in the source viewer", () => {
+    render(
+      <TooltipProvider>
+        <MobileFileViewerPanel
+          file={{
+            path: "assets/fake.png",
+            name: "fake.png",
+            content: "not an image",
+            originalContent: "not an image",
+            originalHash: "hash",
+            isDirty: false,
+          }}
+          sessionId="session-1"
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByTestId(FILE_CONTENT_TEST_ID)).toBeTruthy();
+    expect(screen.queryByTestId(IMAGE_VIEWER_TEST_ID)).toBeNull();
+    expect(screen.queryByTestId(SOURCE_ACTION_TEST_ID)).toBeNull();
   });
 });
 

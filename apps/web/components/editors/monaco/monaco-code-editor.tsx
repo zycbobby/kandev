@@ -19,6 +19,7 @@ import { useMonacoCursorNavigation } from "./use-monaco-cursor-navigation";
 import { initMonacoThemes } from "./monaco-init";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewKind } from "@/lib/utils/file-types";
+import type { PreviewAction } from "@/components/editors/preview-action";
 
 initMonacoThemes();
 
@@ -38,6 +39,7 @@ type MonacoCodeEditorProps = {
   onTogglePreview?: () => void;
   onPreviewHtml?: () => void;
   isPublishingHtmlPreview?: boolean;
+  sourcePreviewAction?: PreviewAction;
   onChange: (newContent: string) => void;
   onSave: () => void;
   onReloadFromAgent?: () => void;
@@ -284,6 +286,7 @@ function MonacoEditorView({
         onTogglePreview={props.onTogglePreview}
         onPreviewHtml={props.onPreviewHtml}
         isPublishingHtmlPreview={props.isPublishingHtmlPreview}
+        sourcePreviewAction={props.sourcePreviewAction}
       />
       <div className="flex-1 overflow-hidden relative" ref={editorAreaRef}>
         <Editor

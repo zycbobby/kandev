@@ -12,6 +12,7 @@ import type { ApiClient } from "../../helpers/api-client";
 import type { BackendContext } from "../../fixtures/backend";
 import { GitHelper, makeGitEnv, createStandardProfile } from "../../helpers/git-helper";
 import { selectMarkdownPreviewText } from "../../helpers/markdown-preview";
+import { assertNoDocumentHorizontalOverflow } from "../../helpers/layout-assertions";
 import { SessionPage } from "../../pages/session-page";
 
 function createLongFileContent(lines = 500): string {
@@ -646,5 +647,99 @@ test.describe("Mobile file viewer panel", () => {
     await expect(cmScroller).toBeVisible();
     // No pending entry → no scroll-to-line dispatch → scroller stays at the top.
     expect(await cmScroller.evaluate((element) => element.scrollTop)).toBe(0);
+  });
+});
+
+test.describe("Mobile SVG preview", () => {
+  // Wider than the Pixel 5 viewport so containment, not just presence, is tested.
+  const WIDE_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400">' +
+    '<rect width="1200" height="400" fill="#38bdf8"/></svg>';
+
+  async function openSvgViewer(
+    testPage: Page,
+    apiClient: ApiClient,
+    seedData: SeedData,
+    backend: BackendContext,
+    taskTitle: string,
+  ) {
+    const { filePath } = await setupMobileFileViewerTest({
+      testPage,
+      apiClient,
+      seedData,
+      backend,
+      taskTitle,
+      options: { extension: "svg", content: WIDE_SVG },
+    });
+
+    await testPage.getByRole("button", { name: "Files" }).tap();
+    const fileNode = testPage.locator(`[data-testid="file-tree-node"][data-path="${filePath}"]`);
+    await expect(fileNode).toBeVisible({ timeout: 15_000 });
+    await fileNode.tap();
+
+    const viewer = testPage.getByTestId("mobile-file-viewer-panel");
+    await expect(viewer).toBeVisible({ timeout: 5_000 });
+    return viewer;
+  }
+
+  test("renders an SVG image without horizontal overflow and offers Show code", async ({
+    testPage,
+    apiClient,
+    seedData,
+    backend,
+  }) => {
+    test.setTimeout(90_000);
+
+    const viewer = await openSvgViewer(
+      testPage,
+      apiClient,
+      seedData,
+      backend,
+      "Mobile SVG Preview",
+    );
+
+    const image = viewer.getByTestId("image-viewer");
+    await expect(image).toBeVisible({ timeout: 10_000 });
+    await expect
+      .poll(async () => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
+      .toBeGreaterThan(0);
+
+    await assertNoDocumentHorizontalOverflow(testPage, "mobile svg preview");
+
+    const showCode = viewer.getByTestId("show-source-toggle");
+    await expect(showCode).toBeVisible();
+    const box = await showCode.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    expect(box?.width).toBeGreaterThanOrEqual(44);
+  });
+
+  test("switches an SVG to its source and back to the image", async ({
+    testPage,
+    apiClient,
+    seedData,
+    backend,
+  }) => {
+    test.setTimeout(90_000);
+
+    const viewer = await openSvgViewer(
+      testPage,
+      apiClient,
+      seedData,
+      backend,
+      "Mobile SVG Source Toggle",
+    );
+
+    await viewer.getByTestId("show-source-toggle").tap();
+    await expect(viewer.locator(".cm-scroller").first()).toBeVisible({ timeout: 10_000 });
+    await expect(viewer.getByTestId("image-viewer")).toHaveCount(0);
+
+    const backToImage = viewer.getByTestId("svg-preview-toggle");
+    await expect(backToImage).toBeVisible();
+    const box = await backToImage.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    expect(box?.width).toBeGreaterThanOrEqual(44);
+
+    await backToImage.tap();
+    await expect(viewer.getByTestId("image-viewer")).toBeVisible({ timeout: 10_000 });
   });
 });

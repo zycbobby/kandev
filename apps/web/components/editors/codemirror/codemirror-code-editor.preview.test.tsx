@@ -55,4 +55,51 @@ describe("CodeMirrorCodeEditor preview action", () => {
     screen.getByRole("button", { name: "Preview HTML" }).click();
     expect(onPreviewHtml).toHaveBeenCalledOnce();
   });
+
+  it("labels and invokes Markdown preview", () => {
+    const onTogglePreview = vi.fn();
+    render(
+      <TooltipProvider>
+        <CodeMirrorCodeEditor
+          path="docs/README.md"
+          content="# README"
+          originalContent=""
+          isDirty={false}
+          isSaving={false}
+          previewKind="markdown"
+          onTogglePreview={onTogglePreview}
+          onChange={vi.fn()}
+          onSave={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    screen.getByTestId("markdown-preview-toggle").click();
+    expect(onTogglePreview).toHaveBeenCalledOnce();
+  });
+
+  it("renders a host-supplied source action despite previewKind none", () => {
+    const onShowImage = vi.fn();
+    render(
+      <TooltipProvider>
+        <CodeMirrorCodeEditor
+          path="assets/logo.svg"
+          content="<svg/>"
+          originalContent=""
+          isDirty={false}
+          isSaving={false}
+          sourcePreviewAction={{
+            label: "Preview SVG",
+            testId: "svg-preview-toggle",
+            onClick: onShowImage,
+          }}
+          onChange={vi.fn()}
+          onSave={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    screen.getByTestId("svg-preview-toggle").click();
+    expect(onShowImage).toHaveBeenCalledOnce();
+  });
 });

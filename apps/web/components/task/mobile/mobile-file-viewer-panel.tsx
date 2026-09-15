@@ -10,7 +10,12 @@ import { MarkdownPreviewContent } from "../markdown-preview-content";
 import { FileImageViewer } from "../file-image-viewer";
 import { FileBinaryViewer } from "../file-binary-viewer";
 import { FileViewerDownloadButton } from "../file-viewer-header";
-import { getFileCategory, getFilePreviewKind, type FilePreviewKind } from "@/lib/utils/file-types";
+import {
+  getFilePreviewKind,
+  resolveFileViewerKind,
+  type FilePreviewKind,
+  type FileViewerKind,
+} from "@/lib/utils/file-types";
 import { triggerFileDownload } from "@/lib/utils/file-download";
 import { useAppStore } from "@/components/state-provider";
 import type { OpenFileTab } from "@/lib/types/backend";
@@ -23,6 +28,8 @@ import {
   ExternalVcsFileLink,
   useExternalVcsFileStatus,
 } from "@/components/editors/external-vcs-file-link";
+import { textImagePreviewAction, type PreviewAction } from "@/components/editors/preview-action";
+import { useTextImageSourceToggle } from "@/hooks/use-text-image-source-toggle";
 import { useTranslation } from "react-i18next";
 
 type MobileFileViewerPanelProps = {
@@ -32,9 +39,8 @@ type MobileFileViewerPanelProps = {
   initialRenderedPreview?: boolean;
 };
 
-function resolveViewerKind(file: OpenFileTab): "image" | "binary" | "text" {
-  if (!file.isBinary) return "text";
-  return getFileCategory(file.path) === "image" ? "image" : "binary";
+function resolveViewerKind(file: OpenFileTab): FileViewerKind {
+  return resolveFileViewerKind(file.path, !!file.isBinary);
 }
 
 function MobileViewerBody({
@@ -49,9 +55,11 @@ function MobileViewerBody({
   onTogglePreview,
   onRetryHtmlPreview,
   htmlPreview,
+  showSource,
+  onShowSource,
 }: {
   file: OpenFileTab;
-  viewerKind: "image" | "binary" | "text";
+  viewerKind: FileViewerKind;
   previewKind: FilePreviewKind;
   renderedPreview: boolean;
   worktreePath?: string;
@@ -63,11 +71,19 @@ function MobileViewerBody({
   htmlPreview: Pick<HtmlPreviewPublishState, "status" | "url" | "error"> & {
     isPublishing: boolean;
   };
+  showSource: boolean;
+  onShowSource?: () => void;
 }) {
   let viewerContent: ReactNode;
-  if (viewerKind === "image") {
+  if (viewerKind === "image" && !showSource) {
     viewerContent = (
-      <FileImageViewer path={file.path} content={file.content} worktreePath={worktreePath} />
+      <FileImageViewer
+        path={file.path}
+        content={file.content}
+        isBinary={!!file.isBinary}
+        worktreePath={worktreePath}
+        onShowSource={onShowSource}
+      />
     );
   } else if (viewerKind === "binary") {
     viewerContent = <FileBinaryViewer path={file.path} worktreePath={worktreePath} />;
@@ -127,10 +143,11 @@ type MobileFileViewerHeaderProps = {
   activeTaskId: string | null;
   repositoryId?: string;
   fileStatus: ReturnType<typeof useExternalVcsFileStatus>;
-  viewerKind: "image" | "binary" | "text";
+  viewerKind: FileViewerKind;
   previewKind: FilePreviewKind;
   renderedPreview: boolean;
   htmlPreview: { isPublishing: boolean };
+  sourcePreviewAction?: PreviewAction;
   onDownload?: () => void;
   onPreviewHtml: () => void;
   onPreviewMarkdown: () => void;
@@ -147,6 +164,7 @@ function MobileFileViewerHeader({
   previewKind,
   renderedPreview,
   htmlPreview,
+  sourcePreviewAction,
   onDownload,
   onPreviewHtml,
   onPreviewMarkdown,
@@ -174,6 +192,18 @@ function MobileFileViewerHeader({
             size="touch"
           />
           <FileViewerDownloadButton onDownload={onDownload} />
+          {sourcePreviewAction && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-11 w-11 cursor-pointer p-0"
+              onClick={sourcePreviewAction.onClick}
+              data-testid={sourcePreviewAction.testId}
+              aria-label={sourcePreviewAction.label}
+            >
+              <IconEye className="h-4 w-4" />
+            </Button>
+          )}
           {canPreview && (
             <Button
               variant="ghost"
@@ -211,6 +241,7 @@ export function MobileFileViewerPanel({
     sessionId ? (state.taskSessions.items[sessionId] ?? null) : null,
   );
   const activeTaskId = useAppStore((state) => state.tasks.activeTaskId);
+  const { t } = useTranslation();
   const worktreePath = getSessionWorkspacePath(activeSession);
   const repositoryId = activeSession?.repository_id ?? undefined;
   const fileStatus = useExternalVcsFileStatus(file.path, sessionId, file.repo);
@@ -249,6 +280,10 @@ export function MobileFileViewerPanel({
     void htmlPreview.publish({ path: file.path, repo: file.repo, content: file.content });
   }, [file.content, file.path, file.repo, htmlPreview.publish]);
 
+  const sourceToggleIdentity = `${sessionId ?? ""} ${file.repo ?? ""} ${file.path}`;
+  const sourceToggle = useTextImageSourceToggle(sourceToggleIdentity, !!file.isBinary, file.path);
+  const showSource = viewerKind === "image" && sourceToggle.showSource;
+
   return (
     <PanelRoot data-testid="mobile-file-viewer-panel">
       <MobileFileViewerHeader
@@ -261,6 +296,9 @@ export function MobileFileViewerPanel({
         previewKind={previewKind}
         renderedPreview={renderedPreview}
         htmlPreview={htmlPreview}
+        sourcePreviewAction={
+          showSource ? textImagePreviewAction(sourceToggle.showImage, t) : undefined
+        }
         onDownload={onDownload}
         onPreviewHtml={publishCurrentHtmlPreview}
         onPreviewMarkdown={() => setRenderedPreview(true)}
@@ -276,6 +314,8 @@ export function MobileFileViewerPanel({
           sessionId={sessionId}
           taskId={activeTaskId}
           repositoryId={repositoryId}
+          showSource={showSource}
+          onShowSource={sourceToggle.enabled ? sourceToggle.showSourceCode : undefined}
           onTogglePreview={() => setRenderedPreview((current) => !current)}
           onRetryHtmlPreview={publishCurrentHtmlPreview}
           htmlPreview={htmlPreview}

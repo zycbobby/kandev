@@ -5,6 +5,8 @@ import type { OpenFileTab } from "@/lib/types/backend";
 import { FileTabContent } from "./file-tab-content";
 
 const FILE_EDITOR_CONTENT_TEST_ID = "file-editor-content";
+const IMAGE_VIEWER_TEST_ID = "file-image-viewer";
+const SOURCE_ACTION_TEST_ID = "svg-preview-toggle";
 
 vi.mock("./file-editor-content", () => ({
   FileEditorContent: ({
@@ -12,21 +14,29 @@ vi.mock("./file-editor-content", () => ({
     renderedPreview,
     worktreePath,
     onTogglePreview,
+    sourcePreviewAction,
   }: {
     previewKind?: string;
     renderedPreview?: boolean;
     worktreePath?: string;
     onTogglePreview?: () => void;
+    sourcePreviewAction?: { testId: string; onClick: () => void };
   }) => (
     <div
       data-testid="file-editor-content"
       data-preview-kind={previewKind}
       data-rendered-preview={String(renderedPreview)}
       data-worktree-path={worktreePath}
+      data-source-action-testid={sourcePreviewAction?.testId}
     >
       <button type="button" onClick={onTogglePreview}>
         Toggle preview
       </button>
+      {sourcePreviewAction && (
+        <button type="button" onClick={sourcePreviewAction.onClick}>
+          {sourcePreviewAction.testId}
+        </button>
+      )}
     </div>
   ),
 }));
@@ -39,7 +49,21 @@ vi.mock("./file-viewer-header", () => ({
   FileViewerExternalLink: () => null,
 }));
 
-vi.mock("./file-image-viewer", () => ({ FileImageViewer: () => null }));
+vi.mock("./file-image-viewer", () => ({
+  FileImageViewer: ({
+    isBinary,
+    onShowSource,
+  }: {
+    isBinary?: boolean;
+    onShowSource?: () => void;
+  }) => (
+    <div data-testid="file-image-viewer" data-is-binary={String(isBinary)}>
+      <button type="button" onClick={onShowSource}>
+        Show code
+      </button>
+    </div>
+  ),
+}));
 vi.mock("./file-binary-viewer", () => ({ FileBinaryViewer: () => null }));
 
 const file: OpenFileTab = {
@@ -129,5 +153,70 @@ describe("FileTabContent HTML preview", () => {
     expect(screen.getByTestId(FILE_EDITOR_CONTENT_TEST_ID).getAttribute("data-preview-kind")).toBe(
       "html",
     );
+  });
+});
+
+const svgTab: OpenFileTab = {
+  path: "assets/logo.svg",
+  name: "logo.svg",
+  content: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+  originalContent: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+  originalHash: "hash",
+  isDirty: false,
+};
+
+function renderSvgTab() {
+  return render(
+    <FileTabContent
+      tab={svgTab}
+      activeSession={null}
+      activeSessionId="session-1"
+      taskId="task-1"
+      isSaving={false}
+      onFileChange={vi.fn()}
+      onFileSave={vi.fn()}
+      onFileDelete={vi.fn()}
+    />,
+  );
+}
+
+describe("FileTabContent SVG source toggle", () => {
+  it("renders the image viewer by default, without a source action on the editor", () => {
+    renderSvgTab();
+
+    expect(screen.getByTestId(IMAGE_VIEWER_TEST_ID)).toBeTruthy();
+    expect(screen.queryByTestId(FILE_EDITOR_CONTENT_TEST_ID)).toBeNull();
+  });
+
+  it("switches to the source editor and offers a way back to the image", () => {
+    renderSvgTab();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show code" }));
+
+    const editor = screen.getByTestId(FILE_EDITOR_CONTENT_TEST_ID);
+    expect(editor.getAttribute("data-preview-kind")).toBe("none");
+    expect(editor.getAttribute("data-source-action-testid")).toBe(SOURCE_ACTION_TEST_ID);
+    expect(screen.queryByTestId(IMAGE_VIEWER_TEST_ID)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: SOURCE_ACTION_TEST_ID }));
+    expect(screen.getByTestId(IMAGE_VIEWER_TEST_ID)).toBeTruthy();
+  });
+
+  it("keeps a text file whose extension is a binary image in the editor", () => {
+    render(
+      <FileTabContent
+        tab={{ ...file, path: "assets/fake.png", name: "fake.png", content: "not an image" }}
+        activeSession={null}
+        activeSessionId="session-1"
+        taskId="task-1"
+        isSaving={false}
+        onFileChange={vi.fn()}
+        onFileSave={vi.fn()}
+        onFileDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId(FILE_EDITOR_CONTENT_TEST_ID)).toBeTruthy();
+    expect(screen.queryByTestId(IMAGE_VIEWER_TEST_ID)).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import { IconChevronDown, IconChevronRight, IconExternalLink, IconFile } from "@
 import { Button } from "@kandev/ui/button";
 import { useTranslation } from "react-i18next";
 import { GridSpinner } from "@/components/grid-spinner";
-import { getFileCategory, getImageMimeType } from "@/lib/utils/file-types";
+import { buildImageSrc, resolveFileViewerKind } from "@/lib/utils/file-types";
 import {
   useWorkspaceFilePreview,
   type WorkspaceFilePreviewState,
@@ -35,23 +35,23 @@ function FilePreviewContent({
       <p className="py-4 text-xs text-muted-foreground">{t("task:richOutputPreviewFailed")}</p>
     );
   }
-  if (state.response.is_binary) {
-    if (getFileCategory(block.path) !== "image") {
-      return (
-        <p className="py-4 text-xs text-muted-foreground">
-          {t("task:richOutputBinaryPreviewUnavailable")}
-        </p>
-      );
-    }
+  if (resolveFileViewerKind(block.path, state.response.is_binary) === "image") {
     return (
       <div className="flex justify-center py-2">
         <img
-          src={`data:${getImageMimeType(block.path)};base64,${state.response.content}`}
+          src={buildImageSrc(block.path, state.response.content, state.response.is_binary)}
           alt={block.title || block.path}
           className="max-h-64 max-w-full rounded-md object-contain ring-1 ring-black/10 dark:ring-white/10"
           draggable={false}
         />
       </div>
+    );
+  }
+  if (state.response.is_binary) {
+    return (
+      <p className="py-4 text-xs text-muted-foreground">
+        {t("task:richOutputBinaryPreviewUnavailable")}
+      </p>
     );
   }
   const clipped = state.response.content.slice(0, TEXT_PREVIEW_CHARS);
