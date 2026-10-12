@@ -23,6 +23,9 @@ vendor/
 __pycache__/
 *.py[cod]
 
+# Local interpreter for repository scripts. Create with `uv venv --python 3.12`.
+.venv/
+
 # IDE and editor files
 .idea/
 *.swp
