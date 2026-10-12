@@ -26,7 +26,7 @@ apps/
 - **E2E**: Playwright (`cd apps/web && pnpm e2e:run` or the guarded `pnpm e2e:raw`). Local runners enforce one worker per shard and a memory-aware shard budget; do not pass all-worker overrides or overlap full suites. The `containers` project (gated on `KANDEV_E2E_CONTAINERS=1`, formerly `docker`) covers Docker, SSH, and Kind-backed Kubernetes executor scenarios — anything that needs a real Docker daemon on the host lives there. See `apps/web/e2e/README.md`.
 - **GitHub repo**: `https://github.com/kdlbs/kandev`
 - **Container image**: `ghcr.io/kdlbs/kandev` (GitHub Container Registry)
-- **Raw command output**: RTK display helpers are not byte-preserving; for output consumed by a parser, upload, patch, `xargs`, or byte comparison, use `rtk proxy` or `rtk bash -lc` and validate the raw result before consuming it. Repository scripts under `scripts/` and `.github/scripts/` are repo-root-relative; run them from the root or pass an explicit path. When `functions.exec` starts parallel long-running commands, retain every returned `session_id` and poll each handle to completion; do not discard a handle and infer status from a duplicate run.
+- **Raw command output**: RTK display helpers are not byte-preserving; for output consumed by a parser, upload, patch, `xargs`, or byte comparison, use `rtk proxy` or `rtk bash -lc` and validate the raw result before consuming it. Repository scripts under `scripts/` and `.github/scripts/` run on Python 3.12 through uv (`.python-version`); invoke them with `uv run --no-project --python 3.12 python <script>` from the repo root, or pass an explicit path. Their shebangs do the same. Product images and one-off `python3 -c` calls keep the image or host interpreter. When `functions.exec` starts parallel long-running commands, retain every returned `session_id` and poll each handle to completion; do not discard a handle and infer status from a duplicate run.
 
 ### Worktrees and commit hooks
 
@@ -157,9 +157,9 @@ history and remains immutable.
   relevant file in `docs/specs/guide/`. Choose the owner from the durable
   contract, not the affected code layer. Keep one vertical requirement/design
   pair and include its UI outcomes there. Find current documents with
-  `python3 scripts/list-docs.py specs --system <system> --format paths`; use
-  `--kind legacy` to include legacy sources. Run `python3 scripts/list-docs.py validate` and `python3 scripts/lint-spec-files.py --all` after specification changes.
-- **Decisions:** Architecture decisions are recorded in `docs/decisions/`. Use `python3 scripts/list-docs.py decisions --format markdown` to find relevant ADRs. The `docs/decisions/INDEX.md` page contains command examples. When making significant architectural choices, create a new ADR via `/record decision`.
+  `uv run --no-project --python 3.12 python scripts/list-docs.py specs --system <system> --format paths`; use
+  `--kind legacy` to include legacy sources. Run `uv run --no-project --python 3.12 python scripts/list-docs.py validate` and `uv run --no-project --python 3.12 python scripts/lint-spec-files.py --all` after specification changes.
+- **Decisions:** Architecture decisions are recorded in `docs/decisions/`. Use `uv run --no-project --python 3.12 python scripts/list-docs.py decisions --format markdown` to find relevant ADRs. The `docs/decisions/INDEX.md` page contains command examples. When making significant architectural choices, create a new ADR via `/record decision`.
 - **Plans:** Implementation plans are generated from requirements and system designs through `/plan`. `docs/plans/<initiative>/plan.md` is a work-package manifest. Its sibling `task-<NN>-<short-slug>.md` files are work orders.
 
 ### Plan Implementation

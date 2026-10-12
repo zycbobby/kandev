@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Seed a Kandev instance with a small team so workspace visibility and
 membership can be clicked through.
 

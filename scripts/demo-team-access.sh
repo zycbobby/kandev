@@ -71,7 +71,7 @@ start_backend() {
 
 seed() {
   log "seeding the team"
-  python3 "${REPO_ROOT}/scripts/demo_team_access_seed.py" "$BASE"
+  uv run --no-project --python 3.12 python "${REPO_ROOT}/scripts/demo_team_access_seed.py" "$BASE"
 }
 
 case "${1:-up}" in

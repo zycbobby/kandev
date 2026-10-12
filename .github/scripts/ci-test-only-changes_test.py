@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Conservative E2E exemption tests using Git's raw NUL diff format."""
 import importlib.util
 import contextlib

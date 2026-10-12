@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Enforce reviewed architecture budgets and compatibility expiry metadata."""
 
 from architecture_lint.cli import main

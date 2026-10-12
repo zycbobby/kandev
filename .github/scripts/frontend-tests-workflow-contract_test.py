@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Contract tests for the frontend unit-test workflow's NODE_ENV guard.
 
 React exports `act()` only from its development build, which it selects with

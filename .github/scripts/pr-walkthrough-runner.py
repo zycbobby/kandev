@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Supervise PR walkthrough generation and verify completed output."""
 
 from dataclasses import dataclass

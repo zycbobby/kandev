@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Contract tests for the stale merge-approval revocation workflow."""
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Read-only CI cost report. Saved evidence: --run-json RUN --jobs-json JOBS.
 
 Or collect one attempt: --run-id ID --attempt N [--repo kdlbs/kandev].

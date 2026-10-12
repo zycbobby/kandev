@@ -13,6 +13,9 @@ EMBEDDED_WEB_DIR := $(BACKEND_DIR)/internal/webapp/embedded/generated
 PNPM := pnpm
 GOFLAGS ?= -v
 MAKE := make
+# Repository scripts declare Python 3.12 in .python-version. --python keeps
+# that interpreter when the shell is outside the repo or conda is first on PATH.
+REPO_PYTHON := uv run --no-project --python 3.12 python
 
 # Cross-platform commands
 ifeq ($(OS),Windows_NT)
@@ -423,7 +426,7 @@ deploy:
 .PHONY: sync-workflow
 sync-workflow:
 	$(call phase,Syncing workflows from runtime)
-	@python3 scripts/sync-workflow.py "$(URL)" "$(CURDIR)/workflows"
+	@$(REPO_PYTHON) scripts/sync-workflow.py "$(URL)" "$(CURDIR)/workflows"
 	$(call success,Workflows synced to $(CURDIR)/workflows)
 
 .PHONY: service-uninstall service-start service-stop service-restart service-status service-logs service-logs-follow service-config
@@ -602,9 +605,9 @@ test-cli:
 .PHONY: test-scripts
 test-scripts:
 	@printf "$(CYAN)Running script tests...$(RESET)\n"
-	@python3 .github/scripts/lint-action-pinning_test.py
-	@python3 .github/scripts/notify-release-contributors_test.py
-	@python3 .github/scripts/notify-release-contributors-workflow-contract_test.py
+	@$(REPO_PYTHON) .github/scripts/lint-action-pinning_test.py
+	@$(REPO_PYTHON) .github/scripts/notify-release-contributors_test.py
+	@$(REPO_PYTHON) .github/scripts/notify-release-contributors-workflow-contract_test.py
 	@node --test .github/scripts/pr-docs-git.test.cjs .github/scripts/pr-docs.test.cjs
 	@bash scripts/pr-state.test.sh
 	@bash scripts/pr-await.test.sh
@@ -617,17 +620,17 @@ test-scripts:
 	@bash scripts/kandev-kill.test.sh
 	@bash scripts/sync-workflow.test.sh
 	@bash scripts/opencode-code-review.test.sh
-	@python3 scripts/opencode-code-review.test.py
-	@python3 scripts/lint-harness-files.test.py
-	@python3 scripts/lint-spec-files.test.py
-	@python3 scripts/lint-architecture.test.py
-	@python3 scripts/playwright-blob-audit.test.py
+	@$(REPO_PYTHON) scripts/opencode-code-review.test.py
+	@$(REPO_PYTHON) scripts/lint-harness-files.test.py
+	@$(REPO_PYTHON) scripts/lint-spec-files.test.py
+	@$(REPO_PYTHON) scripts/lint-architecture.test.py
+	@$(REPO_PYTHON) scripts/playwright-blob-audit.test.py
 	@bash scripts/release-desktop.test.sh
 	@bash scripts/release/runtime-bundle.test.sh
 	@bash scripts/release/retry-ghcr-command.test.sh
 	@bash scripts/release/signpath-signing-ready.test.sh
 	@node --test apps/desktop/e2e/desktop-launch-smoke.test.mjs
-	@python3 .github/scripts/release-workflow-contract_test.py
+	@$(REPO_PYTHON) .github/scripts/release-workflow-contract_test.py
 	@node --test scripts/release/nightly-version.test.mjs scripts/release/nightly-release.test.mjs scripts/release/npm-view-version.test.mjs scripts/release/publish-npm.test.mjs scripts/release/update-scoop-bucket.test.mjs
 	@node --test scripts/validate-public-docs.test.mjs scripts/generic-plugin-host-boundary.test.mjs
 
@@ -692,17 +695,17 @@ lint-web:
 .PHONY: lint-harness
 lint-harness:
 	@printf "$(CYAN)Linting harness files...$(RESET)\n"
-	@python3 .github/scripts/lint-harness-files.py --all
+	@$(REPO_PYTHON) .github/scripts/lint-harness-files.py --all
 
 .PHONY: lint-specs
 lint-specs:
 	@printf "$(CYAN)Linting specification files...$(RESET)\n"
-	@python3 scripts/lint-spec-files.py --all
+	@$(REPO_PYTHON) scripts/lint-spec-files.py --all
 
 .PHONY: lint-architecture
 lint-architecture:
 	@printf "$(CYAN)Linting architecture...$(RESET)\n"
-	@python3 scripts/lint-architecture.py --all
+	@$(REPO_PYTHON) scripts/lint-architecture.py --all
 
 .PHONY: lint-format
 lint-format:

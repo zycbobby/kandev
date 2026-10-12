@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Conservatively exempt independent Go test changes from PR application E2E.
 
 This is an additional exclusion after the existing path filter. Any uncertainty

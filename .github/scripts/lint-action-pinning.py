@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Verify every `uses:` ref in .github/workflows/ is pinned to a 40-char commit SHA.
 
 Exits 0 when all refs are pinned, 1 when any violation is found.

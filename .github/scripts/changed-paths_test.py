@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Tests for the in-job `paths:` filter used by the merge-queue gating jobs.
 
 Two halves. The first exercises the matcher directly. The second reads the

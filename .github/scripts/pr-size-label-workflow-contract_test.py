@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --python 3.12 --script
 """Contract tests for the pull request size label workflow."""
 
 from __future__ import annotations

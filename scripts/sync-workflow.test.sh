@@ -22,7 +22,7 @@ else
 fi
 
 dry_out=""
-if dry_out="$(make -C "$ROOT_DIR" --no-print-directory -n sync-workflow 2>/dev/null)" && printf '%s\n' "$dry_out" | grep -Fq 'python3 scripts/sync-workflow.py'; then
+if dry_out="$(make -C "$ROOT_DIR" --no-print-directory -n sync-workflow 2>/dev/null)" && printf '%s\n' "$dry_out" | grep -Fq 'uv run --no-project --python 3.12 python scripts/sync-workflow.py'; then
 	pass "make -n sync-workflow invokes sync-workflow.py"
 else
 	fail "make -n sync-workflow invokes sync-workflow.py"
@@ -125,7 +125,7 @@ fi
 if [ -s "$port_file" ]; then
 	stub_url="http://127.0.0.1:$(<"$port_file")"
 	printf 'stale workflow\n' >"$output_dir/stale.yml"
-	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
+	if uv run --no-project --python 3.12 python "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
 		pass "sync-workflow exports from stub"
 	else
 		fail "sync-workflow exports from stub"
@@ -144,7 +144,7 @@ if [ -s "$port_file" ]; then
 	else
 		fail "stale workflow is preserved"
 	fi
-	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
+	if uv run --no-project --python 3.12 python "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$output_dir" >/dev/null; then
 		pass "sync-workflow overwrites idempotently"
 	else
 		fail "sync-workflow overwrites idempotently"
@@ -186,7 +186,7 @@ if [ -n "$server_pid" ]; then
 fi
 if [ -n "${stub_url:-}" ]; then
 	failure_stderr="$server_dir/failure.stderr"
-	if python3 "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$server_dir/failure-output" >/dev/null 2>"$failure_stderr"; then
+	if uv run --no-project --python 3.12 python "$ROOT_DIR/scripts/sync-workflow.py" "$stub_url" "$server_dir/failure-output" >/dev/null 2>"$failure_stderr"; then
 		fail "closed backend URL fails"
 	else
 		pass "closed backend URL fails"

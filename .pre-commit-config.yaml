@@ -14,26 +14,26 @@ repos:
     hooks:
       - id: harness-lint
         name: Harness file lint
-        entry: python3 .github/scripts/lint-harness-files.py
+        entry: uv run --no-project --python 3.12 python .github/scripts/lint-harness-files.py
         language: system
         pass_filenames: true
 
       - id: docs-catalog
         name: Documentation catalog validation
-        entry: python3 scripts/list-docs.py validate
+        entry: uv run --no-project --python 3.12 python scripts/list-docs.py validate
         language: system
         files: ^docs/(decisions|specs)/.*\.md$|^scripts/(list-docs|spec_metadata|lint-spec-files)\.py$|^scripts/(list-docs|lint-spec-files)\.test\.py$
         pass_filenames: false
 
       - id: architecture-lint
         name: Architecture lint and compatibility expiry
-        entry: python3 scripts/lint-architecture.py --all
+        entry: uv run --no-project --python 3.12 python scripts/lint-architecture.py --all
         language: system
         pass_filenames: false
 
       - id: specification-lint
         name: Specification structure and size lint
-        entry: python3 scripts/lint-spec-files.py --all
+        entry: uv run --no-project --python 3.12 python scripts/lint-spec-files.py --all
         language: system
         files: ^docs/specs/.*|^scripts/lint-spec-files\.py$|^scripts/lint-spec-files\.test\.py$
         pass_filenames: false
