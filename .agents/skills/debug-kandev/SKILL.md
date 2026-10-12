@@ -1,17 +1,20 @@
 ---
 name: debug-kandev
 description: >
-  Debug the local Kandev runtime and its data. Loads the debug environment map —
-  the SQLite data directory (KANDEV_HOME_DIR/data/kandev.db, default ~/.kandev), backend logs, task workspaces,
-  and Claude Code session-transcript locations — and teaches how to trace workflow
-  step transitions, task/session state, and the auto-advance / step_complete_kandev
-  signal mechanism (ADR 0015). Use whenever the user reports unexpected Kandev
-  behavior, asks why a task or workflow step advanced (or did something unexpected),
-  wants to inspect Kandev runtime data (workflows, workflow_steps, tasks, task_sessions,
-  task_step_transitions, session_step_history, task_plans), or needs to find a past
-  session's transcript. Trigger even when the user doesn't say "Kandev" explicitly but
-  describes runtime state, workflow steps (Explore/Propose/Plan/Apply/Review/Verify/Archive),
-  or asks to "查一下数据 / 为什么提前推进 / 找那个会话 / debug 一下".
+  Debug the local Kandev runtime and its data. Resolves the live instance on the
+  current machine (Linux systemd or macOS launchd) and reads its SQLite data
+  directory (<home>/data/kandev.db, resolved per instance rather than assumed to
+  be ~/.kandev), backend logs, task workspaces, and Claude Code session-transcript
+  locations. Teaches how to trace workflow step transitions, task/session state,
+  and the auto-advance / step_complete_kandev signal mechanism (ADR 0015). Use
+  whenever the user reports unexpected Kandev behavior, asks why a task or
+  workflow step advanced (or did something unexpected), wants to inspect Kandev
+  runtime data (workflows, workflow_steps, tasks, task_sessions,
+  task_step_transitions, session_step_history, task_plans), or needs to find a
+  past session's transcript. Trigger even when the user doesn't say "Kandev"
+  explicitly but describes runtime state, workflow steps
+  (Explore/Propose/Plan/Apply/Review/Verify/Archive), or asks to "查一下数据 /
+  为什么提前推进 / 找那个会话 / debug 一下".
 ---
 
 # Debug Kandev
@@ -21,27 +24,60 @@ description: >
 agent/executor 记录全部落在这个 DB。仓库里的 `apps/backend/config/workflows/*.yml` 只是
 内置模板，用户自建的工作流（如 `dev-openspec-workflow`）只存在于 DB。
 
-> **先解析数据根目录，别硬套 `~/.kandev`。** 默认是 `~/.kandev`，但可被 `KANDEV_HOME_DIR`
-> 覆盖（systemd 服务 unit 里 `Environment=KANDEV_HOME_DIR=...`）。本机开发环境已迁到
-> `/media/zuo/AigoData/kandev-home`，此时 `~/.kandev` 是**过期备份**（其 `data/kandev.db`
-> 是旧快照，绝不能当实时数据查）。拿真实路径：
->
-> ```bash
-> KH=$(systemctl --user show kandev.service -p Environment 2>/dev/null \
->   | tr ' ' '\n' | sed -n 's/^KANDEV_HOME_DIR=//p')
-> KH=${KH:-~/.kandev}
-> echo "$KH"   # 下面所有 $KH 都指这个值
-> ```
+## 第 0 步：先确定要 debug 的是哪个实例
+
+默认目标就是**本机正在运行的那个实例**，一条命令拿到它：
+
+```bash
+make instances        # = scripts/kandev-instances --paths
+```
+
+输出每个实例的 `PID / BACKEND_PORT / WEB_PORT / AGENTCTL_PORT / HOME_DIR / REPO_PATH /
+MANAGER`，`--paths` 再给出该实例的 SQLite 与后端日志路径。之后统一用这一行里的
+`HOME_DIR` 当数据根目录（下文所有 `$KH` 都是它）：
+
+```bash
+KH=<上一步输出的 HOME_DIR>
+sqlite3 "$KH/data/kandev.db" ...          # 读查询都打这里
+tail -n 200 "$KH/logs/backend-logs.log"
+```
+
+`MANAGER` 列告诉你实例是谁起的：
+
+- `systemd` / `launchd` = 服务托管的常驻实例（挂了会被自动拉起）。改动前先确认它就是你要
+  动的那个；写操作走 API（见下文「数据修改写策略」）。
+- `-` = 前台实例（`make dev` 或 `scripts/dev-isolated` 起的），数据和进程都随便折腾。
+
+**别硬套 `~/.kandev`。** 它只是「没搬迁过的安装」的默认值：服务安装可以用
+`--home-dir` / `KANDEV_HOME_DIR` 把 home 挪到别处（Linux 写在 systemd unit 的
+`Environment=` 里，macOS 写在 plist 的环境变量里），此时 `~/.kandev/data/kandev.db` 是
+**过期快照**，查它会得到「看起来很像但全是旧的」答案。`HOME_DIR` 显示 `?` 时：`MANAGER` 为
+`-` 的是前台实例，看 `REPO_PATH`，它的 home 是 `<repo>/.kandev-dev`；服务实例按系统读下面的
+指引，从 unit / plist 里解析。
+
+各系统的启动方式、服务定义位置和生命周期命令不同，按当前 `uname -s` 只读需要的那一个：
+
+| 系统 | 指引 | 覆盖内容 |
+|---|---|---|
+| Linux | `references/linux.md` | systemd user unit、`journalctl`、`make service-*`、dev 实例 |
+| macOS | `references/macos.md` | launchd LaunchAgent、`service/install.json`、`plutil`/`launchctl`、dev 实例 |
+
+两份指引都包含同一个坑：`make service-config` 打印的是 **CLI 此刻会解析出的** home，而不是
+已安装服务真正在用的 home，搬迁过的安装上它会报错路径。
 
 ## 数据地图
 
-`$KH` = 上面解析出的数据根目录（默认 `~/.kandev`）。
+`$KH` = 第 0 步解析出的数据根目录（`make instances --paths` 输出的 `HOME_DIR`）。
 
 ```
 $KH/
 ├── data/kandev.db              # SQLite，运行时唯一真相源（下面所有查询都打这里）
-├── logs/backend-logs.log       # 后端日志，tail 看报错/路由
+├── data/kandev.db-wal          # WAL：后端正在写；只读查询不受影响
+├── logs/backend-logs.log       # 后端滚动日志（另有前两天的 UTC 日切文件）
+├── logs/service.{out,err}      # 服务托管时的 stdout/stderr（macOS 写这里；Linux 走 journal）
 ├── .kandev-backend.lock        # 后端进程锁
+├── service/install.json        # 服务安装元数据：manager/mode/home_dir/launcher/版本
+├── runtime/bin/kandev          # 服务安装用的运行时（不是 checkout 构建产物）
 ├── supervisor/                 # control.sock + launch.json（supervisor 控制）
 ├── sessions/                   # （通常为空，会话态在 DB 的 task_sessions）
 ├── tasks/<task-slug>/          # 任务工作区（git worktree/copy，含 openspec/ 等产物）
@@ -49,6 +85,8 @@ $KH/
 ├── passthrough-mcp/            # 每个会话的 passthrough MCP 配置
 └── tools/, tmp/
 ```
+
+`make dev` 起的前台实例不用这个目录，它的 home 是 `<repo>/.kandev-dev`（结构相同，用完即弃）。
 
 Claude Code 会话转录（跟上面 DB 是两套，互不重叠）：
 
@@ -59,9 +97,8 @@ Claude Code 会话转录（跟上面 DB 是两套，互不重叠）：
 ~/.claude/history.jsonl                                     # 用户 prompt 历史（display/project/sessionId/timestamp）
 ```
 
-- `project-slug` = cwd 把 `/` 换成 `-`（如 `/media/zuo/.../unimatrix-mono` →
-  `-media-zuo-AigoData-GameCode-unimatrix-mono`）。嵌套仓库（`unimatrix-mono/doc/unimatrix-doc`）
-  的会话也归到 `unimatrix-mono` 这个 slug 下。
+- `project-slug` = cwd 把 `/` 换成 `-`（如 `/Users/me/GameCode/kandev` →
+  `-Users-me-GameCode-kandev`）。嵌套仓库（`mono/doc/mono-doc`）的会话也归到 `mono` 这个 slug 下。
 - 用会话标题找会话：`grep -rho '"aiTitle":"[^"]*"' ~/.claude/projects/`。
 - Codingspace 远端会话的转录**不在本地** `~/.claude`，只能走 codingspace 平台/MCP 拿。
 
@@ -140,10 +177,12 @@ grep -o '"aiTitle":"[^"]*"' ~/.claude/projects/<slug>/<session-id>.jsonl | head 
 （TTL 5s 只是兜底）并重评估队列 admission。直接 `UPDATE` SQLite 的结果是「DB 改了、
 运行时没变」——UI 不刷新、引擎用旧 step spec、队列不重排，制造新的疑难杂症。
 
-先解析端口，别硬套 38429：
+先解析端口，别硬套 38429。端口从**你要操作的那个实例**上取，不要凭记忆：
 
 ```bash
-PORT=$(./scripts/kandev-instances | awk 'NR==2{print $2}')  # 多实例时按 HOME_DIR / REPO_PATH 列选行
+# 本机实例表；--raw 是 tab 分隔，第 2 列就是 BACKEND_PORT
+scripts/kandev-instances --raw | awk -F'\t' '{print $1, $2, $5}'
+PORT=<上一步里那一行的 BACKEND_PORT>
 PORT=${PORT:-38429}                                         # server.port 默认值
 curl -s "http://127.0.0.1:$PORT/health"                     # 可达性自检（公共端点）
 ```
@@ -237,6 +276,8 @@ SQLite——后端经 API 会原子更新 + 发事件 + 失效 step 缓存，直
 
 ## 参考
 
+- `references/linux.md` / `references/macos.md` —— 当前系统的启动方式、服务定义位置（systemd
+  unit / launchd plist）、生命周期命令、dev 实例，以及各自的坑。第 0 步之后按需读一个。
 - `references/db-schema.md` —— 关键表的字段速查（workflows / workflow_steps / tasks /
   task_sessions / task_step_transitions / session_step_history / task_plans / agents / executors）。
 - ADR 0015 全文：`docs/decisions/0015-explicit-completion-signal-for-auto-advance.md`（仓库内）。

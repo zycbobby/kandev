@@ -5,12 +5,20 @@ Use this for live-instance state/logs or when a UI/browser repro needs an isolat
 ## Identify Instances
 
 ```bash
-scripts/kandev-instances
+scripts/kandev-instances                 # make instances runs this with --paths
+scripts/kandev-instances --paths         # adds each instance's db + log paths
 ```
 
-Columns: `PID BACKEND_PORT WEB_PORT AGENTCTL_PORT HOME_DIR REPO_PATH`.
+Columns: `PID BACKEND_PORT WEB_PORT AGENTCTL_PORT HOME_DIR REPO_PATH MANAGER`.
 
-The user's live instance usually has `HOME_DIR=/home/<user>` or backend port `38429`. Never mutate it. Creating and downloading an owned diagnostic bundle is read-only.
+`MANAGER` separates the two kinds of running backend: `systemd` / `launchd` marks the
+service-managed live instance (the one to never mutate), `-` marks a foreground instance you
+started (`make dev`, `scripts/dev-isolated`). Ports are not identity: several instances can
+share a number on different hosts. Never mutate the service-managed one; creating and
+downloading an owned diagnostic bundle is read-only. `HOME_DIR` is where that instance keeps
+its data (its `data/kandev.db` and `logs/backend-logs.log`) and is not always `~/.kandev`;
+the per-OS resolution rules and the relocated-install trap live in the `debug-kandev` skill's
+`references/linux.md` and `references/macos.md`.
 
 ## Launch Isolated Instance
 

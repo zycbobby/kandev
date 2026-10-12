@@ -9,19 +9,35 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
 
-# --- resolve live home dir (never trust ~/.kandev blindly: it may be a stale backup) ---
-KH="${KANDEV_HOME_DIR:-}"
-if [ -z "$KH" ]; then
-  KH="$(systemctl --user show kandev.service -p Environment 2>/dev/null \
-    | tr ' ' '\n' | sed -n 's/^KANDEV_HOME_DIR=//p')"
-fi
-KH="${KH:-$HOME/.kandev}"
+# --- resolve live home dir ---------------------------------------------------
+# Precedence: KANDEV_HOME_DIR from the environment, then the installed service
+# definition (systemd unit on Linux, launchd plist on macOS), then the running
+# instance's own environment, then the default. ~/.kandev is only that default:
+# on a relocated install it is a stale snapshot, so it is never trusted first.
+resolve_live_home_dir() {
+  local plist="$HOME/Library/LaunchAgents/com.kdlbs.kandev.plist" home=""
+  if command -v systemctl >/dev/null 2>&1; then
+    home="$(systemctl --user show kandev.service -p Environment 2>/dev/null \
+      | tr ' ' '\n' | sed -n 's/^KANDEV_HOME_DIR=//p')"
+  fi
+  if [ -z "$home" ] && [ -f "$plist" ] && command -v plutil >/dev/null 2>&1; then
+    home="$(plutil -extract EnvironmentVariables.KANDEV_HOME_DIR raw "$plist" 2>/dev/null || true)"
+  fi
+  if [ -z "$home" ]; then
+    home="$("$REPO_ROOT/scripts/kandev-instances" --raw 2>/dev/null \
+      | awk -F'\t' '$7 != "-" {print $5; exit}')"
+  fi
+  printf '%s\n' "${home:-$HOME/.kandev}"
+}
 
-# --- resolve backend port ---
-PORT="${KANDEV_SERVER_PORT:-}"
-if [ -z "$PORT" ]; then
-  PORT="$("$REPO_ROOT/scripts/kandev-instances" 2>/dev/null | awk 'NR==2{print $2}')"
-fi
+KH="${KANDEV_HOME_DIR:-$(resolve_live_home_dir)}"
+
+# --- resolve backend port ----------------------------------------------------
+# --raw is tab-separated: column 2 is BACKEND_PORT, column 7 the manager. Prefer
+# the service-managed instance; fall back to any running backend.
+INSTANCES="$("$REPO_ROOT/scripts/kandev-instances" --raw 2>/dev/null || true)"
+PORT="${KANDEV_SERVER_PORT:-$(printf '%s\n' "$INSTANCES" | awk -F'\t' '$7 != "-" {print $2; exit}')}"
+[ -z "$PORT" ] && PORT="$(printf '%s\n' "$INSTANCES" | awk -F'\t' 'NR==1{print $2}')"
 PORT="${PORT:-38429}"
 
 BASE="http://127.0.0.1:${PORT}"

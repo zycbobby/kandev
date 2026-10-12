@@ -20,28 +20,32 @@ and are never handed to a subagent.
 
 ## Environment facts (verify, don't assume)
 
-- Repo root: `/media/zuo/AigoData/GameCode/kandev`. Remote `upstream` is the canonical
-  `kdlbs/kandev`; `origin` is the user's fork. Branch is `main`.
-- The live service is a **systemd user unit**. Its data dir is whatever
-  `KANDEV_HOME_DIR` the unit sets — on this machine that is
-  `/media/zuo/AigoData/kandev-home`, and `~/.kandev` is a **stale backup, not live data**.
-  Always resolve the home dir from the unit, never from `~/.kandev` alone.
+- Repo root: the checkout you are working in (`git rev-parse --show-toplevel`). Remote
+  `upstream` is the canonical `kdlbs/kandev`; `origin` is the user's fork. Branch is `main`.
+- The live service is a **user-domain service**: a systemd user unit on Linux, a launchd
+  LaunchAgent on macOS. Its data dir is whatever `KANDEV_HOME_DIR` the unit or plist sets,
+  which is **not** necessarily `~/.kandev` — on a relocated install that path is a stale
+  snapshot. Always resolve the home dir from the service definition, never from `~/.kandev`
+  alone; the per-OS commands are in `debug-kandev`'s `references/linux.md` and
+  `references/macos.md`, and `upgrade-preflight.sh` below does it for you.
 - Backend port is resolved via `scripts/kandev-instances` (default `38429`). Do not
   hardcode the port on a multi-instance box.
 
 ## Phase 1 — record and back up
 
-Run `scripts/upgrade-preflight.sh`. It resolves the live home dir and port itself, prints the
-current running version (`/health`) and the checkout's `git describe` + tag, takes a manual
-backup through `POST /api/v1/system/backups`, waits for the new snapshot to appear, then
-deletes all but the two most recent snapshots (matching the backend's own retention).
+The preflight script (`.agents/skills/kandev-upgrade/scripts/upgrade-preflight.sh`) resolves
+the live home dir and port itself — from the systemd unit or the launchd plist, with the
+running instance as fallback. It prints the current running version (`/health`) and the
+checkout's `git describe` + tag, takes a manual backup through
+`POST /api/v1/system/backups`, waits for the new snapshot to appear, then deletes all but
+the two most recent snapshots (matching the backend's own retention).
 Report the "before" version and tag to the user; keep the backup name if they later want a
 rollback.
 
 ## Phase 2 — fetch and merge
 
 ```bash
-cd /media/zuo/AigoData/GameCode/kandev
+cd "$(git rev-parse --show-toplevel)"
 git fetch upstream
 git log --oneline main..upstream/main | head -40   # show the user what's incoming
 git merge upstream/main --no-edit
@@ -62,19 +66,19 @@ user-domain service — it briefly stops and restarts the daemon, so tell the us
 Run it from the repo root in the background and watch the log rather than blocking silently:
 
 ```bash
-cd /media/zuo/AigoData/GameCode/kandev
+cd "$(git rev-parse --show-toplevel)"
 nohup make deploy > /tmp/kandev-deploy.log 2>&1 &
 # then monitor /tmp/kandev-deploy.log until it prints "User-domain service deployed" or an error
 ```
 
 The deploy script (`scripts/deploy-user-service.sh`) publishes to the live home it resolves
-from the systemd unit and refuses `.kandev-dev` or checkout paths, so it will not clobber a
-dev instance.
+from the service definition (systemd unit, else launchd plist) and refuses `.kandev-dev` or
+checkout paths, so it will not clobber a dev instance.
 
 Self-check after the log shows success:
 
 ```bash
-systemctl --user is-active kandev.service          # expect: active
+make service-status                                 # systemctl / launchctl view, expect running
 curl -s http://127.0.0.1:<port>/health             # expect: status ok + a new version
 git describe --tags --always                        # must equal the version /health reports
 ```
