@@ -10,6 +10,7 @@ const { requestMock, toastMock } = vi.hoisted(() => ({
   requestMock: vi.fn(),
   toastMock: vi.fn(),
 }));
+const launchErrorContext = vi.hoisted(() => ({ automaticRecovery: null as unknown }));
 
 vi.mock("@/lib/ws/connection", () => ({
   getWebSocketClient: () => ({ request: requestMock }),
@@ -40,13 +41,35 @@ vi.mock("@/components/task/task-launch-branch-picker", () => ({
   ),
 }));
 
+vi.mock("@/components/task/chat/session-bootstrap-recovery-card", () => ({
+  SessionBootstrapRecoveryCard: ({
+    error,
+    automaticRecovery,
+  }: {
+    error: TaskStatusSummaryActiveError;
+    automaticRecovery?: { notice?: string | null; recoveryFailure?: { outcome: string } | null };
+  }) => (
+    <div data-testid="session-bootstrap-recovery-card">
+      {error.phase}
+      {automaticRecovery?.notice ?? ""}
+      {automaticRecovery?.recoveryFailure?.outcome ?? ""}
+    </div>
+  ),
+}));
+vi.mock("@/components/task/task-launch-error-context", () => ({
+  useTaskLaunchErrorContext: () => launchErrorContext,
+}));
+
 const TASK_ID = "task-1";
 const TASK_REPOSITORY_ID = "task-repo-1";
+const SESSION_ID = "session-1";
 const ERROR_STAMP = "launch-stamp-1";
 const WORKSPACE_ID = "workspace-1";
 const OCCURRED_AT = "2026-08-19T10:00:00Z";
 const ERROR_ENTRY_TEST_ID = "task-launch-error-entry";
 const RETRY_LAUNCH_BUTTON_TEST_ID = "task-launch-retry_launch-button";
+const RETRY_DEFAULT_BUTTON_TEST_ID = "task-launch-retry_default-button";
+const TASK_LAUNCH_RECOVER_METHOD = "task.launch.recover";
 
 const error: TaskStatusSummaryActiveError = {
   task_repository_id: TASK_REPOSITORY_ID,
@@ -62,7 +85,10 @@ beforeEach(() => {
   toastMock.mockReset();
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  launchErrorContext.automaticRecovery = null;
+});
 
 // eslint-disable-next-line max-lines-per-function -- shared recovery-entry fixtures keep these related flows together.
 describe("TaskLaunchErrorEntry", () => {
@@ -95,7 +121,7 @@ describe("TaskLaunchErrorEntry", () => {
 
   it("renders checkout details and retries the launch without branch settings", async () => {
     const checkoutError: TaskStatusSummaryActiveError = {
-      session_id: "session-1",
+      session_id: SESSION_ID,
       stamp: "checkout-stamp-1",
       occurred_at: OCCURRED_AT,
       preview: "The workspace could not be prepared for this launch.",
@@ -109,15 +135,15 @@ describe("TaskLaunchErrorEntry", () => {
     );
 
     expect(screen.getByText(checkoutError.preview)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /show details/i }));
+    fireEvent.click(screen.getByText("Show details", { exact: true }));
     expect(screen.getByText(checkoutError.details!)).toBeTruthy();
     expect(screen.getByTestId(RETRY_LAUNCH_BUTTON_TEST_ID)).toBeTruthy();
     fireEvent.click(screen.getByTestId(RETRY_LAUNCH_BUTTON_TEST_ID));
 
     await waitFor(() => expect(requestMock).toHaveBeenCalledTimes(1));
-    expect(requestMock).toHaveBeenCalledWith("task.launch.recover", {
+    expect(requestMock).toHaveBeenCalledWith(TASK_LAUNCH_RECOVER_METHOD, {
       task_id: TASK_ID,
-      session_id: "session-1",
+      session_id: SESSION_ID,
       action: "retry_launch",
       error_stamp: "checkout-stamp-1",
     });
@@ -182,7 +208,82 @@ describe("TaskLaunchErrorEntry", () => {
 
     expect(screen.getByTestId(ERROR_ENTRY_TEST_ID)).toBeTruthy();
     expect(screen.getByText(error.preview)).toBeTruthy();
-    expect(screen.queryByTestId("task-launch-retry_default-button")).toBeNull();
+    expect(screen.queryByTestId(RETRY_DEFAULT_BUTTON_TEST_ID)).toBeNull();
+  });
+
+  it("hides recovery actions for a retained session history entry", () => {
+    render(
+      <TaskLaunchErrorEntry
+        taskId={TASK_ID}
+        workspaceId={WORKSPACE_ID}
+        isActive={false}
+        error={{ ...error, recovery_actions: ["retry_default"] }}
+      />,
+    );
+
+    expect(screen.getByTestId(ERROR_ENTRY_TEST_ID)).toBeTruthy();
+    expect(screen.queryByTestId(RETRY_DEFAULT_BUTTON_TEST_ID)).toBeNull();
+  });
+
+  it("routes a session-owned bootstrap error to the recovery card", () => {
+    render(
+      <TaskChatLaunchError
+        taskId={TASK_ID}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        statusSummary={{
+          revision: 2,
+          updated_at: OCCURRED_AT,
+          active_error: {
+            ...error,
+            session_id: SESSION_ID,
+            phase: "bootstrap",
+            category: "generic_launch_failure",
+            recovery_actions: ["retry_launch"],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("session-bootstrap-recovery-card")).toBeTruthy();
+    expect(screen.queryByTestId(ERROR_ENTRY_TEST_ID)).toBeNull();
+  });
+
+  it("passes automatic recovery results into the detail recovery card", () => {
+    launchErrorContext.automaticRecovery = {
+      resumptionState: "error",
+      error: "Session recovery failed",
+      notice: null,
+      recoveryFailure: {
+        outcome: "recovery_failed",
+        resumeError: "raw resume failure",
+        restoreError: "raw restore failure",
+      },
+      resumeSession: vi.fn(),
+    };
+
+    render(
+      <TaskChatLaunchError
+        taskId={TASK_ID}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        statusSummary={{
+          revision: 3,
+          updated_at: OCCURRED_AT,
+          active_error: {
+            ...error,
+            session_id: SESSION_ID,
+            phase: "bootstrap",
+            category: "generic_launch_failure",
+            recovery_actions: ["retry_launch"],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("session-bootstrap-recovery-card").textContent).toContain(
+      "recovery_failed",
+    );
   });
 
   it("renders a task-wide launch error while a prior session is selected", () => {
@@ -225,10 +326,10 @@ describe("TaskLaunchErrorEntry", () => {
 
     expect(screen.getByTestId(ERROR_ENTRY_TEST_ID)).toBeTruthy();
     expect(screen.getByText(error.preview)).toBeTruthy();
-    fireEvent.click(screen.getByTestId("task-launch-retry_default-button"));
+    fireEvent.click(screen.getByTestId(RETRY_DEFAULT_BUTTON_TEST_ID));
 
     await waitFor(() => expect(requestMock).toHaveBeenCalledTimes(1));
-    expect(requestMock).toHaveBeenCalledWith("task.launch.recover", {
+    expect(requestMock).toHaveBeenCalledWith(TASK_LAUNCH_RECOVER_METHOD, {
       task_id: TASK_ID,
       task_repository_id: TASK_REPOSITORY_ID,
       action: "retry_default",
@@ -248,11 +349,31 @@ describe("TaskLaunchErrorEntry", () => {
 
     fireEvent.click(screen.getByTestId("mock-branch-option"));
     await waitFor(() => expect(requestMock).toHaveBeenCalledTimes(1));
-    expect(requestMock).toHaveBeenCalledWith("task.launch.recover", {
+    expect(requestMock).toHaveBeenCalledWith(TASK_LAUNCH_RECOVER_METHOD, {
       task_id: TASK_ID,
       task_repository_id: TASK_REPOSITORY_ID,
       action: "pick_base_branch",
       base_branch: "develop",
+      error_stamp: ERROR_STAMP,
+    });
+  });
+
+  it("keeps task-scoped recovery on the task source when it has a session correlation", async () => {
+    render(
+      <TaskLaunchErrorEntry
+        taskId={TASK_ID}
+        workspaceId={WORKSPACE_ID}
+        repositories={[]}
+        error={{ ...error, scope: "task", session_id: "retired-session-1" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId(RETRY_DEFAULT_BUTTON_TEST_ID));
+    await waitFor(() => expect(requestMock).toHaveBeenCalledTimes(1));
+    expect(requestMock).toHaveBeenCalledWith(TASK_LAUNCH_RECOVER_METHOD, {
+      task_id: TASK_ID,
+      task_repository_id: TASK_REPOSITORY_ID,
+      action: "retry_default",
       error_stamp: ERROR_STAMP,
     });
   });
@@ -296,7 +417,7 @@ describe("TaskLaunchErrorEntry", () => {
       </>,
     );
 
-    const buttons = screen.getAllByTestId("task-launch-retry_default-button");
+    const buttons = screen.getAllByTestId(RETRY_DEFAULT_BUTTON_TEST_ID);
     fireEvent.click(buttons[0]);
     fireEvent.click(buttons[1]);
 

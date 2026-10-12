@@ -114,29 +114,37 @@ func (r *Repository) ListTasksBlockedBy(ctx context.Context, blockerTaskID strin
 	return ids, nil
 }
 
-// ListBlockersForTasks returns a map of task ID → list of blocker IDs for a set of tasks.
-// Uses IN query over the given task IDs.
+// ListBlockersForTasks returns a map of task ID → list of blocker IDs for a set
+// of tasks, ordered by edge creation time ascending and tiebroken by blocker
+// task id ascending, so depends_on has a total, repeatable order. Input is
+// chunked at sqliteMaxHostParams so the IN clause stays legal past the
+// database's bind-parameter ceiling; every paginated flow caps at 200 task
+// ids, well under the chunk size, so chunking only engages on the unpaginated
+// preview flow.
 func (r *Repository) ListBlockersForTasks(ctx context.Context, taskIDs []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(taskIDs))
 	if len(taskIDs) == 0 {
-		return map[string][]string{}, nil
+		return result, nil
 	}
-	query, args, err := sqlx.In(
-		`SELECT task_id, blocker_task_id FROM task_blockers WHERE task_id IN (?)`, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	query = r.ro.Rebind(query)
 	type row struct {
 		TaskID        string `db:"task_id"`
 		BlockerTaskID string `db:"blocker_task_id"`
 	}
-	var rows []row
-	if err := r.ro.SelectContext(ctx, &rows, query, args...); err != nil {
-		return nil, err
-	}
-	result := make(map[string][]string, len(taskIDs))
-	for _, rw := range rows {
-		result[rw.TaskID] = append(result[rw.TaskID], rw.BlockerTaskID)
+	for _, chunk := range chunkTaskIDs(taskIDs) {
+		query, args, err := sqlx.In(
+			`SELECT task_id, blocker_task_id FROM task_blockers
+			 WHERE task_id IN (?) ORDER BY created_at, blocker_task_id`, chunk)
+		if err != nil {
+			return nil, err
+		}
+		query = r.ro.Rebind(query)
+		var rows []row
+		if err := r.ro.SelectContext(ctx, &rows, query, args...); err != nil {
+			return nil, err
+		}
+		for _, rw := range rows {
+			result[rw.TaskID] = append(result[rw.TaskID], rw.BlockerTaskID)
+		}
 	}
 	return result, nil
 }
@@ -145,28 +153,31 @@ func (r *Repository) ListBlockersForTasks(ctx context.Context, taskIDs []string)
 // blocked by it, for a set of blocker task IDs. This is the batched reverse of
 // ListBlockersForTasks and backs the "blocks" direction of the dependency
 // payload; a per-task query would add one round trip per card to a board read.
+// Chunked at sqliteMaxHostParams for the same reason as ListBlockersForTasks.
 func (r *Repository) ListDependentsForTasks(ctx context.Context, blockerTaskIDs []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(blockerTaskIDs))
 	if len(blockerTaskIDs) == 0 {
-		return map[string][]string{}, nil
+		return result, nil
 	}
-	query, args, err := sqlx.In(
-		`SELECT task_id, blocker_task_id FROM task_blockers WHERE blocker_task_id IN (?) ORDER BY created_at, task_id`,
-		blockerTaskIDs)
-	if err != nil {
-		return nil, err
-	}
-	query = r.ro.Rebind(query)
 	type row struct {
 		TaskID        string `db:"task_id"`
 		BlockerTaskID string `db:"blocker_task_id"`
 	}
-	var rows []row
-	if err := r.ro.SelectContext(ctx, &rows, query, args...); err != nil {
-		return nil, err
-	}
-	result := make(map[string][]string, len(blockerTaskIDs))
-	for _, rw := range rows {
-		result[rw.BlockerTaskID] = append(result[rw.BlockerTaskID], rw.TaskID)
+	for _, chunk := range chunkTaskIDs(blockerTaskIDs) {
+		query, args, err := sqlx.In(
+			`SELECT task_id, blocker_task_id FROM task_blockers WHERE blocker_task_id IN (?) ORDER BY created_at, task_id`,
+			chunk)
+		if err != nil {
+			return nil, err
+		}
+		query = r.ro.Rebind(query)
+		var rows []row
+		if err := r.ro.SelectContext(ctx, &rows, query, args...); err != nil {
+			return nil, err
+		}
+		for _, rw := range rows {
+			result[rw.BlockerTaskID] = append(result[rw.BlockerTaskID], rw.TaskID)
+		}
 	}
 	return result, nil
 }
@@ -282,6 +293,33 @@ func (r *Repository) ListChildStates(ctx context.Context, parentID string) ([]Ch
 	err := r.ro.SelectContext(ctx, &rows, r.ro.Rebind(`
 		SELECT id, COALESCE(state, '') AS state FROM tasks
 		WHERE parent_id = ?
+		ORDER BY id
+	`), parentID)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []ChildState{}
+	}
+	return rows, nil
+}
+
+// ListWaveMembers returns id+state for the parent's wave members, ordered
+// by id: direct children that are not archived, not ephemeral, and not
+// automation-origin. This is the predicate
+// task/repository/sqlite.ListChildCompletionRows already applies
+// (andNotAutomationOrigin) — the one predicate all four
+// task_children_completed producers can share (docs/specs/office/
+// system-design/parent-wake-wave-identity.md, "Which children count").
+// Unlike ListChildStates, this excludes ephemeral and automation-origin
+// children as well as archived ones, so its result set is a subset of
+// ListChildStates' for the same parent.
+func (r *Repository) ListWaveMembers(ctx context.Context, parentID string) ([]ChildState, error) {
+	var rows []ChildState
+	err := r.ro.SelectContext(ctx, &rows, r.ro.Rebind(`
+		SELECT id, COALESCE(state, '') AS state FROM tasks
+		WHERE parent_id = ? AND archived_at IS NULL AND is_ephemeral = 0
+		  AND COALESCE(origin, '') != 'automation_run'
 		ORDER BY id
 	`), parentID)
 	if err != nil {

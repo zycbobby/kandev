@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- session WebSocket handlers share one event registry. */
 import type { StoreApi } from "zustand";
 import { createDebugLogger } from "@/lib/debug/log";
+import { parseStrictRfc3339Timestamp } from "@/lib/utils/strict-timestamp";
 import type { AppState } from "@/lib/state/store";
 import type { QueueMeta } from "@/lib/state/slices/session/types";
 import type { WsHandlers } from "@/lib/ws/handlers/types";
@@ -15,6 +16,7 @@ import {
 import type {
   QueueStatusChangedPayload,
   TaskSessionActivityChangedPayload,
+  TaskSessionAgentctlPayload,
 } from "@/lib/types/backend";
 import { syncKanbanPrimarySessionState } from "@/lib/ws/handlers/agent-session-kanban-sync";
 import { parseContextWindowEntry } from "@/lib/state/slices/session-runtime/context-window";
@@ -22,6 +24,11 @@ import { ROUTE_SESSION_FIELDS } from "@/lib/ws/handlers/agent-session-route-fiel
 import { t } from "@/lib/i18n";
 import { maybeMarkQuickChatUnseenIdle } from "@/lib/ws/handlers/quick-chat-unseen";
 import { readLastAgentError } from "@/lib/session-last-agent-error";
+import { sessionStateConfirmsAgentctlExecutionReady } from "@/lib/session-state";
+import {
+  sanitizeWorkspaceRestorationDetails,
+  type WorkspaceRestorationAttempt,
+} from "@/lib/state/slices/session-runtime/workspace-restoration";
 import { applyForegroundActivity, applyCancellationPending } from "./session-activity";
 
 const debug = createDebugLogger("session:state");
@@ -31,11 +38,6 @@ const TERMINAL_SESSION_STATES: ReadonlySet<TaskSessionState> = new Set([
   "CANCELLED",
   "FAILED",
 ]);
-
-// States that imply agentctl is up and processing (or has fully processed) input.
-// If we observe a session in one of these, agentctl must be ready even if we
-// missed the agentctl_ready WS event (e.g. it fired before our subscription).
-const AGENT_LIVE_STATES: ReadonlySet<TaskSessionState> = new Set(["RUNNING", "WAITING_FOR_INPUT"]);
 
 export function isTerminalSessionState(state: TaskSessionState | undefined): boolean {
   return !!state && TERMINAL_SESSION_STATES.has(state);
@@ -129,9 +131,19 @@ function maybePromoteAgentctlReady(
   newState: TaskSessionState | undefined,
   timestamp: string | undefined,
 ): void {
-  if (!newState || !AGENT_LIVE_STATES.has(newState)) return;
-  const current = store.getState().sessionAgentctl?.itemsBySessionId?.[sessionId];
-  if (current?.status === "ready") return;
+  const state = store.getState();
+  const current = state.sessionAgentctl?.itemsBySessionId?.[sessionId];
+  const session = state.taskSessions?.items?.[sessionId];
+  if (
+    !sessionStateConfirmsAgentctlExecutionReady(
+      newState,
+      session?.agent_execution_id,
+      current?.agentExecutionId,
+    )
+  ) {
+    return;
+  }
+  if (current?.status === "ready" && !current.startingExecutionId) return;
   store.getState().setSessionAgentctlStatus(sessionId, {
     status: "ready",
     agentExecutionId: current?.agentExecutionId,
@@ -215,9 +227,9 @@ export function isStaleSessionStateEvent(
   payloadUpdatedAt: string | undefined,
 ): boolean {
   if (!payloadUpdatedAt || !existing?.updated_at) return false;
-  const payloadTime = Date.parse(payloadUpdatedAt);
-  const existingTime = Date.parse(existing.updated_at);
-  if (Number.isNaN(payloadTime) || Number.isNaN(existingTime)) return false;
+  const payloadTime = parseStrictRfc3339Timestamp(payloadUpdatedAt);
+  const existingTime = parseStrictRfc3339Timestamp(existing.updated_at);
+  if (payloadTime === null || existingTime === null) return false;
   // Strict less-than: equal timestamps are treated as not-stale so identical
   // events upsert idempotently rather than being silently dropped.
   return payloadTime < existingTime;
@@ -231,6 +243,7 @@ export function isStaleSessionStateEvent(
 // composer can switch affordance without a refetch; cancellation_* carry the
 // backend-owned cancellation projection.
 const CARRIED_WHEN_DEFINED = [
+  "session_recovery_blocks",
   "review_status",
   "error_message",
   "is_passthrough",
@@ -453,6 +466,7 @@ function syncEnvFromAgentctlPayload(
     ...getAgentctlWorktreeFields(payload, isSibling),
     workspace_path: payload.workspace_path ?? payload.task_workspace_path ?? payload.worktree_path,
   });
+  store.getState().reconcileWorkflowSessionFocus?.(taskId);
 }
 
 /** Builds the partial-session patch applied for an agentctl_ready event.
@@ -539,6 +553,68 @@ function handleAgentctlReady(store: StoreApi<AppState>, payload: any): void {
     store.getState().bumpSessionGitCheckoutGeneration(payload.session_id);
     store.getState().bumpSessionCommitsRefetch(payload.session_id);
   }
+}
+
+function resolveWorkspaceEventEnvironmentId(
+  state: AppState,
+  sessionId: string,
+  payloadEnvironmentId: string,
+): string | null {
+  const mappedEnvironmentId = state.environmentIdBySessionId?.[sessionId];
+  if (mappedEnvironmentId && payloadEnvironmentId && mappedEnvironmentId !== payloadEnvironmentId) {
+    return null;
+  }
+  return payloadEnvironmentId || mappedEnvironmentId || null;
+}
+
+function workspaceRestorationTarget(
+  store: StoreApi<AppState>,
+  payload: TaskSessionAgentctlPayload,
+  includeFailed = false,
+): { sessionId: string; attempt: WorkspaceRestorationAttempt } | null {
+  const sessionId = payload.session_id?.trim() ?? "";
+  if (!sessionId) return null;
+  const state = store.getState();
+  const environmentId = resolveWorkspaceEventEnvironmentId(
+    state,
+    sessionId,
+    payload.task_environment_id?.trim() ?? "",
+  );
+  if (!environmentId) return null;
+  const attempt = state.workspaceRestoration?.byEnvironmentId?.[environmentId];
+  if (
+    !attempt ||
+    (attempt.status !== "pending" && !(includeFailed && attempt.status === "error")) ||
+    attempt.sessionId !== sessionId
+  ) {
+    return null;
+  }
+  return { sessionId, attempt };
+}
+
+/** Settle a workspace-only restore after the backend proves agentctl health. */
+function settleWorkspaceRestorationFromAgentctl(
+  store: StoreApi<AppState>,
+  payload: TaskSessionAgentctlPayload,
+  status: "ready" | "error",
+): void {
+  // Readiness from the same environment also supersedes a local restore error
+  // recorded while an accepted server-side recovery was still running.
+  const target = workspaceRestorationTarget(store, payload, status === "ready");
+  if (!target) return;
+  const state = store.getState();
+
+  if (status === "ready") {
+    if (state.completeWorkspaceRestoration?.(target.attempt)) {
+      state.bumpWorkspaceFilesRefresh?.(target.sessionId);
+    }
+    return;
+  }
+
+  const detail = sanitizeWorkspaceRestorationDetails(
+    payload.error_message || t("task:failedToRestoreWorkspace"),
+  );
+  state.failWorkspaceRestoration?.(target.attempt, detail);
 }
 
 interface SessionFailureContext {
@@ -758,7 +834,7 @@ function queueAutoMergeMeta(
 }
 
 /** Writes a message.queue.status_changed broadcast into the queue slice,
- * preserving known policy values when an older publisher omits them. */
+ * preserving known policy and capacity values when an older publisher omits them. */
 // eslint-disable-next-line complexity -- one handler atomically establishes a queue snapshot.
 function handleQueueStatusChangedMessage(
   store: StoreApi<AppState>,
@@ -773,9 +849,11 @@ function handleQueueStatusChangedMessage(
   if (rejectsQueueStatus(state, payload, previousMeta)) return;
 
   const entries = payload.entries ?? [];
+  const count = typeof payload.count === "number" ? payload.count : entries.length;
+  const max = typeof payload.max === "number" ? payload.max : (previousMeta?.max ?? 0);
   const meta = {
-    count: typeof payload.count === "number" ? payload.count : entries.length,
-    max: typeof payload.max === "number" ? payload.max : 0,
+    count,
+    max,
     mergeEnabled: payload.merge_enabled ?? previousMeta?.mergeEnabled ?? true,
     autoRun: payload.auto_run ?? previousMeta?.autoRun ?? true,
     ...queueIdentityMeta(payload, previousMeta),
@@ -792,11 +870,19 @@ function handleQueueStatusChangedMessage(
   state.setQueueEntries(payload.session_id, entries, meta);
 }
 
+function clearResumeAndLaunchWarnings(store: StoreApi<AppState>, sessionId: string) {
+  const state = store.getState();
+  state.setResumeSkipped(sessionId, false);
+  state.clearLaunchWarning?.(sessionId);
+}
+
 /** Registers the task-session WebSocket handlers (state, messages, workspace sources, queue). */
+// eslint-disable-next-line max-lines-per-function -- session events remain one ordered registry.
 export function registerTaskSessionHandlers(store: StoreApi<AppState>): WsHandlers {
   return {
     "message.queue.status_changed": (message) =>
       handleQueueStatusChangedMessage(store, message.payload),
+    // eslint-disable-next-line complexity -- ordered session reconciliation keeps stale-event guards together
     "session.state_changed": (message) => {
       const payload = message.payload;
       if (!payload?.task_id) return;
@@ -839,16 +925,31 @@ export function registerTaskSessionHandlers(store: StoreApi<AppState>): WsHandle
         updatedAt: payload.updated_at,
       });
       upsertTaskSessionList(store, taskId, sessionId, payload, sessionUpdate);
+      store.getState().reconcileWorkflowSessionFocus?.(taskId);
       syncKanbanPrimarySessionState(store, taskId, sessionId, newState);
       extractContextWindow(store, sessionId, payload);
       maybePromoteAgentctlReady(store, sessionId, newState, message.timestamp);
+      if (newState === "STARTING") {
+        const agentctl = store.getState().sessionAgentctl?.itemsBySessionId?.[sessionId];
+        store
+          .getState()
+          .invalidateConfirmedConfigOptions(
+            sessionId,
+            agentctl?.startingExecutionId ??
+              (agentctl?.status === "starting" ? agentctl.agentExecutionId : undefined),
+          );
+        if (agentctl?.startingExecutionId) {
+          const { startingExecutionId: _startingExecutionId, ...status } = agentctl;
+          store.getState().setSessionAgentctlStatus(sessionId, status);
+        }
+      }
 
       // A confirmed RUNNING transition clears the resume-skipped marker
       // (prevent-auto-start-on-open). STARTING deliberately does NOT clear
       // it: a failed manual resume emits STARTING before the launch fails,
       // and clearing there would drop the Start agent retry affordance.
       if (newState === "RUNNING") {
-        store.getState().setResumeSkipped(sessionId, false);
+        clearResumeAndLaunchWarnings(store, sessionId);
       }
 
       maybeAdoptSessionOnTransition(
@@ -877,6 +978,9 @@ export function registerTaskSessionHandlers(store: StoreApi<AppState>): WsHandle
     "session.agentctl_starting": (message) => {
       const payload = message.payload;
       if (!payload?.session_id) return;
+      store
+        .getState()
+        .invalidateConfirmedConfigOptions(payload.session_id, payload.agent_execution_id);
       store.getState().setSessionAgentctlStatus(payload.session_id, {
         status: "starting",
         agentExecutionId: payload.agent_execution_id,
@@ -893,6 +997,7 @@ export function registerTaskSessionHandlers(store: StoreApi<AppState>): WsHandle
         updatedAt: message.timestamp,
       });
       syncEnvFromAgentctlPayload(store, payload);
+      settleWorkspaceRestorationFromAgentctl(store, payload, "ready");
       handleAgentctlReady(store, payload);
     },
     "session.agentctl_error": (message) => {
@@ -904,6 +1009,7 @@ export function registerTaskSessionHandlers(store: StoreApi<AppState>): WsHandle
         errorMessage: payload.error_message,
         updatedAt: message.timestamp,
       });
+      settleWorkspaceRestorationFromAgentctl(store, payload, "error");
     },
     "session.workspace_sources.updated": (message) =>
       handleWorkspaceSourcesUpdated(store, message.payload, message.timestamp),

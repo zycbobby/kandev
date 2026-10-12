@@ -117,6 +117,89 @@ func TestCreateNewSessionForStepKeepsCurrentSessionWhenWorkspaceAttachFails(t *t
 	}
 }
 
+type transferFailureQueueRepository struct {
+	messagequeue.Repository
+	err error
+}
+
+func (r *transferFailureQueueRepository) TransferSession(context.Context, string, string) error {
+	return r.err
+}
+
+func (r *transferFailureQueueRepository) TransferSessionIdentities(
+	context.Context,
+	messagequeue.QueueSessionIdentity,
+	messagequeue.QueueSessionIdentity,
+) error {
+	return r.err
+}
+
+func TestCreateNewSessionForStepFailsClosedWhenQueueTransferFails(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestRepo(t)
+	seedSession(t, repo, "task-queue-transfer", "session-queue-transfer", "step-one")
+	current, err := repo.GetTaskSession(ctx, "session-queue-transfer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.State = models.TaskSessionStateRunning
+	current.IsPrimary = true
+	current.AgentProfileID = "profile-old"
+	current.ExecutorID = models.ExecutorIDWorktree
+	current.TaskEnvironmentID = "environment-queue-transfer"
+	if err := repo.UpdateTaskSession(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateTaskEnvironment(ctx, &models.TaskEnvironment{
+		ID: current.TaskEnvironmentID, TaskID: current.TaskID,
+		ExecutorType: string(models.ExecutorTypeLocal), Status: models.TaskEnvironmentStatusReady,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	taskRepo := newMockTaskRepo()
+	taskRepo.tasks[current.TaskID] = &v1.Task{ID: current.TaskID, WorkspaceID: "ws1", Title: "Test Task"}
+	agentMgr := &mockAgentManager{
+		repoForExecutionLookup: repo,
+		launchAgentFunc: func(context.Context, *executor.LaunchAgentRequest) (*executor.LaunchAgentResponse, error) {
+			return &executor.LaunchAgentResponse{AgentExecutionID: "replacement-execution"}, nil
+		},
+	}
+	svc := createTestServiceWithScheduler(repo, newMockStepGetter(), taskRepo, agentMgr)
+	transferErr := errors.New("queue transfer failed")
+	svc.messageQueue = messagequeue.NewService(
+		&transferFailureQueueRepository{Repository: newAuthoritativeMemoryRepository(repo), err: transferErr},
+		messagequeue.DefaultMaxPerSession,
+		testLogger(),
+	)
+	if _, err := svc.messageQueue.QueueMessage(ctx, current.ID, current.TaskID, "handoff", "", messagequeue.QueuedByUser, false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.createNewSessionForStep(ctx, current.TaskID, current, "profile-new")
+	if !errors.Is(err, transferErr) {
+		t.Fatalf("createNewSessionForStep error = %v, want queue transfer failure", err)
+	}
+	persisted, err := repo.GetTaskSession(ctx, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.State != models.TaskSessionStateRunning || !persisted.IsPrimary {
+		t.Fatalf("current session after failed queue transfer = state %q primary %t, want running primary", persisted.State, persisted.IsPrimary)
+	}
+	if got := svc.messageQueue.GetStatus(ctx, current.ID).Count; got != 1 {
+		t.Fatalf("queued hand-off after failed transfer = %d, want 1", got)
+	}
+	sessions, err := repo.ListTaskSessions(ctx, current.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range sessions {
+		if session.ID != current.ID && session.State != models.TaskSessionStateCompleted {
+			t.Fatalf("replacement session after failed transfer = %s, want completed cleanup", session.State)
+		}
+	}
+}
+
 // terminalizeCandidateBeforePromotionRepo pauses a profile-switch promotion
 // after lookup so the test can terminalize the selected row before the
 // promotion write begins.
@@ -443,6 +526,129 @@ func TestPrepareWorkflowStepSession_PreservesMatchingProfileSession(t *testing.T
 	if !updated.IsPrimary {
 		t.Fatal("matching profile session must remain primary")
 	}
+	task, err := repo.GetTask(ctx, "t1")
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	route, ok := models.LoadWorkflowSessionRoute(task.Metadata)
+	if !ok {
+		t.Fatal("profile-only keep-current path must record a workflow session route")
+	}
+	if route.Phase != "committed" || route.DestinationID != session.ID || route.TargetKind != workflowSessionRouteTargetProfile {
+		t.Fatalf("profile-only keep-current route = %+v", route)
+	}
+}
+
+func TestPrepareWorkflowStepSession_ClearsCompletionFollowUpWithoutProfile(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestRepo(t)
+	seedSession(t, repo, "t1", "s1", "step1")
+	if err := repo.SetSessionMetadataKey(ctx, "s1", models.SessionMetaKeyCompletionFollowUp, true); err != nil {
+		t.Fatalf("mark completion follow-up: %v", err)
+	}
+
+	session, err := repo.GetTaskSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	step := &wfmodels.WorkflowStep{ID: "step1", WorkflowID: "wf1"}
+	svc := createTestService(repo, newMockStepGetter(), newMockTaskRepo())
+
+	if _, switched, err := svc.prepareWorkflowStepSession(ctx, "t1", session, step, nil); err != nil {
+		t.Fatalf("prepareWorkflowStepSession returned error: %v", err)
+	} else if switched {
+		t.Fatal("step without a profile must not switch sessions")
+	}
+
+	updated, err := repo.GetTaskSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if models.IsCompletionFollowUpSession(updated.Metadata) {
+		t.Fatal("explicit workflow step entry retained completion follow-up ownership")
+	}
+	task, err := repo.GetTask(ctx, "t1")
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	route, ok := models.LoadWorkflowSessionRoute(task.Metadata)
+	if !ok || route.Phase != "committed" || route.DestinationID != session.ID {
+		t.Fatalf("profile-only default route = %+v, present=%t", route, ok)
+	}
+}
+
+func TestPrepareWorkflowStepSession_PreservesNewerCompletionFollowUpWithoutProfile(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestRepo(t)
+	seedSession(t, repo, "t1", "s1", "step1")
+
+	// Model the asynchronous workflow-entry path: it loads its session before
+	// the conversational turn records the completion follow-up marker.
+	staleSession, err := repo.GetTaskSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("get stale session: %v", err)
+	}
+	if err := repo.SetSessionMetadataKey(ctx, "s1", models.SessionMetaKeyCompletionFollowUp, true); err != nil {
+		t.Fatalf("mark completion follow-up: %v", err)
+	}
+
+	step := &wfmodels.WorkflowStep{ID: "step1", WorkflowID: "wf1"}
+	svc := createTestService(repo, newMockStepGetter(), newMockTaskRepo())
+	if _, switched, err := svc.prepareWorkflowStepSession(ctx, "t1", staleSession, step, nil); err != nil {
+		t.Fatalf("prepareWorkflowStepSession returned error: %v", err)
+	} else if switched {
+		t.Fatal("step without a profile must not switch sessions")
+	}
+
+	updated, err := repo.GetTaskSession(ctx, staleSession.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if !models.IsCompletionFollowUpSession(updated.Metadata) {
+		t.Fatal("stale workflow entry cleared a newer completion follow-up marker")
+	}
+}
+
+func TestPrepareWorkflowStepSession_ProfileOnlyReuseCommitsEntryCorrelatedRecipient(t *testing.T) {
+	ctx := context.Background()
+	fixture := newProfileSwitchFixture(t, models.WorkflowProfileSessionStartPolicyReuse, models.WorkflowProfileSessionEndPolicyPark)
+	existing := &models.TaskSession{
+		ID: "session-b-existing", TaskID: "t1", AgentProfileID: "profile-b",
+		ExecutorID: "exec-local", ExecutorProfileID: "ep1", TaskEnvironmentID: "env-1",
+		State:     models.TaskSessionStateWaitingForInput,
+		StartedAt: time.Now().UTC().Add(-time.Minute), UpdatedAt: time.Now().UTC().Add(-time.Minute),
+	}
+	if err := fixture.repo.CreateTaskSession(ctx, existing); err != nil {
+		t.Fatalf("create reusable destination: %v", err)
+	}
+	target := &wfmodels.WorkflowStep{
+		ID: "step-b", WorkflowID: "wf1", Position: 1, AgentProfileID: "profile-b",
+		ProfileSessionStartPolicy: models.WorkflowProfileSessionStartPolicyReuse,
+	}
+	source := &wfmodels.WorkflowStep{
+		ID: "step-a", WorkflowID: "wf1", Position: 0, AgentProfileID: "profile-a",
+		ProfileSessionEndPolicy: models.WorkflowProfileSessionEndPolicyPark,
+	}
+
+	selected, switched, err := fixture.svc.prepareWorkflowStepSession(ctx, "t1", fixture.current, target, source, 42)
+	if err != nil {
+		t.Fatalf("prepare profile-only reuse: %v", err)
+	}
+	if !switched || selected.ID != existing.ID {
+		t.Fatalf("selected profile-only reuse = %v, switched=%t", selected.ID, switched)
+	}
+	task, err := fixture.repo.GetTask(ctx, "t1")
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	route, ok := models.LoadWorkflowSessionRoute(task.Metadata)
+	if !ok {
+		t.Fatal("profile-only reuse must record a workflow session route")
+	}
+	if route.Phase != workflowSessionRouteCommitted || route.DestinationID != existing.ID ||
+		route.EntryIdentity != "entry:00000000000000000042" || route.DestinationStepID != target.ID {
+		t.Fatalf("profile-only reuse route = %+v", route)
+	}
 }
 
 func TestSwitchWorkflowDispatcherRoutesOnEnterToDestinationProfileSession(t *testing.T) {
@@ -470,9 +676,10 @@ func TestSwitchWorkflowDispatcherRoutesOnEnterToDestinationProfileSession(t *tes
 
 	stepGetter := newMockStepGetter()
 	stepGetter.steps["step1"] = &wfmodels.WorkflowStep{
-		ID:             "step1",
-		WorkflowID:     "wf1",
-		AgentProfileID: "profile-a",
+		ID:                      "step1",
+		WorkflowID:              "wf1",
+		AgentProfileID:          "profile-a",
+		ProfileSessionEndPolicy: models.WorkflowProfileSessionEndPolicyComplete,
 	}
 	stepGetter.steps["step2"] = &wfmodels.WorkflowStep{
 		ID:             "step2",
@@ -682,9 +889,10 @@ func TestSwitchWorkflowDispatcherOnEnterSkipsSessionIndependentAction(t *testing
 
 	stepGetter := newMockStepGetter()
 	stepGetter.steps["step1"] = &wfmodels.WorkflowStep{
-		ID:             "step1",
-		WorkflowID:     "wf1",
-		AgentProfileID: "profile-a",
+		ID:                      "step1",
+		WorkflowID:              "wf1",
+		AgentProfileID:          "profile-a",
+		ProfileSessionEndPolicy: models.WorkflowProfileSessionEndPolicyComplete,
 	}
 	stepGetter.steps["step2"] = &wfmodels.WorkflowStep{
 		ID:             "step2",
@@ -1510,6 +1718,7 @@ func TestProcessOnEnter_ProfileSwitch(t *testing.T) {
 		sg := newMockStepGetter()
 		sourceStep := &wfmodels.WorkflowStep{
 			ID: "step1", WorkflowID: "wf1", Name: "Plan", AgentProfileID: "profile-a",
+			ProfileSessionEndPolicy: models.WorkflowProfileSessionEndPolicyComplete,
 		}
 		step := &wfmodels.WorkflowStep{
 			ID:             "step2",

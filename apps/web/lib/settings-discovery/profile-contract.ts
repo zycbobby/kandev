@@ -21,6 +21,7 @@ export const PROFILE_EDITABLE_FIELD_PATHS = [
   "model",
   "fallback_model",
   "auto_fallback",
+  "require_exact_model",
   "mode",
   "config_options",
   "allow_indexing",
@@ -31,6 +32,8 @@ export const PROFILE_EDITABLE_FIELD_PATHS = [
   "env_vars",
   "command_prefix",
   "dynamic",
+  "mcp_selection_mode",
+  "mcp_selected_servers",
 ] as const;
 
 export type ProfileEditableFieldPath = (typeof PROFILE_EDITABLE_FIELD_PATHS)[number];

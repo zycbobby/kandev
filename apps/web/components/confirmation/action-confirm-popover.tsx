@@ -21,6 +21,7 @@ export type ActionConfirmPopoverProps = {
   anchorRef: RefObject<HTMLElement | null>;
   focusReturnRef?: RefObject<HTMLElement | null>;
   focusBoundaryRef?: RefObject<HTMLElement | null>;
+  restoreFocusOnConfirm?: boolean;
   title: ReactNode;
   description?: ReactNode;
   cancelLabel: ReactNode;
@@ -53,6 +54,7 @@ export function ActionConfirmPopover({
   anchorRef,
   focusReturnRef,
   focusBoundaryRef,
+  restoreFocusOnConfirm = false,
   title,
   description,
   cancelLabel,
@@ -129,6 +131,7 @@ export function ActionConfirmPopover({
         cancelRef={cancelRef}
         focusReturnRef={focusReturnRef}
         focusBoundaryRef={focusBoundaryRef}
+        restoreFocusOnConfirm={restoreFocusOnConfirm}
         confirmedRef={confirmedRef}
         anchorRef={anchorRef}
         onCancel={() => handleOpenChange(false)}
@@ -155,6 +158,7 @@ type ActionConfirmPopoverContentProps = {
   cancelRef: RefObject<HTMLButtonElement | null>;
   focusReturnRef?: RefObject<HTMLElement | null>;
   focusBoundaryRef?: RefObject<HTMLElement | null>;
+  restoreFocusOnConfirm: boolean;
   confirmedRef: { current: boolean };
   anchorRef: RefObject<HTMLElement | null>;
   onCancel: () => void;
@@ -178,6 +182,7 @@ function ActionConfirmPopoverContent({
   cancelRef,
   focusReturnRef,
   focusBoundaryRef,
+  restoreFocusOnConfirm,
   confirmedRef,
   anchorRef,
   onCancel,
@@ -209,7 +214,7 @@ function ActionConfirmPopoverContent({
       }}
       onCloseAutoFocus={(event) => {
         event.preventDefault();
-        if (!confirmedRef.current) {
+        if (!confirmedRef.current || restoreFocusOnConfirm) {
           const focusReturnTarget = focusReturnRef?.current ?? null;
           if (isConnected(focusReturnTarget)) focusReturnTarget.focus();
           else if (isConnected(anchorRef.current)) anchorRef.current.focus();
@@ -234,7 +239,7 @@ function ActionConfirmPopoverContent({
           type="button"
           variant="outline"
           disabled={disabled}
-          className="min-h-11 px-3 transition-[color,background-color,border-color,transform] duration-100 active:scale-[0.96]"
+          className="px-3 transition-[color,background-color,border-color,transform] duration-100 active:scale-[0.96]"
           onClick={onCancel}
         >
           {cancelLabel}
@@ -245,7 +250,7 @@ function ActionConfirmPopoverContent({
           aria-label={confirmAriaLabel}
           data-testid={confirmTestId}
           disabled={confirmDisabled}
-          className="min-h-11 px-3 transition-[color,background-color,border-color,transform] duration-100 active:scale-[0.96]"
+          className="px-3 transition-[color,background-color,border-color,transform] duration-100 active:scale-[0.96]"
           onClick={onConfirm}
         >
           {confirmLabel}

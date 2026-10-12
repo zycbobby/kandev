@@ -6,8 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/kandev/kandev/internal/authz"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -16,6 +16,9 @@ import (
 	"github.com/kandev/kandev/internal/agent/runtime/lifecycle"
 	agentsettingscontroller "github.com/kandev/kandev/internal/agent/settings/controller"
 	settingsstore "github.com/kandev/kandev/internal/agent/settings/store"
+	"github.com/kandev/kandev/internal/auth"
+	"github.com/kandev/kandev/internal/auth/authn"
+	"github.com/kandev/kandev/internal/authz"
 	automationpkg "github.com/kandev/kandev/internal/automation"
 	"github.com/kandev/kandev/internal/common/config"
 	"github.com/kandev/kandev/internal/common/gitref"
@@ -37,10 +40,12 @@ import (
 	"github.com/kandev/kandev/internal/secrets"
 	sentrypkg "github.com/kandev/kandev/internal/sentry"
 	"github.com/kandev/kandev/internal/system/queuesettings"
+	"github.com/kandev/kandev/internal/system/sessioncapacity"
 	systemsettings "github.com/kandev/kandev/internal/system/settings"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
 	sqliterepo "github.com/kandev/kandev/internal/task/repository/sqlite"
 	taskservice "github.com/kandev/kandev/internal/task/service"
+	"github.com/kandev/kandev/internal/task/statussummary"
 	userservice "github.com/kandev/kandev/internal/user/service"
 	utilitymodels "github.com/kandev/kandev/internal/utility/models"
 	utilityservice "github.com/kandev/kandev/internal/utility/service"
@@ -56,12 +61,14 @@ const (
 const defaultEventNamespace = "default"
 
 func provideOrchestrator(
+	ctx context.Context,
 	cfg *config.Config,
 	log *logger.Logger,
 	pool *db.Pool,
 	eventBus bus.EventBus,
 	taskRepo *sqliterepo.Repository,
 	taskSvc *taskservice.Service,
+	authSvc *auth.Service,
 	userSvc *userservice.Service,
 	lifecycleMgr *lifecycle.Manager,
 	agentRegistry *registry.Registry,
@@ -72,6 +79,7 @@ func provideOrchestrator(
 	githubSvc *githubpkg.Service,
 	gitCredentialBroker *gitcredentials.Broker,
 	settingsStore *systemsettings.Store,
+	sessionCapacityEnvironment sessioncapacity.Environment,
 	trackers ...*requiredstores.Tracker,
 ) (*orchestrator.Service, *messageCreatorAdapter, error) {
 	if lifecycleMgr == nil {
@@ -86,8 +94,18 @@ func provideOrchestrator(
 		cfg != nil && cfg.Features.ClaudeBackgroundPromptHandoff
 	serviceCfg.ClaudeMidTurnSteering =
 		cfg != nil && cfg.Features.ClaudeMidTurnSteering
-	serviceCfg.OfficeSessionIdentity =
-		cfg != nil && cfg.Features.OfficeSessionIdentity
+	serviceCfg.CodexAppServerEnabled = cfg != nil && cfg.Features.CodexAppServer
+	sessionCapacityResolution, err := resolveSessionCapacityWithStore(
+		settingsStore, sessionCapacityEnvironment, log,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve session capacity settings: %w", err)
+	}
+	serviceCfg.SessionCapacity = effectiveSessionCapacity(sessionCapacityResolution)
+	log.Info("Session capacity initialized",
+		zap.Int("ceiling", serviceCfg.SessionCapacity),
+		zap.String("source", string(sessionCapacityResolution.Effective.Source)),
+		zap.Bool("enabled", sessionCapacityResolution.Effective.Enabled))
 	namespace := resolveEventNamespace(cfg)
 	serviceCfg.QueueGroup = "orchestrator." + namespace
 	busMode := "memory"
@@ -102,7 +120,7 @@ func provideOrchestrator(
 
 	queueRepo, err := messagequeue.NewSQLiteRepository(pool.Writer(), pool.Reader())
 	if len(trackers) > 0 && trackers[0] != nil {
-		if recordErr := recordRequiredStore(trackers[0], "message-queue", err); recordErr != nil {
+		if recordErr := recordRequiredStore(ctx, trackers[0], "message-queue", err); recordErr != nil {
 			return nil, nil, fmt.Errorf("message queue store: %w", recordErr)
 		}
 	}
@@ -135,6 +153,9 @@ func provideOrchestrator(
 	}
 
 	orchestratorSvc := orchestrator.NewService(serviceCfg, eventBus, agentManagerClient, taskRepoAdapter, taskRepo, userSvc, secretStore, msgQueue, log)
+	orchestratorSvc.SetStartupRecoveryOwnerContextResolver(func(ctx context.Context, ownerID, orgID string) (context.Context, error) {
+		return startupRecoveryOwnerContext(ctx, authSvc, ownerID, orgID)
+	})
 	orchestratorSvc.SetCanvasesEnabled(cfg != nil && cfg.Features.Canvases)
 	orchestratorSvc.SetAgentProfileRecentUseRecorder(userSvc)
 	if gitCredentialBroker != nil {
@@ -142,6 +163,10 @@ func provideOrchestrator(
 	}
 	orchestratorSvc.SetAttachmentReader(taskSvc.AttachmentService())
 	orchestratorSvc.SetLaunchAttachmentClaimer(taskSvc)
+	if attachmentSvc := taskSvc.AttachmentService(); attachmentSvc != nil {
+		orchestratorSvc.SetSessionAttachmentCleaner(taskSvc)
+	}
+	orchestratorSvc.SetSessionAttachmentTransferer(taskSvc)
 	orchestratorSvc.SetTitleBranchRuntime(lifecycleMgr)
 	if githubSvc != nil {
 		orchestratorSvc.SetTaskGitCredentialPolicyResolver(githubExecutorCredentialPolicyAdapter{service: githubSvc})
@@ -151,6 +176,15 @@ func provideOrchestrator(
 	// Runtime-aware liveness lets durable cleanup treat a not-found stop for a
 	// confirmed-dead local runtime as already stopped instead of retrying forever.
 	taskSvc.SetRowLivenessProber(agentManagerClient)
+	// The orphan-session sweep preserves stale sessions unless neither a live
+	// local execution nor an exact pending remote owner backs them, so a remote
+	// conversation remains available for authenticated recovery after restart.
+	taskSvc.SetExecutionLivenessChecker(agentManagerClient)
+	taskSvc.SetPendingRemoteRecoveryChecker(agentManagerClient.HasPendingRemoteRecovery)
+	// The session reconciliation sweep's active-task pass (stall detection and
+	// orphaned-session healing) checks local execution liveness through this
+	// registry and separately checks exact pending remote ownership above.
+	taskSvc.SetSessionExecutionRegistry(agentManagerClient)
 	taskSvc.SetContextWindowResetter(orchestratorSvc.ResetContextWindow)
 	taskSvc.SetGitArchiveCapture(orchestratorSvc)
 	// Automation runs keep their worktrees so they stay repliable, which makes
@@ -158,10 +192,13 @@ func provideOrchestrator(
 	// the manager to enforce the per-automation retention window.
 	orchestratorSvc.SetWorktreeManager(lifecycleMgr.WorktreeManager())
 	orchestratorSvc.SetTaskLaunchRecoveryService(taskSvc)
+	orchestratorSvc.SetWorkspaceRecoveryErrorReporter(taskSvc)
+	orchestratorSvc.SetWorkspaceRecoveryStatusReader(taskSvc)
 
 	msgCreator := &messageCreatorAdapter{svc: taskSvc, logger: log}
 	orchestratorSvc.SetMessageCreator(msgCreator)
 	orchestratorSvc.SetTransientRetryMessageService(taskSvc)
+	orchestratorSvc.SetStreamingMessageRetractionService(taskSvc)
 	orchestratorSvc.SetSubagentContextRecorder(&subagentContextAdapter{svc: taskSvc})
 
 	orchestratorSvc.SetTurnService(newTurnServiceAdapter(taskSvc))
@@ -184,6 +221,8 @@ func provideOrchestrator(
 	// Wired unconditionally: dependencies are a core Kanban relationship, not an
 	// Office feature.
 	orchestratorSvc.SetTaskDependencyReader(taskSvc)
+	orchestratorSvc.SetBackgroundWorkObserver(taskSvc)
+	taskSvc.SetBackgroundWorkActionDispatcher(lifecycleMgr)
 
 	// Let the task service read the orchestrator's task-level
 	// parked_on_background_work OR-aggregate and its own monotonic revision so
@@ -194,6 +233,26 @@ func provideOrchestrator(
 	// list/snapshot payloads (initial-load backstop for the sidebar badge; the
 	// status-summary projector keeps the field live between loads).
 	taskSvc.SetQueuedPromptCounter(orchestratorSvc.GetMessageQueue())
+	// Rebuild task summaries with one current ceiling observation for the whole
+	// batch. A failed population read retains queue ownership but leaves the
+	// displayed count unavailable.
+	taskSvc.SetTaskStatusSummaryLaunchQueueReader(func(ctx context.Context, tasks []*taskmodels.Task) map[string]*statussummary.LaunchQueueSummary {
+		observation, observationErr := orchestratorSvc.CurrentSessionCeilingObservation(ctx)
+		capacity := &statussummary.LaunchQueueCapacityObservation{
+			InUse:      observation.InUse,
+			Limit:      observation.Limit,
+			ObservedAt: observation.ObservedAt,
+			Known:      observationErr == nil && observation.Known,
+		}
+		queues := make(map[string]*statussummary.LaunchQueueSummary, len(tasks))
+		for _, task := range tasks {
+			if task == nil || task.ID == "" {
+				continue
+			}
+			queues[task.ID] = statussummary.LaunchQueueSummaryFromTaskWithCapacity(task, capacity)
+		}
+		return queues
+	})
 
 	// Per-user scoping for the session-keyed WS actions. The orchestrator
 	// resolves sessions through its own repo handle, so it does not inherit the
@@ -207,9 +266,12 @@ func provideOrchestrator(
 	orchestratorSvc.SetSessionPromptChecker(func(ctx context.Context, sessionID string) error {
 		return taskSvc.AuthorizeSessionScope(ctx, sessionID, authz.ScopeSessionPrompt)
 	})
-	orchestratorSvc.SetTaskPromptChecker(func(ctx context.Context, taskID string) error {
-		return taskSvc.AuthorizeTaskScope(ctx, taskID, authz.ScopeSessionPrompt)
-	})
+	// session.launch is a separate transport from message.add and must enforce
+	// the same coordinator attended-only scope upgrade
+	// (copilot.md#attended-only): AuthorizeTaskPromptScope requires
+	// workspace.manage, not session.prompt, to start a turn on a coordinator
+	// conversation task.
+	orchestratorSvc.SetTaskPromptChecker(taskSvc.AuthorizeTaskPromptScope)
 	orchestratorSvc.SetTaskAccessChecker(taskSvc.AuthorizeTaskAccess)
 
 	// Publish task.updated when the first session is marked primary so the
@@ -281,6 +343,24 @@ func provideOrchestrator(
 	return orchestratorSvc, msgCreator, nil
 }
 
+func startupRecoveryOwnerContext(
+	ctx context.Context,
+	authSvc *auth.Service,
+	ownerID, orgID string,
+) (context.Context, error) {
+	if authSvc == nil {
+		return nil, errors.New("startup recovery authentication service is unavailable")
+	}
+	if authSvc.Mode() == auth.ModeDisabled {
+		return ctx, nil
+	}
+	identity, ok := authSvc.IdentityForUser(ctx, ownerID)
+	if !ok || identity.UserID != ownerID || identity.OrgID != orgID {
+		return nil, errors.New("workspace owner identity is unavailable or changed organizations")
+	}
+	return authn.WithIdentity(ctx, identity), nil
+}
+
 type githubCredentialPolicyService interface {
 	DescribeTaskGitCredentialPolicy(context.Context, string) (githubpkg.TaskGitCredentialPolicy, error)
 }
@@ -289,18 +369,167 @@ type githubExecutorCredentialPolicyAdapter struct {
 	service githubCredentialPolicyService
 }
 
-type githubPRBaseResolver struct {
-	service *githubpkg.Service
+type githubPRBaseLookupService interface {
+	GetPRForAutomation(context.Context, string, string, string, int) (*githubpkg.PR, error)
+	ListTaskPRs(context.Context, []string) (map[string][]*githubpkg.TaskPR, error)
 }
 
-func (r githubPRBaseResolver) ResolvePRBaseBranch(
-	ctx context.Context, workspaceID, owner, repo string, number int,
-) (string, error) {
-	pr, err := r.service.GetPRForAutomation(ctx, workspaceID, owner, repo, number)
-	if err != nil || pr == nil {
-		return "", err
+type githubPRBaseResolver struct {
+	service githubPRBaseLookupService
+}
+
+func (r githubPRBaseResolver) ResolvePRBase(
+	ctx context.Context, workspaceID string, lookup executorpkg.PRBaseLookup,
+) (taskmodels.PRBase, error) {
+	owner, repo, err := r.prBaseRepository(ctx, lookup)
+	if err != nil {
+		return taskmodels.PRBase{}, err
 	}
-	return pr.BaseBranch, nil
+	knownCrossRepository := !strings.EqualFold(owner, lookup.AttachedOwner) ||
+		!strings.EqualFold(repo, lookup.AttachedRepository)
+	pr, err := r.service.GetPRForAutomation(ctx, workspaceID, owner, repo, lookup.Number)
+	if err != nil {
+		if knownCrossRepository {
+			return taskmodels.PRBase{}, executorpkg.NewPRBaseResolutionError(err, true, false)
+		}
+		return taskmodels.PRBase{}, err
+	}
+	base, err := githubPRBaseFromPR(pr, owner, repo, lookup.Number, lookup.CheckoutBranch)
+	if err != nil {
+		return taskmodels.PRBase{}, executorpkg.NewPRBaseResolutionError(err, knownCrossRepository, true)
+	}
+	return base, nil
+}
+
+func githubPRBaseFromPR(pr *githubpkg.PR, owner, repo string, number int, checkoutBranch string) (taskmodels.PRBase, error) {
+	if err := validateGitHubPRBaseLookup(pr, owner, repo, number, checkoutBranch); err != nil {
+		return taskmodels.PRBase{}, err
+	}
+	headOwner, headName := strings.TrimSpace(pr.HeadRepoOwner), strings.TrimSpace(pr.HeadRepoName)
+	candidate := taskmodels.ComparisonTargetCandidate{
+		Provider:         taskmodels.ComparisonTargetProviderGitHub,
+		Kind:             taskmodels.ComparisonTargetKindPullRequest,
+		Number:           number,
+		HeadBranch:       pr.HeadBranch,
+		TargetBranch:     pr.BaseBranch,
+		HeadRepository:   githubComparisonRepository(headOwner, headName, pr.HeadRepoID),
+		TargetRepository: githubComparisonRepository(owner, repo, pr.BaseRepoID),
+	}
+	target, err := candidate.Build()
+	if err != nil {
+		return taskmodels.PRBase{}, fmt.Errorf("validate GitHub PR base identity: %w", err)
+	}
+	base := taskmodels.PRBase{Target: target, OID: pr.BaseSHA}
+	if err := base.Validate(); err != nil {
+		return taskmodels.PRBase{}, err
+	}
+	return base, nil
+}
+
+func validateGitHubPRBaseLookup(pr *githubpkg.PR, owner, repo string, number int, checkoutBranch string) error {
+	if pr == nil || pr.Number != number {
+		return fmt.Errorf("GitHub PR identity did not match %s/%s#%d", owner, repo, number)
+	}
+	if checkoutBranch != "" && pr.HeadBranch != checkoutBranch {
+		return fmt.Errorf("GitHub PR head branch did not match checkout branch")
+	}
+	if (pr.RepoOwner != "" && !strings.EqualFold(pr.RepoOwner, owner)) ||
+		(pr.RepoName != "" && !strings.EqualFold(pr.RepoName, repo)) {
+		return fmt.Errorf("GitHub PR repository did not match %s/%s", owner, repo)
+	}
+	if (pr.BaseRepoOwner != "" || pr.BaseRepoName != "") &&
+		(!strings.EqualFold(pr.BaseRepoOwner, owner) || !strings.EqualFold(pr.BaseRepoName, repo)) {
+		return fmt.Errorf("GitHub PR base repository did not match %s/%s", owner, repo)
+	}
+	headOwner, headName := strings.TrimSpace(pr.HeadRepoOwner), strings.TrimSpace(pr.HeadRepoName)
+	if headOwner == "" || headName == "" {
+		return fmt.Errorf("GitHub PR head repository identity is incomplete")
+	}
+	return nil
+}
+
+func (r githubPRBaseResolver) prBaseRepository(
+	ctx context.Context, lookup executorpkg.PRBaseLookup,
+) (string, string, error) {
+	if lookup.Target != nil {
+		checkoutBranch := lookup.CheckoutBranch
+		if checkoutBranch == "" {
+			checkoutBranch = lookup.Target.HeadBranch
+		}
+		if err := lookup.Target.Validate(); err != nil || lookup.Target.Number != lookup.Number ||
+			lookup.Target.HeadBranch != checkoutBranch {
+			return "", "", fmt.Errorf("PR comparison target did not match task repository %q", lookup.TaskRepositoryID)
+		}
+		owner, repo, ok := splitGitHubRepositoryPath(lookup.Target.TargetRepository.Path)
+		if !ok {
+			return "", "", fmt.Errorf("PR comparison target repository is invalid")
+		}
+		return owner, repo, nil
+	}
+	linked, err := r.linkedTaskPR(ctx, lookup)
+	if err != nil {
+		return "", "", err
+	}
+	if linked != nil {
+		return linked.Owner, linked.Repo, nil
+	}
+	if lookup.AttachedOwner == "" || lookup.AttachedRepository == "" {
+		return "", "", fmt.Errorf("task repository %q has no GitHub repository identity", lookup.TaskRepositoryID)
+	}
+	return lookup.AttachedOwner, lookup.AttachedRepository, nil
+}
+
+func (r githubPRBaseResolver) linkedTaskPR(
+	ctx context.Context, lookup executorpkg.PRBaseLookup,
+) (*githubpkg.TaskPR, error) {
+	if lookup.TaskID == "" || lookup.RepositoryID == "" || lookup.CheckoutBranch == "" {
+		return nil, nil
+	}
+	byTask, err := r.service.ListTaskPRs(ctx, []string{lookup.TaskID})
+	if err != nil {
+		return nil, err
+	}
+	linked, err := selectLinkedTaskPRForBase(byTask[lookup.TaskID], lookup)
+	if err != nil {
+		return nil, executorpkg.NewPRBaseResolutionError(err, false, true)
+	}
+	return linked, nil
+}
+
+func selectLinkedTaskPRForBase(
+	prs []*githubpkg.TaskPR, lookup executorpkg.PRBaseLookup,
+) (*githubpkg.TaskPR, error) {
+	var match *githubpkg.TaskPR
+	for _, pr := range prs {
+		if pr == nil || pr.RepositoryID != lookup.RepositoryID || pr.PRNumber != lookup.Number ||
+			pr.HeadBranch != lookup.CheckoutBranch {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("multiple linked GitHub PRs match task repository %q", lookup.TaskRepositoryID)
+		}
+		match = pr
+	}
+	return match, nil
+}
+
+func splitGitHubRepositoryPath(path string) (string, string, bool) {
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func githubComparisonRepository(owner, repo string, id int64) taskmodels.ComparisonTargetRepository {
+	providerID := ""
+	if id > 0 {
+		providerID = strconv.FormatInt(id, 10)
+	}
+	return taskmodels.ComparisonTargetRepository{
+		Host: "github.com", Path: owner + "/" + repo, ProviderID: providerID,
+		RemoteURL: fmt.Sprintf("https://github.com/%s/%s.git", owner, repo),
+	}
 }
 
 func (a githubExecutorCredentialPolicyAdapter) ResolveTaskGitCredentialPolicy(
@@ -316,6 +545,19 @@ func (a githubExecutorCredentialPolicyAdapter) ResolveTaskGitCredentialPolicy(
 		WorkspaceMethod: policy.WorkspaceMethod,
 		WorkspaceActor:  policy.WorkspaceActor,
 	}, nil
+}
+
+// pluginRuntimeAPIURL is the Kandev API URL plugin executor environments call
+// back to. It exists only when an externally reachable base URL is configured.
+func pluginRuntimeAPIURL(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	publicBaseURL := strings.TrimRight(strings.TrimSpace(cfg.GitHubCredentialBroker.PublicBaseURL), "/")
+	if publicBaseURL == "" {
+		return ""
+	}
+	return publicBaseURL + "/api/v1"
 }
 
 func githubCredentialBrokerEndpoint(cfg *config.Config) string {
@@ -409,6 +651,37 @@ func queueConfiguration(cfg *config.Config) queuesettings.Configuration {
 		return queuesettings.Configuration{}
 	}
 	return queuesettings.Configuration{Value: cfg.MessageQueue.MaxPerSession, Present: true}
+}
+
+func resolveSessionCapacityWithStore(
+	settingsStore *systemsettings.Store,
+	environment sessioncapacity.Environment,
+	log *logger.Logger,
+) (sessioncapacity.Resolution, error) {
+	var configured *sessioncapacity.Settings
+	if settingsStore != nil {
+		loaded, err := sessioncapacity.NewStore(settingsStore).Load(context.Background())
+		if err != nil {
+			return sessioncapacity.Resolution{}, err
+		}
+		configured = loaded
+	}
+	resolution, err := sessioncapacity.Resolve(configured, environment)
+	if err != nil {
+		return sessioncapacity.Resolution{}, err
+	}
+	if resolution.InvalidEnvironment && log != nil {
+		log.Warn("Ignoring invalid session capacity environment value",
+			zap.String("environment_variable", sessioncapacity.EnvironmentVariable))
+	}
+	return resolution, nil
+}
+
+func effectiveSessionCapacity(resolution sessioncapacity.Resolution) int {
+	if !resolution.Effective.Enabled {
+		return 0
+	}
+	return resolution.Effective.MaxSessions
 }
 
 func resolveEventNamespace(cfg *config.Config) string {
@@ -1020,7 +1293,7 @@ func (u *repoLocalPathUpdater) UpdateRepositoryDefaultBranch(ctx context.Context
 }
 
 func (u *repoLocalPathUpdater) UpdateTaskRepositoryBaseBranch(ctx context.Context, taskID, taskRepositoryID, baseBranch string) error {
-	_, err := u.svc.UpdateRepositoryBaseBranch(ctx, taskservice.UpdateRepositoryBaseBranchRequest{
+	_, err := u.svc.UpdateRepositoryBaseBranchFromSystem(ctx, taskservice.UpdateRepositoryBaseBranchRequest{
 		TaskID:           taskID,
 		TaskRepositoryID: taskRepositoryID,
 		BaseBranch:       baseBranch,
@@ -1151,10 +1424,6 @@ func (a *repositoryResolverAdapter) persistDetectedDefaultBranch(
 	// later write succeeds — and this call site retries with the same
 	// detected value on every future invocation, so a rejection driven by
 	// validation (as opposed to a transient DB error) will repeat forever.
-	// Review round 3, finding #4: this used to log at Warn and nothing
-	// else, making that permanent degradation invisible. Error level plus
-	// the dedicated counter make it observable the same way ancestry/write
-	// failures already are in internal/delivery/metrics.go.
 	if _, err := a.taskSvc.UpdateRepository(ctx, repo.ID, &taskservice.UpdateRepositoryRequest{
 		DefaultBranch: &detected,
 	}); err != nil {

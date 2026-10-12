@@ -25,10 +25,11 @@ import type { SortKey } from "./filter-model";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useResponsiveBreakpoint } from "@/hooks/use-responsive-breakpoint";
+import { DefaultViewAction } from "./jira-default-view-action";
 import { isActionConfirmationTarget } from "@/components/confirmation/action-confirm-popover";
 import { SavedTaskViewDeleteConfirmation } from "@/components/confirmation/saved-task-view-delete-confirmation";
 import {
-  useSavedTaskViewDeleteConfirmation,
+  useSavedTaskViewDeleteMenu,
   type SavedTaskViewDeleteTarget,
 } from "@/components/confirmation/use-saved-task-view-delete-confirmation";
 
@@ -44,7 +45,12 @@ type ListToolbarProps = {
   onSearchChange: (text: string) => void;
   views: SavedView[];
   activeViewId: string | null;
+  defaultViewId: string;
+  viewsReady: boolean;
+  defaultMutationPending: boolean;
+  viewMutationPending: boolean;
   onSelectView: (id: string) => void;
+  onSetDefaultView: (id: string) => void;
   onDeleteView: (id: string) => void;
   onSaveView: (name: string) => void;
   count: number;
@@ -61,7 +67,12 @@ export function ListToolbar({
   onSearchChange,
   views,
   activeViewId,
+  defaultViewId,
+  viewsReady,
+  defaultMutationPending,
+  viewMutationPending,
   onSelectView,
+  onSetDefaultView,
   onDeleteView,
   onSaveView,
   count,
@@ -82,11 +93,19 @@ export function ListToolbar({
       <ViewsDropdown
         views={views}
         activeViewId={activeViewId}
+        defaultViewId={defaultViewId}
+        viewsReady={viewsReady}
+        defaultMutationPending={defaultMutationPending}
+        viewMutationPending={viewMutationPending}
         onSelect={onSelectView}
+        onSetDefault={onSetDefaultView}
         onDelete={onDeleteView}
         activeName={activeView ? savedViewLabel(t, activeView) : undefined}
       />
-      <SaveViewButton onSave={onSaveView} />
+      <SaveViewButton
+        onSave={onSaveView}
+        disabled={!viewsReady || defaultMutationPending || viewMutationPending}
+      />
       <div className="ml-auto flex items-center gap-1">
         <span className="text-xs text-muted-foreground tabular-nums mr-2">
           {loading ? t("jira:loading2") : t("jira:ticketOnThisPage", { count })}
@@ -94,19 +113,18 @@ export function ListToolbar({
         <SortDropdown sort={sort} sortLabel={sortLabel} onSortChange={onSortChange} />
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon"
           onClick={onRefresh}
           disabled={loading}
-          className="cursor-pointer h-7 w-7"
+          className="cursor-pointer"
           title={t("jira:refresh")}
         >
           <IconRefresh className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
         <Button
           variant={showJqlEditor ? "default" : "ghost"}
-          size="sm"
           onClick={onToggleJqlEditor}
-          className="cursor-pointer h-7 text-xs gap-1.5"
+          className="cursor-pointer text-xs gap-1.5"
           title={t("jira:toggleRawJqlEditor")}
         >
           <IconCode className="h-3.5 w-3.5" />
@@ -130,7 +148,7 @@ function SortDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="cursor-pointer h-7 text-xs gap-1.5">
+        <Button variant="ghost" className="cursor-pointer text-xs gap-1.5">
           <IconArrowsSort className="h-3.5 w-3.5" />
           {t("jira:sortLabelled", { label: sortLabel })}
         </Button>
@@ -160,7 +178,7 @@ function SearchInput({ value, onChange }: { value: string; onChange: (v: string)
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={t("jira:searchTicketKeyOrText")}
-        className="h-8 text-xs pl-8"
+        className="text-xs pl-8"
       />
     </div>
   );
@@ -169,26 +187,36 @@ function SearchInput({ value, onChange }: { value: string; onChange: (v: string)
 function ViewsDropdown({
   views,
   activeViewId,
+  defaultViewId,
+  viewsReady,
+  defaultMutationPending,
+  viewMutationPending,
   onSelect,
+  onSetDefault,
   onDelete,
   activeName,
 }: {
   views: SavedView[];
   activeViewId: string | null;
+  defaultViewId: string;
+  viewsReady: boolean;
+  defaultMutationPending: boolean;
+  viewMutationPending: boolean;
   onSelect: (id: string) => void;
+  onSetDefault: (id: string) => void;
   onDelete: (id: string) => void;
   activeName: string | undefined;
 }) {
   const { t } = useTranslation();
-  const { isFinePointer } = useResponsiveBreakpoint();
-  const [open, setOpen] = useState(false);
+  const { isFinePointer, isMobile } = useResponsiveBreakpoint();
   const contentRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const builtin = views.filter((v) => v.builtin);
   const custom = views.filter((v) => !v.builtin);
-  const deletion = useSavedTaskViewDeleteConfirmation<HTMLButtonElement>(custom);
+  const deletion = useSavedTaskViewDeleteMenu<HTMLButtonElement>(custom, isMobile);
 
   const deleteProps: ViewDeletionProps = {
-    isFinePointer,
+    isFinePointer: !isMobile && isFinePointer,
     deleteTarget: deletion.target,
     deleteAnchorRef: deletion.anchorRef,
     onDeleteOpenChange: (nextOpen) => {
@@ -198,17 +226,15 @@ function ViewsDropdown({
     onConfirmDelete: onDelete,
     onRegisterDeleteAnchor: deletion.registerAnchor,
   };
+  const selectViewAndClose = (id: string) => {
+    onSelect(id);
+    deletion.onOpenChange(false);
+  };
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (!nextOpen) deletion.close();
-      }}
-    >
+    <Popover open={deletion.open} onOpenChange={deletion.onOpenChange}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="cursor-pointer h-8 text-xs gap-1.5">
+        <Button ref={triggerRef} variant="outline" className="cursor-pointer text-xs gap-1.5">
           <IconBookmark className="h-3.5 w-3.5" />
           {activeName ?? t("jira:noView")}
         </Button>
@@ -216,7 +242,8 @@ function ViewsDropdown({
       <PopoverContent
         ref={contentRef}
         align="start"
-        className="w-60 max-w-[calc(100vw-1rem)] overflow-x-hidden p-0"
+        className="max-h-[min(70vh,24rem)] w-60 max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto p-0"
+        onCloseAutoFocus={deletion.onCloseAutoFocus}
         onFocusOutside={(event) => {
           if (isActionConfirmationTarget(event.target)) event.preventDefault();
         }}
@@ -224,46 +251,124 @@ function ViewsDropdown({
           if (isActionConfirmationTarget(event.target)) event.preventDefault();
         }}
       >
-        <ViewsGroup
-          label={t("jira:builtIn")}
-          views={builtin}
+        <ViewsPickerGroups
+          builtin={builtin}
+          custom={custom}
           activeViewId={activeViewId}
-          onSelect={(id) => {
-            onSelect(id);
-            setOpen(false);
-          }}
-          {...deleteProps}
+          defaultViewId={defaultViewId}
+          viewsReady={viewsReady}
+          defaultMutationPending={defaultMutationPending}
+          viewMutationPending={viewMutationPending}
+          onSetDefault={onSetDefault}
+          onSelectView={selectViewAndClose}
+          deleteProps={deleteProps}
         />
-        {custom.length > 0 && (
-          <>
-            <div className="border-t" />
-            <ViewsGroup
-              label={t("jira:saved")}
-              views={custom}
-              activeViewId={activeViewId}
-              onSelect={(id) => {
-                onSelect(id);
-                setOpen(false);
-              }}
-              {...deleteProps}
-            />
-          </>
-        )}
       </PopoverContent>
-      {isFinePointer && deletion.target ? (
-        <SavedTaskViewDeleteConfirmation
-          target={deletion.target}
-          presentation="popover"
-          open
-          anchorRef={deletion.anchorRef}
-          focusBoundaryRef={contentRef}
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) deletion.close();
-          }}
-          onConfirm={onDelete}
-        />
-      ) : null}
+      <ActiveViewDeleteConfirmation
+        target={deletion.target}
+        isMobile={isMobile}
+        isFinePointer={isFinePointer}
+        triggerRef={triggerRef}
+        anchorRef={deletion.anchorRef}
+        focusBoundaryRef={contentRef}
+        onClose={deletion.close}
+        onConfirm={onDelete}
+      />
     </Popover>
+  );
+}
+
+function ViewsPickerGroups({
+  builtin,
+  custom,
+  activeViewId,
+  defaultViewId,
+  viewsReady,
+  defaultMutationPending,
+  viewMutationPending,
+  onSetDefault,
+  onSelectView,
+  deleteProps,
+}: {
+  builtin: SavedView[];
+  custom: SavedView[];
+  activeViewId: string | null;
+  defaultViewId: string;
+  viewsReady: boolean;
+  defaultMutationPending: boolean;
+  viewMutationPending: boolean;
+  onSetDefault: (id: string) => void;
+  onSelectView: (id: string) => void;
+  deleteProps: ViewDeletionProps;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <ViewsGroup
+        label={t("jira:builtIn")}
+        views={builtin}
+        activeViewId={activeViewId}
+        defaultViewId={defaultViewId}
+        viewsReady={viewsReady}
+        defaultMutationPending={defaultMutationPending}
+        viewMutationPending={viewMutationPending}
+        onSetDefault={onSetDefault}
+        onSelect={onSelectView}
+        {...deleteProps}
+      />
+      {custom.length > 0 && (
+        <>
+          <div className="border-t" />
+          <ViewsGroup
+            label={t("jira:saved")}
+            views={custom}
+            activeViewId={activeViewId}
+            defaultViewId={defaultViewId}
+            viewsReady={viewsReady}
+            defaultMutationPending={defaultMutationPending}
+            viewMutationPending={viewMutationPending}
+            onSetDefault={onSetDefault}
+            onSelect={onSelectView}
+            {...deleteProps}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+function ActiveViewDeleteConfirmation({
+  target,
+  isMobile,
+  isFinePointer,
+  triggerRef,
+  anchorRef,
+  focusBoundaryRef,
+  onClose,
+  onConfirm,
+}: {
+  target: SavedTaskViewDeleteTarget | null;
+  isMobile: boolean;
+  isFinePointer: boolean;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  anchorRef: RefObject<HTMLElement | null>;
+  focusBoundaryRef: RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+  onConfirm: (id: string) => void;
+}) {
+  if (!(isMobile || isFinePointer) || !target) return null;
+  return (
+    <SavedTaskViewDeleteConfirmation
+      target={target}
+      presentation="popover"
+      open
+      anchorRef={isMobile ? triggerRef : anchorRef}
+      focusBoundaryRef={focusBoundaryRef}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+      onConfirm={onConfirm}
+    />
   );
 }
 
@@ -281,6 +386,11 @@ function ViewsGroup({
   label,
   views,
   activeViewId,
+  defaultViewId,
+  viewsReady,
+  defaultMutationPending,
+  viewMutationPending,
+  onSetDefault,
   onSelect,
   isFinePointer,
   deleteTarget,
@@ -293,6 +403,11 @@ function ViewsGroup({
   label: string;
   views: SavedView[];
   activeViewId: string | null;
+  defaultViewId: string;
+  viewsReady: boolean;
+  defaultMutationPending: boolean;
+  viewMutationPending: boolean;
+  onSetDefault: (id: string) => void;
   onSelect: (id: string) => void;
 } & ViewDeletionProps) {
   return (
@@ -305,6 +420,9 @@ function ViewsGroup({
           key={v.id}
           view={v}
           active={v.id === activeViewId}
+          isDefault={v.id === defaultViewId}
+          defaultActionDisabled={!viewsReady || defaultMutationPending || viewMutationPending}
+          onSetDefault={onSetDefault}
           onSelect={onSelect}
           isFinePointer={isFinePointer}
           deleteTarget={deleteTarget}
@@ -322,6 +440,9 @@ function ViewsGroup({
 function ViewRow({
   view,
   active,
+  isDefault,
+  defaultActionDisabled,
+  onSetDefault,
   onSelect,
   isFinePointer,
   deleteTarget,
@@ -333,6 +454,9 @@ function ViewRow({
 }: {
   view: SavedView;
   active: boolean;
+  isDefault: boolean;
+  defaultActionDisabled: boolean;
+  onSetDefault: (id: string) => void;
   onSelect: (id: string) => void;
 } & ViewDeletionProps) {
   const { t } = useTranslation();
@@ -363,6 +487,14 @@ function ViewRow({
         <IconCheck className={`h-3.5 w-3.5 ${active ? "opacity-100" : "opacity-0"}`} />
         <span className="min-w-0 flex-1 truncate">{label}</span>
       </button>
+      <DefaultViewAction
+        viewId={view.id}
+        viewName={label}
+        isDefault={isDefault}
+        disabled={defaultActionDisabled}
+        onSetDefault={onSetDefault}
+        isFinePointer={isFinePointer}
+      />
       {!view.builtin && (
         <button
           ref={(element) => onRegisterDeleteAnchor(view.id, element)}
@@ -372,11 +504,12 @@ function ViewRow({
             onRequestDelete(view);
           }}
           className={cn(
-            "flex shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted",
+            "flex shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted disabled:cursor-not-allowed",
             isFinePointer
-              ? "h-7 w-7 opacity-0 group-hover:opacity-100 focus:opacity-100"
+              ? "h-7 w-7 opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-50"
               : "h-12 w-12 opacity-100",
           )}
+          disabled={defaultActionDisabled}
           title={t("jira:deleteView")}
           aria-label={t("common:deleteSavedTaskViewAction", { name: label })}
         >
@@ -387,13 +520,19 @@ function ViewRow({
   );
 }
 
-function SaveViewButton({ onSave }: { onSave: (name: string) => void }) {
+function SaveViewButton({
+  onSave,
+  disabled,
+}: {
+  onSave: (name: string) => void;
+  disabled: boolean;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const submit = () => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (disabled || !trimmed) return;
     onSave(trimmed);
     setName("");
     setOpen(false);
@@ -403,8 +542,8 @@ function SaveViewButton({ onSave }: { onSave: (name: string) => void }) {
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
-          className="cursor-pointer h-8 text-xs gap-1.5"
+          disabled={disabled}
+          className="cursor-pointer text-xs gap-1.5"
           title={t("jira:saveCurrentFiltersAsAView")}
         >
           <IconPlus className="h-3.5 w-3.5" />
@@ -421,23 +560,13 @@ function SaveViewButton({ onSave }: { onSave: (name: string) => void }) {
             if (e.key === "Enter") submit();
           }}
           placeholder={t("jira:myOpenBugs")}
-          className="h-8 text-xs"
+          className="text-xs"
         />
         <div className="flex justify-end gap-1">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setOpen(false)}
-            className="cursor-pointer h-7 text-xs"
-          >
+          <Button variant="ghost" onClick={() => setOpen(false)} className="cursor-pointer text-xs">
             {t("common:cancel")}
           </Button>
-          <Button
-            size="sm"
-            onClick={submit}
-            disabled={!name.trim()}
-            className="cursor-pointer h-7 text-xs"
-          >
+          <Button onClick={submit} disabled={!name.trim()} className="cursor-pointer text-xs">
             {t("common:save")}
           </Button>
         </div>

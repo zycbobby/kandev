@@ -52,17 +52,323 @@ func (r *Repository) runMigrations() error {
 	if err := r.migrateProviderRouting(); err != nil {
 		return err
 	}
+	if err := r.migrateSessionRecoveryColumns(); err != nil {
+		return err
+	}
 	if err := r.migrateContinuationScope(); err != nil {
 		return err
 	}
 	r.migrateRunOutcome()
+	if err := r.migrateRunSkillLabels(); err != nil {
+		return err
+	}
 	if err := r.migrateParentWakeIndexes(); err != nil {
 		return err
 	}
 	r.migrateParentWakeReceiptColumns()
+	r.migrateWakeWaveColumns()
 	r.migrate.Apply("task_workspace_groups.ownership_generation",
 		`ALTER TABLE task_workspace_groups ADD COLUMN ownership_generation INTEGER NOT NULL DEFAULT 1`)
+	r.migrateLaunchSafetyColumns()
+	r.migrateRoutineCatchUp()
+	r.migrateBudgetPolicyRevision()
+	r.migrateWorkspacePauseSkipAttribution()
+	r.migrateDeferredAssignmentActor()
+	r.migrateLoopLivenessCausationID()
+	if err := r.migrateRetentionIndexes(); err != nil {
+		return err
+	}
+	if err := r.migrateAssignmentWakeRateIndexes(); err != nil {
+		return err
+	}
 	if err := r.migrate.Err(); err != nil {
+		return err
+	}
+	if err := r.backfillRoutineTriggerTimezones(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateDeferredAssignmentActor adds the actor snapshot needed to replay a
+// paused assignment with the same priority and assignment-rate semantics as
+// the live scheduler path. The fresh table definition includes these columns;
+// these idempotent ALTERs converge databases created by the first replay
+// implementation before the actor snapshot was added.
+func (r *Repository) migrateDeferredAssignmentActor() {
+	_ = r.migrate.Apply(
+		"office_deferred_assignments.actor_type",
+		`ALTER TABLE office_deferred_assignments ADD COLUMN actor_type TEXT NOT NULL DEFAULT ''`,
+	)
+	_ = r.migrate.Apply(
+		"office_deferred_assignments.actor_id",
+		`ALTER TABLE office_deferred_assignments ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''`,
+	)
+}
+
+// migrateRunSkillLabels adds the captured labels used by run history. The
+// snapshot keeps its display identity even if the live skill is renamed or
+// deleted later.
+
+func (r *Repository) migrateRunSkillLabels() error {
+	if err := r.migrate.Apply(
+		"office_run_skills.display_name",
+		`ALTER TABLE office_run_skills ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`,
+	); err != nil {
+		return err
+	}
+	if err := r.migrate.Apply(
+		"office_run_skills.slug",
+		`ALTER TABLE office_run_skills ADD COLUMN slug TEXT NOT NULL DEFAULT ''`,
+	); err != nil {
+		return err
+	}
+	return r.migrate.Apply(
+		"office_run_skills.label_source",
+		`ALTER TABLE office_run_skills ADD COLUMN label_source TEXT NOT NULL DEFAULT ''`,
+	)
+}
+
+// backfillRoutineTriggerTimezones sets an explicit "UTC" on cron triggers
+// created before the column default changed from empty to 'UTC', so the
+// empty string no longer means anything at read time.
+func (r *Repository) backfillRoutineTriggerTimezones() error {
+	if _, err := r.db.Exec(
+		`UPDATE office_routine_triggers SET timezone = 'UTC' WHERE kind = 'cron' AND timezone = ''`,
+	); err != nil {
+		return fmt.Errorf("office_routine_triggers.timezone backfill: %w", err)
+	}
+	return nil
+}
+
+// migrateBudgetPolicyRevision adds office_budget_policies.revision for
+// databases created before REQ-OFFICE-COSTS-003. The DEFAULT 1 backfills
+// every existing row exactly like createCostTables' inline column, so a
+// fresh database and a migrated one converge. A boot replay is a no-op:
+// db.IsDuplicateColumnError is the only local classifier (ADR 0027), reused
+// via MigrateLogger.Apply rather than adding a new one.
+func (r *Repository) migrateBudgetPolicyRevision() {
+	_ = r.migrate.Apply("office_budget_policies.revision",
+		`ALTER TABLE office_budget_policies ADD COLUMN revision INTEGER NOT NULL DEFAULT 1`)
+}
+
+// migrateWorkspacePauseSkipAttribution adds the columns a blocked routine
+// fire uses to record why it was skipped and which pause blocked it. The
+// partial unique index runs after both ADD COLUMNs so it never executes
+// against a schema that lacks pause_id.
+func (r *Repository) migrateWorkspacePauseSkipAttribution() {
+	_ = r.migrate.Apply("office_routine_runs.skip_reason",
+		`ALTER TABLE office_routine_runs ADD COLUMN skip_reason TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("office_routine_runs.pause_id",
+		`ALTER TABLE office_routine_runs ADD COLUMN pause_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("idx_office_routine_run_pause_once",
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_office_routine_run_pause_once
+			ON office_routine_runs(routine_id, pause_id) WHERE pause_id != ''`)
+}
+
+// migrateLoopLivenessCausationID adds the causation_id correlation
+// column to all three rows in the wake-to-run chain
+// (REQ-OFFICE-LOOP-LIVENESS-002): the routine fire, the wakeup request
+// it produces, and the run the wakeup request produces. "" rather than
+// NULL, because every existing row predates this feature and a reader
+// must treat "legacy" and "uncorrelated" identically. Each column gets
+// its own partial index (excluding "") so a backward correlation walk
+// from a run to its originating fire is a direct lookup on every
+// dialect, not a table scan — NFR-2 is symmetric with the forward walk.
+//
+// runs.causation_id here is REQ-OFFICE-LOOP-LIVENESS-002's column, copied
+// from the wakeup request that created the run — a distinct column and a
+// distinct concept from runs.chain_causation_id below
+// (REQ-OFFICE-RUN-CAUSATION-001's launch-safety causation chain). The two
+// features were built independently and both reached for the name
+// "causation id"; they do not describe the same lineage and must not share
+// a column. See docs/decisions/2026-09-17-separate-loop-liveness-and-launch-safety-causation-ids.md.
+func (r *Repository) migrateLoopLivenessCausationID() {
+	_ = r.migrate.Apply("office_routine_runs.causation_id",
+		`ALTER TABLE office_routine_runs ADD COLUMN causation_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("idx_office_routine_runs_causation_id",
+		`CREATE INDEX IF NOT EXISTS idx_office_routine_runs_causation_id
+			ON office_routine_runs(causation_id) WHERE causation_id != ''`)
+
+	_ = r.migrate.Apply("agent_wakeup_requests.causation_id",
+		`ALTER TABLE agent_wakeup_requests ADD COLUMN causation_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("idx_agent_wakeup_requests_causation_id",
+		`CREATE INDEX IF NOT EXISTS idx_agent_wakeup_requests_causation_id
+			ON agent_wakeup_requests(causation_id) WHERE causation_id != ''`)
+
+	_ = r.migrate.Apply("runs.causation_id",
+		`ALTER TABLE runs ADD COLUMN causation_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("idx_runs_causation_id",
+		`CREATE INDEX IF NOT EXISTS idx_runs_causation_id
+			ON runs(causation_id) WHERE causation_id != ''`)
+}
+
+// migrateRetentionIndexes adds the two indexes the run-history retention
+// sweep depends on (docs/specs/office/system-design/run-history-retention.md
+// "Indexes to add"). Both are expression indexes over the same
+// COALESCE(...) the sweep both filters and orders by; a plain-column index
+// on the nullable completion column would serve neither the WHERE clause
+// nor the ORDER BY the sweep actually issues, on either engine.
+func (r *Repository) migrateRetentionIndexes() error {
+	if err := r.migrate.Apply(
+		"idx_office_routine_runs_retention",
+		`CREATE INDEX IF NOT EXISTS idx_office_routine_runs_retention
+			ON office_routine_runs(routine_id, status, (COALESCE(completed_at, created_at)) DESC, id DESC)`,
+	); err != nil {
+		return err
+	}
+	return r.migrate.Apply(
+		"idx_runs_retention",
+		`CREATE INDEX IF NOT EXISTS idx_runs_retention
+			ON runs(agent_profile_id, status, (COALESCE(finished_at, requested_at)) DESC, id DESC)`,
+	)
+}
+
+// migrateLaunchSafetyColumns adds the nine chain-causation/priority/actor/
+// workspace columns to runs (docs/specs/office/requirements/
+// run-causation-chain.md, launch-backpressure.md) for databases created
+// before this capability, plus the two new tables it introduces. Every
+// ALTER is NOT NULL with a default so existing rows converge in place: an
+// empty chain_causation_id is the legacy marker AC-OFFICE-RUN-CAUSATION-001.6
+// reads as "its own root at depth 0", and the fresh-install CREATE TABLE
+// in base.go carries the identical column set inline.
+//
+// This column is named chain_causation_id, not causation_id, to stay
+// distinct from runs.causation_id above (REQ-OFFICE-LOOP-LIVENESS-002),
+// which already occupies that name for an unrelated wakeup-request
+// correlation. See the doc comment on migrateLoopLivenessCausationID.
+func (r *Repository) migrateLaunchSafetyColumns() {
+	_ = r.migrate.Apply("runs.chain_causation_id",
+		`ALTER TABLE runs ADD COLUMN chain_causation_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("runs.parent_run_id",
+		`ALTER TABLE runs ADD COLUMN parent_run_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("runs.causation_depth",
+		`ALTER TABLE runs ADD COLUMN causation_depth INTEGER NOT NULL DEFAULT 0`)
+	_ = r.migrate.Apply("runs.priority_class",
+		`ALTER TABLE runs ADD COLUMN priority_class INTEGER NOT NULL DEFAULT 2`)
+	_ = r.migrate.Apply("runs.human_rooted",
+		`ALTER TABLE runs ADD COLUMN human_rooted INTEGER NOT NULL DEFAULT 0`)
+	_ = r.migrate.Apply("runs.routine_id",
+		`ALTER TABLE runs ADD COLUMN routine_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("runs.actor_kind",
+		`ALTER TABLE runs ADD COLUMN actor_kind TEXT NOT NULL DEFAULT 'system'`)
+	_ = r.migrate.Apply("runs.actor_id",
+		`ALTER TABLE runs ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("runs.workspace_id",
+		`ALTER TABLE runs ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`)
+	r.backfillLaunchSafetyWorkspaceIDs()
+
+	// Indexes reference the new columns, so they run after the ADD
+	// COLUMN statements above rather than in schema init.
+	_ = r.migrate.Apply("idx_run_chain_causation_id",
+		`CREATE INDEX IF NOT EXISTS idx_run_chain_causation_id ON runs(chain_causation_id)`)
+	_ = r.migrate.Apply("idx_run_claim_order",
+		`CREATE INDEX IF NOT EXISTS idx_run_claim_order ON runs(status, priority_class, requested_at, id)`)
+	_ = r.migrate.Apply("idx_run_self_trigger_window",
+		`CREATE INDEX IF NOT EXISTS idx_run_self_trigger_window ON runs(agent_profile_id, reason, actor_id, requested_at)`)
+	_ = r.migrate.Apply("idx_run_self_trigger_total_window",
+		`CREATE INDEX IF NOT EXISTS idx_run_self_trigger_total_window ON runs(agent_profile_id, actor_id, requested_at)`)
+
+	_, _ = r.db.Exec(`
+	CREATE TABLE IF NOT EXISTS office_launch_ledger (
+		id           TEXT      PRIMARY KEY,
+		run_id       TEXT      NOT NULL,
+		workspace_id TEXT      NOT NULL,
+		causation_id TEXT      NOT NULL DEFAULT '',
+		routine_id   TEXT      NOT NULL DEFAULT '',
+		human_rooted INTEGER   NOT NULL DEFAULT 0,
+		claimed_at   TIMESTAMP NOT NULL
+	)`)
+	_, _ = r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_launch_ledger_ws_time ON office_launch_ledger(workspace_id, claimed_at)`)
+	_, _ = r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_launch_ledger_routine_time ON office_launch_ledger(routine_id, claimed_at)`)
+
+	_, _ = r.db.Exec(`
+	CREATE TABLE IF NOT EXISTS office_gate_failure_state (
+		workspace_id         TEXT      NOT NULL,
+		gate                 TEXT      NOT NULL,
+		consecutive_failures INTEGER   NOT NULL DEFAULT 0,
+		last_escalation_at   TIMESTAMP,
+		updated_at           TIMESTAMP NOT NULL,
+		PRIMARY KEY (workspace_id, gate)
+	)`)
+
+	_, _ = r.db.Exec(`
+	CREATE TABLE IF NOT EXISTS office_causation_refusal (
+		id               TEXT      PRIMARY KEY,
+		workspace_id     TEXT      NOT NULL,
+		gate             TEXT      NOT NULL,
+		agent_profile_id TEXT      NOT NULL,
+		causation_id     TEXT      NOT NULL DEFAULT '',
+		causation_depth  INTEGER   NOT NULL DEFAULT 0,
+		reason           TEXT      NOT NULL DEFAULT '',
+		refused_at       TIMESTAMP NOT NULL
+	)`)
+	_, _ = r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_causation_refusal_ws_time ON office_causation_refusal(workspace_id, refused_at)`)
+	_, _ = r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_causation_refusal_agent_time ON office_causation_refusal(agent_profile_id, refused_at)`)
+}
+
+// backfillLaunchSafetyWorkspaceIDs repairs runs.workspace_id for runs still
+// active (queued/claimed) when the ADD COLUMN migration above ran: their
+// workspace_id starts as ” regardless of which workspace they belong to,
+// which pools every such legacy run into the shared empty-bucket for
+// per-workspace concurrency ceilings and budgets
+// (AC-OFFICE-RUN-CAUSATION-001.19) instead of scoping it correctly. Only
+// active rows are repaired; a finished run's workspace_id is historical and
+// not read by any ceiling or budget check. A database that has not yet run
+// the agent-settings migrations (agent_profiles missing) fails this step
+// exactly like every other statement in this file: logged and swallowed,
+// non-fatal to boot.
+func (r *Repository) backfillLaunchSafetyWorkspaceIDs() {
+	stmt := r.db.Rebind(`
+		UPDATE runs SET workspace_id = (
+			SELECT workspace_id FROM agent_profiles WHERE id = runs.agent_profile_id
+		)
+		WHERE workspace_id = ''
+		  AND status IN ('queued', 'claimed')
+		  AND EXISTS (SELECT 1 FROM agent_profiles WHERE id = runs.agent_profile_id)
+	`)
+	if _, err := r.db.Exec(stmt); err != nil {
+		if r.log != nil {
+			r.log.Warn("launch safety workspace_id backfill failed", zap.Error(err))
+		}
+	}
+}
+
+// migrateAssignmentWakeRateIndexes adds the portable prefix used by the
+// rolling assignment-wake count. The count deliberately has no status
+// predicate, so idx_run_status_requested cannot support its reason/time scan.
+func (r *Repository) migrateAssignmentWakeRateIndexes() error {
+	return r.migrate.Apply(
+		"idx_runs_assignment_rate_reason_requested",
+		`CREATE INDEX IF NOT EXISTS idx_runs_assignment_rate_reason_requested
+		ON runs(reason, requested_at)`,
+	)
+}
+
+// migrateSessionRecoveryColumns adds the indexed reference from an Office run
+// to the task-owned recovery block. Existing routing rows remain unchanged and
+// the columns stay NULL until a launch actually requires recovery.
+func (r *Repository) migrateSessionRecoveryColumns() error {
+	for _, migration := range []struct {
+		name   string
+		column string
+		stmt   string
+	}{
+		{name: "runs.session_recovery_block_id", column: "session_recovery_block_id", stmt: "ALTER TABLE runs ADD COLUMN session_recovery_block_id TEXT"},
+		{name: "runs.session_recovery_reason", column: "session_recovery_reason", stmt: "ALTER TABLE runs ADD COLUMN session_recovery_reason TEXT"},
+	} {
+		exists, err := db.ColumnExists(r.db, "runs", migration.column)
+		if err != nil {
+			return fmt.Errorf("inspect runs.%s: %w", migration.column, err)
+		}
+		if !exists {
+			if err := r.migrate.Apply(migration.name, migration.stmt); err != nil {
+				return err
+			}
+		}
+	}
+	if err := r.migrate.Apply("runs.session_recovery_block_index",
+		`CREATE INDEX IF NOT EXISTS idx_runs_session_recovery_block ON runs(session_recovery_block_id) WHERE session_recovery_block_id IS NOT NULL`); err != nil {
 		return err
 	}
 	return nil
@@ -187,14 +493,47 @@ func (r *Repository) migrateParentWakeIndexes() error {
 }
 
 // migrateParentWakeReceiptColumns adds operation identity for receipts
-// created by workflow-engine dispatch. Existing direct-run receipts keep
-// their delivered_run_id and receive the empty operation id default.
+// created by workflow-engine dispatch, and the child generation a receipt
+// was delivered against. Existing rows receive the empty default for both;
+// an existing receipt with an empty child_generation is treated by
+// ListStuckParents' third OR arm as not matching any non-empty generation,
+// so it is re-admitted once on the next tick after upgrade rather than
+// silently trusted as current.
 func (r *Repository) migrateParentWakeReceiptColumns() {
-	r.migrate.Apply(
+	// Apply's errors are swallowed by design (see db.MigrateLogger.Apply) and
+	// surface instead through r.migrate.Err(), which runMigrations checks
+	// once after every migration step — explicitly discarded here rather
+	// than left unchecked, matching that contract for errcheck.
+	_ = r.migrate.Apply(
 		"parent_child_wake_receipts.delivery_operation_id",
 		`ALTER TABLE parent_child_wake_receipts
 		 ADD COLUMN delivery_operation_id TEXT NOT NULL DEFAULT ''`,
 	)
+	_ = r.migrate.Apply(
+		"parent_child_wake_receipts.child_generation",
+		`ALTER TABLE parent_child_wake_receipts
+		 ADD COLUMN child_generation TEXT NOT NULL DEFAULT ''`,
+	)
+}
+
+// migrateWakeWaveColumns adds the completion-wave identity columns for
+// databases created before parent-wake-wave-identity. No backfill: existing
+// rows keep the empty defaults, stay outside the partial unique index, and
+// are judged by the parent-scoped compatibility clause ListStuckParents
+// still applies to a parent with no keyed run at all.
+//
+// Apply's errors are swallowed by design (see db.MigrateLogger.Apply) and
+// surface instead through r.migrate.Err(), which runMigrations checks once
+// after every migration step — explicitly discarded here rather than left
+// unchecked, matching that contract for errcheck.
+func (r *Repository) migrateWakeWaveColumns() {
+	_ = r.migrate.Apply("runs.wake_wave_key",
+		`ALTER TABLE runs ADD COLUMN wake_wave_key TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("runs.wake_wave_string",
+		`ALTER TABLE runs ADD COLUMN wake_wave_string TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("idx_run_wake_wave",
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_run_wake_wave
+			ON runs(wake_wave_key, agent_profile_id) WHERE wake_wave_key <> ''`)
 }
 
 // migrateProviderRouting creates the office_workspace_routing,
@@ -311,6 +650,9 @@ func (r *Repository) migrateFailureColumns() error {
 	}
 	if _, err := r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_office_agent_pause_recoveries_agent ON office_agent_pause_recoveries(agent_id)`); err != nil {
 		return fmt.Errorf("idx_office_agent_pause_recoveries_agent: %w", err)
+	}
+	if _, err := r.db.Exec(`CREATE INDEX IF NOT EXISTS idx_office_agent_pause_recoveries_failed_run ON office_agent_pause_recoveries(failed_run_id)`); err != nil {
+		return fmt.Errorf("idx_office_agent_pause_recoveries_failed_run: %w", err)
 	}
 	return nil
 }
@@ -567,6 +909,8 @@ func (r *Repository) runTaskPriorityRecreate() error {
 		{"external_id", `ALTER TABLE tasks ADD COLUMN external_id TEXT COLLATE BINARY`},
 		{"external_id_settled_at", `ALTER TABLE tasks ADD COLUMN external_id_settled_at TIMESTAMP`},
 		{"assignee_user_id", `ALTER TABLE tasks ADD COLUMN assignee_user_id TEXT NOT NULL DEFAULT ''`},
+		{"assignment_generation", `ALTER TABLE tasks ADD COLUMN assignment_generation INTEGER NOT NULL DEFAULT 0`},
+		{"workflow_agent_overrides", `ALTER TABLE tasks ADD COLUMN workflow_agent_overrides TEXT`},
 	}
 	for _, column := range legacyColumns {
 		if _, err := conn.ExecContext(ctx, column.stmt); err != nil && !db.IsDuplicateColumnError(err) {
@@ -603,6 +947,7 @@ func taskPriorityMigrationStatements() []string {
 			workspace_id TEXT NOT NULL DEFAULT '',
 			workflow_id TEXT NOT NULL DEFAULT '',
 			workflow_step_id TEXT NOT NULL DEFAULT '',
+			workflow_agent_overrides TEXT,
 			title TEXT NOT NULL,
 			description TEXT DEFAULT '',
 			state TEXT DEFAULT 'TODO',
@@ -629,7 +974,8 @@ func taskPriorityMigrationStatements() []string {
 			checkout_run_id TEXT,
 			external_id TEXT COLLATE BINARY,
 			external_id_settled_at TIMESTAMP,
-			assignee_user_id TEXT NOT NULL DEFAULT ''
+			assignee_user_id TEXT NOT NULL DEFAULT '',
+			assignment_generation INTEGER NOT NULL DEFAULT 0
 		)`,
 		// archived_by_cascade_id and external_id/external_id_settled_at are
 		// added to the task schema by task/repository/sqlite/base.go
@@ -643,16 +989,16 @@ func taskPriorityMigrationStatements() []string {
 		// recreate dance. external_id is not COALESCEd — NULL is its
 		// meaningful "no identity" state.
 		`INSERT INTO tasks_priority_new (
-			id, workspace_id, workflow_id, workflow_step_id, title, description,
+			id, workspace_id, workflow_id, workflow_step_id, workflow_agent_overrides, title, description,
 			state, priority, position, wip_admitted, queued_for_step_id, queued_at, metadata, is_ephemeral, parent_id, autopilot_enabled,
 			archived_at, archived_by_cascade_id, created_at, updated_at,
 			origin, project_id,
 			labels, identifier,
 			checkout_agent_id, checkout_at, checkout_run_id,
-			external_id, external_id_settled_at, assignee_user_id
+			external_id, external_id_settled_at, assignee_user_id, assignment_generation
 		) SELECT
 			id, COALESCE(workspace_id,''), COALESCE(workflow_id,''),
-			COALESCE(workflow_step_id,''), title, COALESCE(description,''),
+			COALESCE(workflow_step_id,''), workflow_agent_overrides, title, COALESCE(description,''),
 			COALESCE(state,'TODO'), 'medium', COALESCE(position,0),
 			COALESCE(wip_admitted,1), COALESCE(queued_for_step_id,''), queued_at,
 			COALESCE(metadata,'{}'), COALESCE(is_ephemeral,0),
@@ -664,7 +1010,7 @@ func taskPriorityMigrationStatements() []string {
 			COALESCE(labels,'[]'), identifier,
 			checkout_agent_id, checkout_at, checkout_run_id,
 			external_id, external_id_settled_at,
-			COALESCE(assignee_user_id,'')
+			COALESCE(assignee_user_id,''), COALESCE(assignment_generation,0)
 		FROM tasks`,
 		`DROP TABLE tasks`,
 		`ALTER TABLE tasks_priority_new RENAME TO tasks`,

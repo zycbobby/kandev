@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { getQueueStatus } from "@/lib/api/domains/queue-api";
 import type { QueueSessionIdentity } from "@/lib/api/domains/queue-api";
 import type {
@@ -54,14 +54,30 @@ export function useQueueRefetch(
   setQueueEntries: SetQueueEntries,
   beginQueueOperation: BeginQueueOperation,
   finishQueueOperation: FinishQueueOperation,
+  enabled = true,
 ) {
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const refetchVersion = useRef<Record<string, number>>({});
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  useEffect(() => {
+    if (enabled) return;
+    for (const sessionId of Object.keys(refetchVersion.current)) {
+      refetchVersion.current[sessionId] = (refetchVersion.current[sessionId] ?? 0) + 1;
+    }
+  }, [enabled]);
   const invalidate = useCallback((sessionId: string) => {
     refetchVersion.current[sessionId] = (refetchVersion.current[sessionId] ?? 0) + 1;
   }, []);
   const refetch = useCallback<QueueRefetch>(
     async (sessionId, callerToken) => {
-      if (!identity || identity.session_id !== sessionId) return;
+      if (!enabled || !mountedRef.current || !identity || identity.session_id !== sessionId) return;
       const token =
         callerToken ?? beginQueueOperation(identity.session_id, identity.session_incarnation_id);
       if (!token) return;
@@ -70,7 +86,7 @@ export function useQueueRefetch(
       refetchVersion.current[sessionId] = version;
       try {
         const status = await getQueueStatus(identity);
-        if (refetchVersion.current[sessionId] !== version) return;
+        if (!enabledRef.current || refetchVersion.current[sessionId] !== version) return;
         if (!queueStatusMatchesIdentity(status, identity)) return;
         setQueueEntries(sessionId, status.entries ?? [], queueStatusMeta(status), {
           establishStatusEpoch: true,
@@ -79,7 +95,7 @@ export function useQueueRefetch(
         if (ownsToken) finishQueueOperation(sessionId, token);
       }
     },
-    [beginQueueOperation, finishQueueOperation, identity, setQueueEntries],
+    [beginQueueOperation, enabled, finishQueueOperation, identity, setQueueEntries],
   );
   return { refetch, invalidate };
 }

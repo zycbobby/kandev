@@ -2,7 +2,7 @@
 status: active
 system: agents
 created: 2026-07-27
-updated: 2026-09-08
+updated: 2026-09-21
 owners:
   - Kandev
 ---
@@ -24,7 +24,7 @@ Preserve the observable behavior documented for Agent Resume and Runtime Recover
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.2:** The stored token is cleared only when the user explicitly chooses **Start fresh**, or is replaced after the agent successfully creates a new provider-native session.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.3:** An authorized resume moves the task session to `STARTING` under the existing per-session resume lock before request assembly reaches scoped GitHub credential issuance. This makes the session eligible for a lease without weakening the credential broker's terminal-session rejection.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.4:** A successful resume persists the non-secret Git credential routing snapshot while the session is still guarded `STARTING`, so the task detail view does not retain an earlier workspace/executor credential policy.
-- **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.5:** If request assembly, credential issuance, or launch fails after that early transition, Kandev restores the prior recoverable session state unless another terminal transition won the race.
+- **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.5:** If request assembly, credential issuance, or launch fails after that early transition, Kandev restores a prior non-active recoverable state only when it still owns the `STARTING` state. A prior `RUNNING` or `STARTING` state becomes `FAILED` because the relaunch did not recover a live agent, but any concurrent state transition wins and is never overwritten by rollback.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.6:** A completed turn remains represented by the task's review state while its persisted response and session lifecycle state settle. After a backend restart and automatic resume, the prior transcript remains visible and the task returns to the Turn Finished review bucket once the session is again `WAITING_FOR_INPUT`; it does not settle in Backlog or Running.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.7:** The explicit managed-runtime update path may invalidate only the deterministic `_npx` execution directory for the selected built-in package after an initial update failure, then retry once and run the normal ACP capability probe.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-001.8:** **GIVEN** a valid OpenCode resume token, **WHEN** the OpenCode child exits before answering ACP `initialize`, **THEN** Kandev shows the normal recovery action and retains the same token for the next Resume attempt.
@@ -45,6 +45,9 @@ Preserve the observable behavior documented for Agent Resume and Runtime Recover
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-002.7:** When task navigation changes the active task while an automatic session-status or recovery request is in flight, the task view ignores the result owned by the prior task-session identity. An error from the prior identity does not appear on the newly selected task. Each navigation cycle invalidates prior attempts even when the task-session pair later repeats.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-002.8:** When automatic recovery fails, the default view shall show a short localized summary and applicable recovery actions. An expandable details control shall retain each failure cause with its operation label. Technical identifiers and nested transport errors shall not appear in the collapsed summary.
 - **AC-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-002.9:** On desktop and mobile, users shall be able to expand recovery details, read both failure causes, and retry using keyboard or touch. Details shall wrap without horizontal page overflow. Retry shall remain disabled during the request.
+
+Additional workspace admission and single-card behavior are defined in
+[Session recovery failures](session-recovery-failures.md).
 
 ### REQ-AGENTS-AGENT-RESUME-RUNTIME-RECOVERY-004: Recovery across task archive transitions
 

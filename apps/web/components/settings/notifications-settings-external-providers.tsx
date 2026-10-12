@@ -6,11 +6,12 @@ import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@kandev/ui/button";
 import { Input } from "@kandev/ui/input";
 import { Textarea } from "@kandev/ui/textarea";
-import { SettingsTarget } from "@/components/settings/settings-target";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { type AppriseFormMode } from "@/components/settings/notifications-settings-actions";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@kandev/ui/tooltip";
 import type { NotificationProvider } from "@/lib/types/http";
 import { GENERAL_SETTINGS_TARGETS } from "@/lib/settings-discovery/catalog/preferences";
+import { controlSizingClassName } from "@kandev/ui/control-sizing";
 
 function AppriseProviderCardActions({
   provider,
@@ -32,7 +33,7 @@ function AppriseProviderCardActions({
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8 cursor-pointer"
+              className="cursor-pointer"
               aria-label={t("settings:sendTestNotificationFor", { name: provider.name })}
               onClick={() => void onTestProvider(provider.id)}
             >
@@ -202,7 +203,7 @@ function AppriseRescanControls({
     <div className="flex min-w-0 flex-col items-start gap-1 md:items-end">
       <Button
         variant="outline"
-        className="min-h-11 cursor-pointer md:min-h-9 [@media(pointer:coarse)]:min-h-11"
+        className={controlSizingClassName("standard", "cursor-pointer")}
         data-testid="apprise-rescan"
         disabled={
           !notificationProvidersLoaded || notificationProvidersLoading || appriseRescanPending
@@ -335,14 +336,15 @@ function AppriseProviderSectionBody({
 export function ExternalProvidersSection(props: ExternalProvidersSectionProps) {
   const { t } = useTranslation();
   return (
-    <SettingsTarget targetId={GENERAL_SETTINGS_TARGETS.notificationProviders} className="space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div className="min-w-0">
-          <div className="text-sm font-medium">{t("settings:externalProviders")}</div>
-          <p className="text-xs text-muted-foreground" data-testid="external-providers-description">
-            {t("settings:externalProvidersDescription")}
-          </p>
-        </div>
+    <SettingsGroup
+      title={t("settings:externalProviders")}
+      description={
+        <span data-testid="external-providers-description">
+          {t("settings:externalProvidersDescription")}
+        </span>
+      }
+      discoveryTargetId={GENERAL_SETTINGS_TARGETS.notificationProviders}
+      action={
         <AppriseRescanControls
           notificationProvidersLoaded={props.notificationProvidersLoaded}
           notificationProvidersLoading={props.notificationProvidersLoading}
@@ -351,9 +353,10 @@ export function ExternalProvidersSection(props: ExternalProvidersSectionProps) {
           appriseRescanResult={props.appriseRescanResult}
           onRescanApprise={props.onRescanApprise}
         />
-      </div>
+      }
+    >
       <AppriseProviderSectionBody {...props} />
-    </SettingsTarget>
+    </SettingsGroup>
   );
 }
 

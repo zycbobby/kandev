@@ -1,10 +1,14 @@
+/* eslint-disable max-lines -- session resumption coordinates one guarded lifecycle. */
+
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  isWebSocketRequestTimeoutError,
+  SESSION_ENTRY_REQUEST_TIMEOUT_MS,
+  SESSION_ENTRY_RETRY_DELAY_MS,
+} from "@/lib/ws/client";
 import { getWebSocketClient } from "@/lib/ws/connection";
 import { launchSession } from "@/lib/services/session-launch-service";
-import {
-  buildResumeRequest,
-  buildRestoreWorkspaceRequest,
-} from "@/lib/services/session-launch-helpers";
+import { buildRestoreWorkspaceRequest } from "@/lib/services/session-launch-helpers";
 import { useSessionRecoveryFeedback } from "./use-session-recovery-feedback";
 import {
   clearArchiveRecovery,
@@ -20,6 +24,7 @@ import type {
   ResumeStateSetter,
   SessionLike,
   SessionRecoveryFailure,
+  SessionRecoveryNoticeKind,
   SessionStatus,
   TaskArchiveState,
 } from "./use-session-resumption-operations";
@@ -28,6 +33,12 @@ import {
   isCurrentRequest,
   type SessionRequestIdentity,
 } from "./use-session-resumption-request-guard";
+import {
+  recoveryInspectionBusyDetails,
+  recoveryInspectionBusyMessage,
+  resolveRequestErrorMessage,
+  resumeSession as requestSessionResume,
+} from "@/lib/services/session-recovery-service";
 import { useAppStore, useAppStoreApi } from "@/components/state-provider";
 import {
   sessionId as toSessionId,
@@ -35,6 +46,10 @@ import {
   type TaskSessionState,
 } from "@/lib/types/http";
 import { t } from "@/lib/i18n";
+import {
+  useWorkspaceRestoration,
+  type WorkspaceRestorationResult,
+} from "./use-workspace-restoration";
 
 export type {
   ResumptionState,
@@ -42,10 +57,15 @@ export type {
   ResumeStartingProjection,
   SessionLike,
   SessionRecoveryFailure,
+  SessionRecoveryNoticeKind,
   SessionStatus,
   TaskArchiveState,
 } from "./use-session-resumption-operations";
-export { markSessionStarting, resumeWithSilentFallback } from "./use-session-resumption-operations";
+export {
+  decideResumeAction,
+  markSessionStarting,
+  resumeWithSilentFallback,
+} from "./use-session-resumption-operations";
 type CheckAndResumeParams = {
   taskId: string;
   sessionId: string;
@@ -59,6 +79,65 @@ type CheckAndResumeParams = {
 };
 
 const TERMINAL_STATES = new Set<TaskSessionState>(["FAILED", "CANCELLED", "COMPLETED"]);
+const MAX_SESSION_STATUS_ATTEMPTS = 2;
+
+function sessionStatusFailure(
+  error: unknown,
+): Extract<SessionRecoveryFailure, { outcome: "status_unavailable" }> {
+  return {
+    outcome: "status_unavailable",
+    kind: isWebSocketRequestTimeoutError(error) ? "timeout" : "request",
+    statusError: error instanceof Error && error.message ? error.message : t("common:unknownError"),
+  };
+}
+
+function clearResumptionNotice(setters: ResumeStateSetter): void {
+  setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
+}
+
+function clearResumptionNoticeUnlessInspectionBusy(
+  setters: ResumeStateSetter,
+  noticeKind: SessionRecoveryNoticeKind | null,
+): void {
+  if (noticeKind === "inspection_busy") return;
+  clearResumptionNotice(setters);
+}
+
+function useResumptionAttemptState() {
+  const [resumptionState, setResumptionStateRaw] = useState<ResumptionState>("idle");
+  const recoveryAttemptIdRef = useRef(0);
+  const recoveryAttemptActiveRef = useRef(false);
+  const setResumptionState = useCallback((nextState: ResumptionState) => {
+    const startsRecoveryAttempt = nextState === "checking" || nextState === "resuming";
+    if (startsRecoveryAttempt) {
+      if (!recoveryAttemptActiveRef.current) {
+        recoveryAttemptIdRef.current += 1;
+        recoveryAttemptActiveRef.current = true;
+      }
+    } else {
+      recoveryAttemptActiveRef.current = false;
+    }
+    setResumptionStateRaw(nextState);
+  }, []);
+  return { resumptionState, recoveryAttemptIdRef, setResumptionState };
+}
+
+/** Apply permanent outcomes returned inside an otherwise successful status response. */
+function applyStatusResponseOutcome(status: SessionStatus, setters: ResumeStateSetter): boolean {
+  if (status.error) {
+    setters.setRecoveryFailure?.(null);
+    setters.setResumptionState("error");
+    setters.setError(status.error);
+    clearResumptionNotice(setters);
+    return true;
+  }
+  if (status.resume_reason === TASK_ARCHIVED_KIND) {
+    clearArchiveRecovery(setters);
+    return true;
+  }
+  return false;
+}
 
 type LiveSessionLike = (SessionLike & { state?: string }) | null;
 
@@ -129,6 +208,42 @@ type RefreshSessionStatusParams = {
   canContinue: () => boolean;
 };
 
+function waitForSessionStatusRetry(canContinue: () => boolean): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(canContinue()), SESSION_ENTRY_RETRY_DELAY_MS);
+    if (!canContinue()) {
+      window.clearTimeout(timer);
+      resolve(false);
+    }
+  });
+}
+
+async function requestSessionStatusWithRetry({
+  client,
+  taskId,
+  sessionId,
+  canContinue,
+}: Omit<
+  RefreshSessionStatusParams,
+  "session" | "setSessionStatus" | "setters"
+>): Promise<SessionStatus | null> {
+  for (let attempt = 0; attempt < MAX_SESSION_STATUS_ATTEMPTS; attempt += 1) {
+    if (!canContinue()) return null;
+    try {
+      return await client.request<SessionStatus>(
+        "task.session.status",
+        { task_id: taskId, session_id: sessionId },
+        SESSION_ENTRY_REQUEST_TIMEOUT_MS,
+      );
+    } catch (error) {
+      const canRetry =
+        isWebSocketRequestTimeoutError(error) && attempt + 1 < MAX_SESSION_STATUS_ATTEMPTS;
+      if (!canRetry || !(await waitForSessionStatusRetry(canContinue))) throw error;
+    }
+  }
+  return null;
+}
+
 async function refreshSessionStatus({
   client,
   taskId,
@@ -137,14 +252,17 @@ async function refreshSessionStatus({
   setSessionStatus,
   setters,
   canContinue,
-}: RefreshSessionStatusParams): Promise<void> {
-  if (!canContinue()) return;
+}: RefreshSessionStatusParams): Promise<SessionStatus | null> {
+  if (!canContinue()) return null;
   try {
-    const status = await client.request<SessionStatus>("task.session.status", {
-      task_id: taskId,
-      session_id: sessionId,
+    const status = await requestSessionStatusWithRetry({
+      client,
+      taskId,
+      sessionId,
+      canContinue,
     });
-    if (!canContinue()) return;
+    if (!status || !canContinue()) return null;
+    if (applyStatusResponseOutcome(status, setters)) return null;
     setSessionStatus(status);
     applyStatusToState(status, taskId, sessionId, session, setters);
     // A status response confirming the agent is running must clear any
@@ -156,8 +274,17 @@ async function refreshSessionStatus({
     if (status.is_agent_running && setters.setAgentctlReady) {
       setters.setAgentctlReady(sessionId);
     }
+    return status;
   } catch (err) {
-    console.error("[refreshSessionStatus] failed to refresh session status", { sessionId, err });
+    if (isTaskArchivedConflict(err) || !canContinue()) {
+      clearArchiveRecovery(setters);
+      return null;
+    }
+    setters.setResumptionState("error");
+    setters.setError(null);
+    clearResumptionNotice(setters);
+    setters.setRecoveryFailure?.(sessionStatusFailure(err));
+    return null;
   }
 }
 
@@ -170,6 +297,39 @@ function recordResumeSkipIfStopped(setters: ResumeStateSetter, sessionId: string
   const liveState = setters.getLiveSession?.(sessionId)?.state;
   if (liveState !== "STARTING" && liveState !== "RUNNING") {
     setters.setResumeSkipped?.(sessionId, true);
+  }
+}
+
+function isSettledLiveSession(status: SessionStatus): boolean {
+  return (
+    status.is_agent_running &&
+    (status.state === "WAITING_FOR_INPUT" ||
+      status.state === "IDLE" ||
+      status.state === "COMPLETED")
+  );
+}
+
+function sendSessionFocus(
+  client: ReturnType<typeof getWebSocketClient>,
+  taskId: string,
+  sessionId: string,
+): void {
+  if (!client) return;
+  try {
+    void Promise.resolve(
+      client.request(
+        "session.launch",
+        {
+          task_id: taskId,
+          session_id: sessionId,
+          intent: "resume",
+          activation_source: "session_focus",
+        },
+        SESSION_ENTRY_REQUEST_TIMEOUT_MS,
+      ),
+    ).catch(() => undefined);
+  } catch {
+    // Focus is a best-effort signal. It must not replace session recovery UI.
   }
 }
 
@@ -192,6 +352,16 @@ async function performResumeAction({
   preventAutoStart,
   canContinue,
 }: ResumeActionParams): Promise<boolean> {
+  if (status.is_idle_suspended && !status.is_agent_running) {
+    if (status.auto_resume_allowed === false || document.visibilityState !== "visible") {
+      setters.setResumptionState("idle");
+      return false;
+    }
+    return resumeWithSilentFallback(taskId, sessionId, session, setters, {
+      canContinue,
+      activationSource: "session_focus",
+    });
+  }
   switch (decideResumeAction(status, preventAutoStart)) {
     case "running":
       setters.setResumptionState("running");
@@ -202,7 +372,7 @@ async function performResumeAction({
       setters.setResumptionState("idle");
       return false;
     case "resume":
-      return resumeWithSilentFallback(taskId, sessionId, session, setters, canContinue);
+      return resumeWithSilentFallback(taskId, sessionId, session, setters, { canContinue });
     case "restore":
       return resumeViaLaunch(buildRestoreWorkspaceRequest, {
         taskId,
@@ -236,16 +406,7 @@ async function processResumeStatus({
   preventAutoStart,
   canContinue,
 }: ProcessResumeStatusParams): Promise<boolean> {
-  if (status.error) {
-    setters.setRecoveryFailure?.(null);
-    setters.setResumptionState("error");
-    setters.setError(status.error);
-    return false;
-  }
-  if (status.resume_reason === TASK_ARCHIVED_KIND) {
-    clearArchiveRecovery(setters);
-    return false;
-  }
+  if (applyStatusResponseOutcome(status, setters)) return false;
   applyStatusToState(status, taskId, sessionId, session, setters);
   if (status.is_agent_running && setters.setAgentctlReady) {
     setters.setAgentctlReady(sessionId);
@@ -261,6 +422,7 @@ async function processResumeStatus({
   });
 }
 
+// eslint-disable-next-line complexity -- status, restore, archive, and stale-request outcomes share one guarded transition.
 async function checkAndResume({
   taskId,
   sessionId,
@@ -277,13 +439,31 @@ async function checkAndResume({
   setters.setResumptionState("checking");
   setters.setError(null);
   setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
   setters.setRecoveryFailure?.(null);
+  let status: SessionStatus | null;
   try {
-    const status = await client.request<SessionStatus>("task.session.status", {
-      task_id: taskId,
-      session_id: sessionId,
+    status = await requestSessionStatusWithRetry({
+      client,
+      taskId,
+      sessionId,
+      canContinue,
     });
-    if (!canContinue()) return;
+  } catch (err) {
+    if (isTaskArchivedConflict(err) || !canContinue()) {
+      clearArchiveRecovery(setters);
+      return;
+    }
+    setters.setResumptionState("error");
+    setters.setError(null);
+    setters.setNotice?.(null);
+    setters.setNoticeKind?.(null);
+    setters.setRecoveryFailure?.(sessionStatusFailure(err));
+    return;
+  }
+  if (!status || !canContinue()) return;
+  if (applyStatusResponseOutcome(status, setters)) return;
+  try {
     setSessionStatus(status);
     const resumed = await processResumeStatus({
       status,
@@ -305,28 +485,42 @@ async function checkAndResume({
         canContinue,
       });
     }
+    if (
+      !status.is_idle_suspended &&
+      isSettledLiveSession(status) &&
+      document.visibilityState === "visible" &&
+      canContinue()
+    ) {
+      sendSessionFocus(client, taskId, sessionId);
+    }
   } catch (err) {
     if (isTaskArchivedConflict(err) || !canContinue()) {
       clearArchiveRecovery(setters);
       return;
     }
     setters.setResumptionState("error");
+    setters.setRecoveryFailure?.(null);
     setters.setError(err instanceof Error ? err.message : t("common:unknownError"));
     setters.setNotice?.(null);
-    setters.setRecoveryFailure?.(null);
+    setters.setNoticeKind?.(null);
   }
 }
 
 interface UseSessionResumptionReturn {
+  requestIdentity: import("@/lib/session-recovery-presentation").SessionRecoveryOwner["requestIdentity"];
   resumptionState: ResumptionState;
   sessionStatus: SessionStatus | null;
   error: string | null;
   notice: string | null;
+  noticeKind: SessionRecoveryNoticeKind | null;
   recoveryFailure: SessionRecoveryFailure | null;
+  recoveryAttemptId: number;
   taskSessionState: TaskSessionState | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   resumeSession: () => Promise<boolean>;
+  retrySessionStatus: () => Promise<void>;
+  workspaceRestoration: WorkspaceRestorationResult;
 }
 
 /**
@@ -335,9 +529,11 @@ interface UseSessionResumptionReturn {
  * and automatically resumes if needed.
  */
 type SessionResetAndCheckResult = {
+  committedRequest: SessionRequestIdentity;
   sessionStatus: SessionStatus | null;
   captureRequest: () => SessionRequestIdentity;
   buildGuardedSettersFor: (capturedRequest: SessionRequestIdentity) => ResumeStateSetter;
+  retryStatus: () => Promise<void>;
 };
 
 type ResetAndCheckParams = {
@@ -347,7 +543,9 @@ type ResetAndCheckParams = {
   session: SessionLike;
   setters: ResumeStateSetter;
   preventAutoStart: boolean;
+  preventAutoResume?: boolean;
   taskArchiveState: TaskArchiveState;
+  skipAutomaticRecovery: boolean;
 };
 
 const getSessionRequestKey = (
@@ -357,6 +555,7 @@ const getSessionRequestKey = (
 ) => JSON.stringify([taskId, sessionId, taskArchiveState]);
 
 /** Extracted effects: reset state on session/task change, auto-check/resume, and remote retry. */
+// eslint-disable-next-line max-lines-per-function -- one hook owns the request identity and lifecycle effects.
 function useSessionResetAndCheck({
   taskId,
   sessionId,
@@ -364,7 +563,9 @@ function useSessionResetAndCheck({
   session,
   setters,
   preventAutoStart,
+  preventAutoResume,
   taskArchiveState,
+  skipAutomaticRecovery,
 }: ResetAndCheckParams): SessionResetAndCheckResult {
   const requestKey = getSessionRequestKey(taskId, sessionId, taskArchiveState);
   const [sessionStatusState, setSessionStatus] = useState<{
@@ -376,7 +577,14 @@ function useSessionResetAndCheck({
   const hasAttemptedResume = useRef(false);
   const remoteStatusRetryCount = useRef(0);
   const requestGenerationRef = useRef(0);
-  const activeRequestRef = useRef<SessionRequestIdentity>({ key: requestKey, generation: 0 });
+  const startupRecoveryInFlightRef = useRef(new Map<string, Promise<void>>());
+  const focusRequestInFlightRef = useRef(false);
+  const lastFocusRequestAtRef = useRef(0);
+  const [committedRequest, setCommittedRequest] = useState<SessionRequestIdentity>({
+    key: requestKey,
+    generation: 0,
+  });
+  const activeRequestRef = useRef<SessionRequestIdentity>(committedRequest);
 
   // Publish the new identity during commit so callbacks from the previous
   // request are rejected before passive effects or queued promise handlers run.
@@ -386,7 +594,8 @@ function useSessionResetAndCheck({
       key: requestKey,
       generation: requestGenerationRef.current,
     };
-  }, [requestKey]);
+    setCommittedRequest(activeRequestRef.current);
+  }, [requestKey, preventAutoResume]);
 
   // Reset all local state when session or task changes to prevent stale data
   // from a previous session leaking into the new one (e.g. topbar branch).
@@ -396,18 +605,21 @@ function useSessionResetAndCheck({
     setters.setResumptionState("idle");
     setters.setError(null);
     setters.setNotice?.(null);
+    setters.setNoticeKind?.(null);
     setters.setRecoveryFailure?.(null);
     setters.setWorktreePath(null);
     setters.setWorktreeBranch(null);
-  }, [sessionId, taskId, taskArchiveState]); // eslint-disable-line react-hooks/exhaustive-deps -- intentional reset on dep change
+  }, [sessionId, taskId, taskArchiveState, preventAutoResume]); // eslint-disable-line react-hooks/exhaustive-deps -- intentional reset on dep change
 
   // Check session status and auto-resume if needed
   useEffect(() => {
     if (
+      skipAutomaticRecovery ||
       !taskId ||
       !sessionId ||
       connectionStatus !== "connected" ||
       taskArchiveState !== false ||
+      preventAutoResume ||
       hasAttemptedResume.current
     )
       return;
@@ -415,7 +627,8 @@ function useSessionResetAndCheck({
     const capturedRequest = activeRequestRef.current;
     const guardedSetters = buildGuardedSetters(activeRequestRef, capturedRequest, setters);
     const canContinue = () => isCurrentRequest(activeRequestRef.current, capturedRequest);
-    checkAndResume({
+    const recoveryKey = JSON.stringify([capturedRequest.key, capturedRequest.generation]);
+    const promise = checkAndResume({
       taskId,
       sessionId,
       session,
@@ -429,12 +642,118 @@ function useSessionResetAndCheck({
       },
       setters: guardedSetters,
     });
-  }, [taskId, sessionId, connectionStatus, session, preventAutoStart, taskArchiveState]); // eslint-disable-line react-hooks/exhaustive-deps
+    startupRecoveryInFlightRef.current.set(recoveryKey, promise);
+    const clearIfCurrent = () => {
+      if (startupRecoveryInFlightRef.current.get(recoveryKey) === promise) {
+        startupRecoveryInFlightRef.current.delete(recoveryKey);
+      }
+    };
+    void promise.then(clearIfCurrent, clearIfCurrent);
+  }, [
+    taskId,
+    sessionId,
+    connectionStatus,
+    session,
+    preventAutoStart,
+    preventAutoResume,
+    taskArchiveState,
+    skipAutomaticRecovery,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (
+      !taskId ||
+      !sessionId ||
+      connectionStatus !== "connected" ||
+      taskArchiveState !== false ||
+      preventAutoResume
+    ) {
+      return;
+    }
+    const capturedRequest = activeRequestRef.current;
+    const guardedSetters = buildGuardedSetters(activeRequestRef, capturedRequest, setters);
+    const canContinue = () => isCurrentRequest(activeRequestRef.current, capturedRequest);
+    const handleVisibleFocus = async () => {
+      if (
+        document.visibilityState !== "visible" ||
+        focusRequestInFlightRef.current ||
+        !canContinue()
+      ) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastFocusRequestAtRef.current < 500) return;
+      lastFocusRequestAtRef.current = now;
+      focusRequestInFlightRef.current = true;
+      try {
+        const recoveryKey = JSON.stringify([capturedRequest.key, capturedRequest.generation]);
+        const startupRecovery = startupRecoveryInFlightRef.current.get(recoveryKey);
+        if (startupRecovery) {
+          await startupRecovery;
+          return;
+        }
+        const client = getWebSocketClient();
+        if (!client) return;
+        const status = await requestSessionStatusWithRetry({
+          client,
+          taskId,
+          sessionId,
+          canContinue,
+        });
+        if (!status || !canContinue() || applyStatusResponseOutcome(status, guardedSetters)) return;
+        setSessionStatus({ requestKey: capturedRequest.key, status });
+        applyStatusToState(status, taskId, sessionId, session, guardedSetters);
+        if (status.is_idle_suspended) {
+          await performResumeAction({
+            status,
+            taskId,
+            sessionId,
+            session,
+            setters: guardedSetters,
+            preventAutoStart,
+            canContinue,
+          });
+          return;
+        }
+        if (isSettledLiveSession(status)) sendSessionFocus(client, taskId, sessionId);
+      } catch {
+        // Browser focus is a best-effort recovery signal; explicit retry keeps
+        // using the existing session recovery UI.
+      } finally {
+        focusRequestInFlightRef.current = false;
+      }
+    };
+    const onWindowFocus = () => void handleVisibleFocus();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void handleVisibleFocus();
+    };
+    window.addEventListener("focus", onWindowFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", onWindowFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    connectionStatus,
+    preventAutoStart,
+    preventAutoResume,
+    session,
+    sessionId,
+    setters,
+    taskArchiveState,
+    taskId,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Freshly created remote sessions may return status before runtime metadata is available.
   // Retry a few times so topbar/tooltips can show remote details without manual refresh.
   useEffect(() => {
-    if (!taskId || !sessionId || connectionStatus !== "connected" || taskArchiveState !== false)
+    if (
+      skipAutomaticRecovery ||
+      !taskId ||
+      !sessionId ||
+      connectionStatus !== "connected" ||
+      taskArchiveState !== false
+    )
       return;
     if (!sessionStatus?.is_remote_executor) return;
     if (sessionStatus.remote_checked_at || sessionStatus.remote_status_error) return;
@@ -447,10 +766,14 @@ function useSessionResetAndCheck({
       if (!client) return;
       remoteStatusRetryCount.current += 1;
       try {
-        const nextStatus = await client.request<SessionStatus>("task.session.status", {
-          task_id: taskId,
-          session_id: sessionId,
-        });
+        const nextStatus = await client.request<SessionStatus>(
+          "task.session.status",
+          {
+            task_id: taskId,
+            session_id: sessionId,
+          },
+          SESSION_ENTRY_REQUEST_TIMEOUT_MS,
+        );
         if (isCurrentRequest(activeRequestRef.current, capturedRequest)) {
           setSessionStatus({ requestKey: capturedRequest.key, status: nextStatus });
         }
@@ -460,33 +783,92 @@ function useSessionResetAndCheck({
     }, 1500);
 
     return () => window.clearTimeout(timer);
-  }, [taskId, sessionId, connectionStatus, sessionStatus, taskArchiveState]);
+  }, [taskId, sessionId, connectionStatus, sessionStatus, taskArchiveState, skipAutomaticRecovery]);
+
+  const retryStatus = useCallback(async () => {
+    if (!taskId || !sessionId || connectionStatus !== "connected" || taskArchiveState !== false) {
+      return;
+    }
+    const capturedRequest = activeRequestRef.current;
+    const guardedSetters = buildGuardedSetters(activeRequestRef, capturedRequest, setters);
+    const canContinue = () => isCurrentRequest(activeRequestRef.current, capturedRequest);
+    guardedSetters.setResumptionState("checking");
+    guardedSetters.setError(null);
+    clearResumptionNotice(guardedSetters);
+    guardedSetters.setRecoveryFailure?.(null);
+    const client = getWebSocketClient();
+    if (!client) return;
+    const status = await refreshSessionStatus({
+      client,
+      taskId,
+      sessionId,
+      session,
+      setSessionStatus: (nextStatus) => {
+        if (canContinue()) {
+          setSessionStatus({ requestKey: capturedRequest.key, status: nextStatus });
+        }
+      },
+      setters: guardedSetters,
+      canContinue,
+    });
+    if (!status || !canContinue()) return;
+    guardedSetters.setError(null);
+    clearResumptionNotice(guardedSetters);
+    guardedSetters.setRecoveryFailure?.(null);
+    guardedSetters.setResumptionState(
+      status.is_agent_running || status.state === "RUNNING" ? "running" : "idle",
+    );
+  }, [connectionStatus, session, sessionId, setters, taskArchiveState, taskId]);
 
   return {
     sessionStatus,
+    committedRequest,
     captureRequest: () => activeRequestRef.current,
     buildGuardedSettersFor: (capturedRequest) =>
       buildGuardedSetters(activeRequestRef, capturedRequest, setters),
+    retryStatus,
   };
 }
 
 type ManualResumeResponse = Awaited<ReturnType<typeof launchSession>>;
 
-function applyManualResumeResponse(
+function isManualResumeWaitingResponse(response: ManualResumeResponse): boolean {
+  return (
+    response.activation_disposition === "queued" || response.activation_disposition === "suppressed"
+  );
+}
+
+function applyManualResumeFailure(
+  response: ManualResumeResponse,
+  setters: ResumeStateSetter,
+): false {
+  setters.setResumptionState("error");
+  setters.setRecoveryFailure?.(null);
+  setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
+  setters.setError(response.error ?? t("task:failedToResumeSession"));
+  return false;
+}
+
+function applyManualResumeWaiting(setters: ResumeStateSetter): false {
+  setters.setResumptionState("idle");
+  setters.setRecoveryFailure?.(null);
+  setters.setError(null);
+  setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
+  return false;
+}
+
+function applyManualResumeSuccess(
   response: ManualResumeResponse,
   taskId: string,
   sessionId: string,
   session: SessionLike,
   setters: ResumeStateSetter,
-): boolean {
-  if (!response.success) {
-    setters.setResumptionState("error");
-    setters.setRecoveryFailure?.(null);
-    setters.setError(response.error ?? t("task:failedToResumeSession"));
-    return false;
-  }
+): true {
   setters.setResumptionState("resumed");
   setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
   if (response.state) {
     setters.setTaskSession({
       id: toSessionId(sessionId),
@@ -504,6 +886,18 @@ function applyManualResumeResponse(
   return true;
 }
 
+function applyManualResumeResponse(
+  response: ManualResumeResponse,
+  taskId: string,
+  sessionId: string,
+  session: SessionLike,
+  setters: ResumeStateSetter,
+): boolean {
+  if (!response.success) return applyManualResumeFailure(response, setters);
+  if (isManualResumeWaitingResponse(response)) return applyManualResumeWaiting(setters);
+  return applyManualResumeSuccess(response, taskId, sessionId, session, setters);
+}
+
 function handleManualResumeError(
   error: unknown,
   setters: ResumeStateSetter,
@@ -516,7 +910,15 @@ function handleManualResumeError(
   if (!canContinue()) return false;
   setters.setResumptionState("error");
   setters.setRecoveryFailure?.(null);
-  setters.setError(error instanceof Error ? error.message : t("common:unknownError"));
+  if (recoveryInspectionBusyDetails(error)) {
+    setters.setError(null);
+    setters.setNotice?.(recoveryInspectionBusyMessage((key) => t(key)));
+    setters.setNoticeKind?.("inspection_busy");
+    return false;
+  }
+  setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
+  setters.setError(resolveRequestErrorMessage(error, t));
   return false;
 }
 
@@ -527,6 +929,7 @@ type ManualResumeParams = {
   session: SessionLike;
   captureRequest: () => SessionRequestIdentity;
   buildGuardedSettersFor: (capturedRequest: SessionRequestIdentity) => ResumeStateSetter;
+  noticeKind: SessionRecoveryNoticeKind | null;
 };
 
 function useManualResumeSession({
@@ -536,6 +939,7 @@ function useManualResumeSession({
   session,
   captureRequest,
   buildGuardedSettersFor,
+  noticeKind,
 }: ManualResumeParams): () => Promise<boolean> {
   return useCallback(async (): Promise<boolean> => {
     if (!taskId || !sessionId || taskArchiveState !== false) return false;
@@ -546,10 +950,14 @@ function useManualResumeSession({
     const startingProjection = markSessionStarting(taskId, sessionId, session, guardedSetters);
     guardedSetters.setResumptionState("resuming");
     guardedSetters.setError(null);
-    guardedSetters.setNotice?.(null);
+    clearResumptionNoticeUnlessInspectionBusy(guardedSetters, noticeKind);
     guardedSetters.setRecoveryFailure?.(null);
     try {
-      const response = await launchSession(buildResumeRequest(taskId, sessionId).request);
+      const response = await requestSessionResume(
+        taskId,
+        sessionId,
+        t("task:failedToResumeSession"),
+      );
       if (!canContinue()) {
         startingProjection?.rollback();
         return false;
@@ -568,11 +976,21 @@ function useManualResumeSession({
       if (!handled) startingProjection?.rollback();
       return handled;
     }
-  }, [taskId, sessionId, taskArchiveState, session, captureRequest, buildGuardedSettersFor]);
+  }, [
+    taskId,
+    sessionId,
+    taskArchiveState,
+    session,
+    captureRequest,
+    buildGuardedSettersFor,
+    noticeKind,
+  ]);
 }
 
 export type SessionResumptionOptions = {
   onTaskArchiveConflict?: () => void;
+  skipAutomaticRecovery?: boolean;
+  preventAutoResume?: boolean;
 };
 
 export function useSessionResumption(
@@ -581,9 +999,10 @@ export function useSessionResumption(
   taskArchiveState: TaskArchiveState = false,
   options: SessionResumptionOptions = {},
 ): UseSessionResumptionReturn {
-  const [resumptionState, setResumptionState] = useState<ResumptionState>("idle");
+  const { resumptionState, recoveryAttemptIdRef, setResumptionState } = useResumptionAttemptState();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeKind, setNoticeKind] = useState<SessionRecoveryNoticeKind | null>(null);
   const [recoveryFailure, setRecoveryFailure] = useState<SessionRecoveryFailure | null>(null);
   const [worktreePath, setWorktreePath] = useState<string | null>(null);
   const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null);
@@ -598,11 +1017,13 @@ export function useSessionResumption(
   const setSessionAgentctlStatus = useAppStore((state) => state.setSessionAgentctlStatus);
   const setResumeSkipped = useAppStore((state) => state.setResumeSkipped);
   const storeApi = useAppStoreApi();
+  const workspaceRestoration = useWorkspaceRestoration(taskId, sessionId);
 
   const setters: ResumeStateSetter = {
     setResumptionState,
     setError,
     setNotice,
+    setNoticeKind,
     setWorktreePath,
     setWorktreeBranch,
     setTaskSession,
@@ -611,20 +1032,31 @@ export function useSessionResumption(
     setResumeSkipped,
     getLiveSession: (sid: string) => storeApi.getState().taskSessions.items[sid] ?? null,
     setRecoveryFailure,
+    workspaceRestoration: workspaceRestoration.callbacks ?? undefined,
     onTaskArchiveConflict: options.onTaskArchiveConflict,
   };
 
-  useSessionRecoveryFeedback(sessionId, session?.state, error, notice, setters);
-
-  const { sessionStatus, captureRequest, buildGuardedSettersFor } = useSessionResetAndCheck({
-    taskId,
+  useSessionRecoveryFeedback({
     sessionId,
-    connectionStatus,
-    session,
+    sessionState: session?.state,
+    error,
+    notice,
+    noticeKind,
     setters,
-    preventAutoStart: preventAutoStartAgentOnOpen,
-    taskArchiveState,
   });
+
+  const { sessionStatus, committedRequest, captureRequest, buildGuardedSettersFor, retryStatus } =
+    useSessionResetAndCheck({
+      taskId,
+      sessionId,
+      connectionStatus,
+      session,
+      setters,
+      preventAutoStart: preventAutoStartAgentOnOpen,
+      preventAutoResume: options.preventAutoResume,
+      taskArchiveState,
+      skipAutomaticRecovery: options.skipAutomaticRecovery ?? false,
+    });
 
   const resumeSession = useManualResumeSession({
     taskId,
@@ -633,17 +1065,33 @@ export function useSessionResumption(
     session,
     captureRequest,
     buildGuardedSettersFor,
+    noticeKind,
   });
 
+  const request = committedRequest;
+  const ownsFeedback = request.key === getSessionRequestKey(taskId, sessionId, taskArchiveState);
   return {
+    requestIdentity:
+      ownsFeedback && taskId && sessionId
+        ? {
+            taskId,
+            sessionId,
+            generation: request.generation,
+            attemptId: recoveryAttemptIdRef.current,
+          }
+        : null,
     resumptionState,
     sessionStatus,
     error,
     notice,
+    noticeKind,
     recoveryFailure,
+    recoveryAttemptId: recoveryAttemptIdRef.current,
     taskSessionState: session?.state ?? null,
     worktreePath,
     worktreeBranch,
     resumeSession,
+    retrySessionStatus: retryStatus,
+    workspaceRestoration,
   };
 }

@@ -2,7 +2,11 @@ import type { BackendMessage } from "./backend-message";
 import type { QueuedMessage } from "@/lib/state/slices/session/types";
 import type { FileChangeNotificationPayload } from "./workspace-files";
 import type { ForegroundActivity } from "./activity";
-import type { TaskPendingAction, TaskPendingActionRevision } from "./http";
+import type {
+  TaskPendingAction,
+  TaskPendingActionRevision,
+  WorkspaceRecoveryProjection,
+} from "./http";
 import type {
   AgentCapabilitiesPayload,
   SessionInfoPayload,
@@ -10,6 +14,7 @@ import type {
   SessionModelSelectionWarningPayload,
   SessionMCPStatusPayload,
   SessionPromptUsagePayload,
+  SessionUsageUpdatedPayload,
   SessionTodosPayload,
 } from "./session-runtime-payloads";
 
@@ -62,6 +67,7 @@ export type TaskSessionStateChangedPayload = {
   downstream_acp_session_id?: string;
   metadata?: Record<string, unknown>;
   session_metadata?: Record<string, unknown>;
+  session_recovery_blocks?: import("./http").SessionRecoveryBlockProjection[];
   is_passthrough?: boolean;
   error_message?: string;
   /** User-supplied session tab label; present (possibly "") on rename broadcasts. */
@@ -110,6 +116,14 @@ export type SessionPendingActionChangedPayload = {
   session_id: string;
   pending_action: TaskPendingAction | null;
   pending_action_revision: TaskPendingActionRevision;
+};
+
+export type SessionWorkspaceRecoveryChangedPayload = {
+  task_id: string;
+  environment_id: string;
+  session_id: string;
+  session_ids?: string[];
+  workspace_recovery: WorkspaceRecoveryProjection;
 };
 
 export type TaskSessionNotificationPayload = {
@@ -166,6 +180,12 @@ export type SessionModeChangedPayload = {
   session_id: string;
   agent_id: string;
   current_mode_id: string;
+  session_settings_policy?: "strict" | "provider_restored";
+  /**
+   * Set only when the session is not in the mode Kandev asked for. Empty means
+   * the reported mode is exactly the requested one.
+   */
+  requested_mode_id?: string;
   available_modes?: {
     id: string;
     name: string;
@@ -220,16 +240,45 @@ export type QueueStatusChangedPayload = {
   auto_merge_revision?: number;
 };
 
+export type ConversationChangedOperation = {
+  kind: "upsert" | "remove";
+  entity: "message" | "turn";
+  id: string;
+  message?: Record<string, unknown>;
+  turn?: Record<string, unknown>;
+};
+
+export type ConversationChangedPayload = {
+  protocol_version: 2;
+  scope_id: string;
+  session_id: string;
+  epoch: string;
+  base_revision: string;
+  revision: string;
+  check?: boolean;
+  terminal?: boolean;
+  reset?: boolean;
+  operations: ConversationChangedOperation[];
+};
+
 export type AvailableCommandPayload = {
   name: string;
   description?: string;
   input_hint?: string;
+  kind?: string;
+  action?: {
+    kind: string;
+    config_id: string;
+    value: string;
+    reset_value: string;
+  };
 };
 
 export type SessionBackendMessageMap = {
   "session.message.added": BackendMessage<"session.message.added", MessageAddedPayload>;
   "session.message.updated": BackendMessage<"session.message.updated", MessageAddedPayload>;
   "session.message.deleted": BackendMessage<"session.message.deleted", MessageAddedPayload>;
+  "session.removed": BackendMessage<"session.removed", { session_id: string; task_id?: string }>;
   "session.state_changed": BackendMessage<"session.state_changed", TaskSessionStateChangedPayload>;
   "session.turn_finished": BackendMessage<"session.turn_finished", TaskSessionNotificationPayload>;
   "session.activity_changed": BackendMessage<
@@ -243,6 +292,10 @@ export type SessionBackendMessageMap = {
   "session.pending_action_changed": BackendMessage<
     "session.pending_action_changed",
     SessionPendingActionChangedPayload
+  >;
+  "session.workspace_recovery.changed": BackendMessage<
+    "session.workspace_recovery.changed",
+    SessionWorkspaceRecoveryChangedPayload
   >;
   "session.clarification_requested": BackendMessage<
     "session.clarification_requested",
@@ -265,6 +318,14 @@ export type SessionBackendMessageMap = {
   >;
   "session.turn.started": BackendMessage<"session.turn.started", TurnEventPayload>;
   "session.turn.completed": BackendMessage<"session.turn.completed", TurnEventPayload>;
+  "session.turn.removed": BackendMessage<
+    "session.turn.removed",
+    { id: string; session_id: string; task_id: string }
+  >;
+  "session.conversation.changed": BackendMessage<
+    "session.conversation.changed",
+    ConversationChangedPayload
+  >;
   "session.available_commands": BackendMessage<
     "session.available_commands",
     AvailableCommandsPayload
@@ -296,6 +357,7 @@ export type SessionBackendMessageMap = {
   "session.info_updated": BackendMessage<"session.info_updated", SessionInfoPayload>;
   "session.todos_updated": BackendMessage<"session.todos_updated", SessionTodosPayload>;
   "session.prompt_usage": BackendMessage<"session.prompt_usage", SessionPromptUsagePayload>;
+  "session.usage_updated": BackendMessage<"session.usage_updated", SessionUsageUpdatedPayload>;
   "session.poll_mode_changed": BackendMessage<
     "session.poll_mode_changed",
     { session_id: string; poll_mode: string }
@@ -307,6 +369,14 @@ export type SessionBackendMessageMap = {
   "session.shell.output": BackendMessage<"session.shell.output", ShellOutputPayload>;
   "session.process.output": BackendMessage<"session.process.output", ProcessOutputPayload>;
   "session.process.status": BackendMessage<"session.process.status", ProcessStatusPayload>;
+  "session.background_work.updated": BackendMessage<
+    "session.background_work.updated",
+    import("@/lib/types/background-work").WorkloadRunObservation
+  >;
+  "session.background_work.output": BackendMessage<
+    "session.background_work.output",
+    import("@/lib/types/background-work").WorkloadOutputChunk
+  >;
   "message.queue.status_changed": BackendMessage<
     "message.queue.status_changed",
     QueueStatusChangedPayload

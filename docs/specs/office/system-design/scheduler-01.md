@@ -3,6 +3,7 @@ status: draft
 system: office
 requirements:
   - REQ-OFFICE-SCHEDULER-001
+  - REQ-OFFICE-SCHEDULER-002
 created: 2026-04-25
 owners:
   - cfl
@@ -18,6 +19,7 @@ This design preserves the technical source detail for `REQ-OFFICE-SCHEDULER-001`
 | Requirement | Design section |
 | --- | --- |
 | `REQ-OFFICE-SCHEDULER-001` | [Migrated source detail](#migrated-source-detail) |
+| `REQ-OFFICE-SCHEDULER-002` | [Assignment wake step eligibility](#assignment-wake-step-eligibility) |
 
 ## Migrated source detail
 
@@ -55,7 +57,7 @@ A SQLite-persisted queue of "wake this agent up" requests. Every periodic, event
 
 | Source | Trigger | Payload |
 |--------|---------|---------|
-| `routine` | A routine's cron / webhook / manual trigger fires | `{routine_id, variables, missed_ticks?}` |
+| `routine` | A routine's cron / webhook / manual trigger fires | `{routine_id, variables, missed_ticks?, missed_since?, missed_truncated?}` |
 | `comment` | Comment posted on a task assigned to this agent (non-self). Also the channel pathway: inbound Telegram/Slack messages become comments on a channel task. | `{task_id, comment_id}` |
 | `agent_error` | A sub-agent's session failed (escalation to coordinator) | `{failed_agent_id, failed_session_id?, run_id?, error}` |
 | `self` | Agent self-wake via tool call | `{reason, payload?}` |
@@ -112,13 +114,13 @@ Routine fields:
 - `assignee_agent_instance_id` - who gets the resulting task / run.
 - `status`: `active` | `paused` | `archived`.
 - `concurrency_policy`: `coalesce_if_active` (default) | `skip_if_active` | `always_enqueue`.
-- `catch_up_policy`: `enqueue_missed_with_cap` (default, cap 25) | `skip_missed`.
+- `catch_up_policy`: `summarize_missed` (default, cap 25; `enqueue_missed_with_cap` is a deprecated alias) | `skip_missed`.
 - `catch_up_max`: integer, default 25.
 - `task_template`: JSON. Empty means **lightweight** routine (taskless run per fire). Non-empty means **heavy** routine (fresh task created on the `routine` workflow).
 - `variables`: declared template variables (type, default, required).
 
 Triggers:
-- **Schedule (cron)**: `cron_expression`, `timezone`, computed `next_run_at`, `last_fired_at`.
+- **Schedule (cron)**: `cron_expression`, `timezone`, computed `next_run_at`, `last_fired_at`. `cron_expression` is the standard 5-field syntax (minute hour day-of-month month day-of-week), computed via `robfig/cron/v3`. Day-of-month and day-of-week are ORed when both are restricted, matching `crontab(5)` (`0 0 13 * 5` fires on the 13th of the month OR any Friday). A wall-clock slot fires at most once across a DST transition: a spring-forward slot that does not exist is skipped, and a fall-back slot that occurs twice fires only on its first occurrence. Every returned fire is validated against the expression's own wall-clock fields (minute/hour/month/day-of-month-or-day-of-week), guarding against the underlying library returning a fire under the wrong hour when a DST shift crosses a match boundary. In `Australia/Lord_Howe` (the only IANA zone with a 30-minute DST shift, +10:30 <-> +11:00), `robfig/cron/v3`'s day-loop DST correction — which nudges by whole hours — can skip a candidate that genuinely exists; a minute-granularity rescan of the gap, gated on the interval containing a non-whole-hour offset transition, recovers it, so no zone loses an existing slot. `timezone` defaults to UTC when empty. An expression that can never fire (an impossible date, or empty) is rejected at trigger-create time.
 - **Webhook**: `public_id` (URL path component), `signing_mode` (`none` | `bearer` | `hmac_sha256`), `secret`. URL: `POST /api/routine-triggers/<public_id>/fire`. Webhook payload is available as variables.
 - **Manual**: fired only via UI or API.
 
@@ -130,7 +132,7 @@ Each trigger firing creates a routine run record (`office_routine_runs`) with `r
 
 #### Heavy vs lightweight routines
 
-- **Lightweight** (`task_template` empty): fire produces a taskless agent run. Continuation summary keyed by `routine:<routine_id>`. Use case: "check upstream PRs" without a trackable artifact.
+- **Lightweight** (`task_template` empty): fire produces a taskless agent run. Continuation summary keyed by `routine:<routine_id>`. Use case: "check upstream PRs" without a trackable artifact. How that run acquires a session is specified by [run-owned sessions](taskless-run-sessions.md) (`REQ-OFFICE-TASKLESS-001`): the record is an Office-owned `office_run_sessions` row, not a `task_session`. Neither a nullable `task_sessions.task_id` nor a synthetic task is permitted.
 - **Heavy** (`task_template` set): fire creates a task in the system `routine` workflow (one hidden `in_progress -> done` step). Its `task.created` event evaluates `auto_start_agent` and starts a task-bound run. Use case: "daily review" with trackable output.
 
 #### Concurrency policy
@@ -140,13 +142,21 @@ Evaluated at dispatch by querying for an in-flight run for the same routine fing
 - `coalesce_if_active` (default): merge into the existing run. Mark `coalesced`.
 - `always_enqueue` / `always_create`: always proceed.
 
-"Active" means the linked task / run is not in a terminal state. A linked task is also inactive when it is archived or missing. The gate checks task state directly and does not release a live task because of its age.
+"Active" means the linked task / run is not in a terminal state. A linked task is also inactive when it is archived or missing. The gate checks task state directly and does not release a live task because of its age. A `task_created` run with no linked task is never active either — current code never produces that shape, so a row like it can only be a pre-upgrade fossil (AC-OFFICE-SCHEDULER-001.13); the next dispatch that finds it closes it as `failed` instead of skipping or coalescing into it.
 
 #### Catch-up policy
 
-If the scheduler was down and missed cron ticks:
-- `skip_missed`: fire only the current tick.
-- `enqueue_missed_with_cap` (default, cap 25): fire missed ticks up to the cap; dropped ticks are not recorded individually but summarized into the next prompt's wake context ("you missed N ticks since X").
+If the scheduler was down and missed cron ticks, resuming always produces exactly
+one run per due trigger, never one run per missed tick. `catch_up_policy` only
+governs whether that one run's gap is measured and reported:
+- `skip_missed`: no gap is recorded or reported.
+- `summarize_missed` (default, cap 25; `enqueue_missed_with_cap` is a deprecated
+  alias): the gap (missed-tick count, first-missed timestamp, truncated flag) is
+  measured, capped at `catch_up_max`, and summarized into the run's wake context
+  ("you missed N ticks since X").
+
+See [the routine catch-up requirement](../requirements/routine-catch-up.md) for
+the full contract.
 
 #### The pre-installed coordinator routine
 
@@ -158,14 +168,15 @@ description:         "Wakes the coordinator every 5 minutes to check workspace a
 assignee_agent_id:   <new coordinator agent id>
 status:              active
 concurrency_policy:  coalesce_if_active
-catch_up_policy:     enqueue_missed_with_cap
+catch_up_policy:     summarize_missed
 catch_up_max:        25
 task_template:       ""
 variables:           []
 trigger:
   kind:              schedule
   cron_expression:   "*/5 * * * *"
-  timezone:          (workspace TZ, fall back to UTC)
+  timezone:          UTC (no workspace-level timezone exists; a trigger's timezone
+                     defaults to UTC unless the user sets one explicitly)
   enabled:           true
 ```
 
@@ -267,6 +278,28 @@ Log fields gain `source: "rate_limit_parsed"` vs `source: "backoff"`, plus `pars
 
 Office maintenance performs a recovery sweep separately from the shared queue-drain tick. It finds authoritative Office `TODO` tasks created inside the workspace recovery lookback window and dispatches them as `task_assigned` runs only when no queued, claimed, or finished run exists for the task. The task-creation timestamp is bounded by the lookback; matching run rows are not, so a task that already started is never reclassified as unstarted merely because its prior run is old. Failed and cancelled rows do not block recovery. Assignment on an ordinary Kanban task does not imply autonomy.
 
+### Assignment wake step eligibility
+
+Every producer of a `task_assigned` wake for an Office task's assignee — reactivity's
+assignee-change handler, the event-subscriber path (`task.created` / `task.updated`), and the
+recovery sweep above — shares one eligibility predicate before queueing: the task's current
+workflow step must have an `auto_start_agent` on_enter action
+(`wfmodels.WorkflowStep.HasOnEnterAction(wfmodels.OnEnterAutoStartAgent)`), the same predicate the
+orchestrator's own auto-start path already uses. A step with no such action (Backlog, `events:{}`)
+means the workflow has not yet decided this task should run; queueing a wake there launches an
+agent outside the workflow, which then calls `step_complete_kandev` on a step that never reads the
+signal and gets moved into conflict with the legitimate Work auto-start run. The gate only
+suppresses the wake — a reassignment's interrupt of the previous assignee's session still fires.
+
+Edge cases: a task with no workflow step bound (`workflow_step_id` empty) is eligible, preserving
+behaviour for tasks outside a workflow. A step lookup failure (repository error, nil step getter, or
+an unresolved step ID) fails open — the wake is still queued — and is logged at Warn. A resolved
+ineligible step logs `office.assignment_wake.step_ineligible` at Info; a resolved eligible step,
+including a task with no bound step, logs `office.assignment_wake.step_eligible` at Info. Both
+outcomes include `task_id`, `step_id`, and `source`.
+This does not change Review/Approval's separate `queue_run_for_each_participant` reviewer/approver
+wake, which the assignee eligibility gate never touches.
+
 Selection:
 
 ```sql
@@ -292,6 +325,10 @@ Per-candidate guards:
 - Skip if agent is paused or stopped.
 - Skip if a wakeup is already queued for this task (prevents duplicates on concurrent ticks).
 - Skip if the agent's invocation budget is exhausted.
+
+The recovery sweep fills its per-tick dispatch quota with eligible tasks. It excludes every
+candidate inspected during the tick before fetching the next batch, so ineligible tasks cannot
+starve later eligible tasks.
 
 Logged: `recovery_dispatch` per dispatched task, `recovery_sweep_complete` summary entry with `dispatched_count` per sweep.
 
@@ -353,7 +390,7 @@ LIMIT 1
 
 Each wakeup produces a single agent session that runs to completion and exits. The agent receives a structured prompt describing why it was woken.
 
-**Taskless runs always start a fresh session.** A defensive `taskID==""` short-circuit in `HasPriorSessionForAgent` ensures we never resume across taskless fires.
+**Taskless runs always start a fresh session.** A defensive `taskID==""` short-circuit in `HasPriorSessionForAgent` ensures we never resume across taskless fires. The session record itself and its attempt numbering are specified by [run-owned sessions](taskless-run-sessions.md). Cancellation and restart reconciliation remain outstanding requirements and are not implemented by the current coverage change; the follow-up scope is recorded under [Outstanding: stop controls and restart recovery](../requirements/taskless-run-sessions.md#outstanding-stop-controls-and-restart-recovery).
 
 **Task-bound wakeups use session resume by default**: each subsequent wakeup for a `(task, agent)` pair reloads the prior ACP session via `session/load`, falling back to `session/new` on error. See `office-task-session-lifecycle` for the per-pair model.
 

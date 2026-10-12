@@ -9,7 +9,7 @@ import {
   IconRefresh,
 } from "@tabler/icons-react";
 import { Button } from "@kandev/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@kandev/ui/collapsible";
+import { SessionErrorDetails } from "@/components/task/session-error-details";
 import { getWebSocketClient } from "@/lib/ws/connection";
 import type { TaskRepository } from "@/lib/types/http";
 import type { TaskLaunchRecoveryAction } from "@/lib/types/task-launch-error";
@@ -22,6 +22,8 @@ type TaskLaunchErrorEntryProps = {
   workspaceId: string;
   error: TaskStatusSummaryActiveError;
   repositories?: TaskRepository[];
+  /** Retained session history has no live recovery controls. */
+  isActive?: boolean;
 };
 
 const pendingRecoveryRequests = new Map<string, Promise<unknown>>();
@@ -58,7 +60,7 @@ function useTaskLaunchRecovery({
     const request = Promise.resolve().then(() =>
       client.request("task.launch.recover", {
         task_id: taskId,
-        ...(error.session_id ? { session_id: error.session_id } : {}),
+        ...(error.scope !== "task" && error.session_id ? { session_id: error.session_id } : {}),
         ...(error.task_repository_id ? { task_repository_id: error.task_repository_id } : {}),
         action,
         ...(baseBranch ? { base_branch: baseBranch } : {}),
@@ -196,10 +198,10 @@ export function TaskLaunchErrorEntry({
   workspaceId,
   error,
   repositories,
+  isActive = true,
 }: TaskLaunchErrorEntryProps) {
   const { t } = useTranslation();
   const { pendingAction, recoveryError, sendRecovery } = useTaskLaunchRecovery({ taskId, error });
-  const [showDetails, setShowDetails] = useState(false);
   const taskRepository = repositories?.find(
     (repository) => repository.id === error.task_repository_id,
   );
@@ -226,33 +228,22 @@ export function TaskLaunchErrorEntry({
           {t("task:launchErrorNoChanges")}
         </p>
         {error.details && (
-          <Collapsible open={showDetails} onOpenChange={setShowDetails} className="mt-3">
-            <CollapsibleTrigger className="flex min-h-11 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer sm:min-h-8">
-              <IconRefresh
-                className={`h-3.5 w-3.5 transition-transform ${showDetails ? "rotate-90" : ""}`}
-              />
-              {t("task:showDetails")}
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <pre
-                className="mt-2 max-w-prose whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground"
-                data-testid="task-launch-error-details"
-              >
-                {error.details}
-              </pre>
-            </CollapsibleContent>
-          </Collapsible>
+          <SessionErrorDetails label={t("task:showDetails")} textTestId="task-launch-error-details">
+            {error.details}
+          </SessionErrorDetails>
         )}
-        <TaskLaunchRecoveryActions
-          actions={error.recovery_actions ?? []}
-          workspaceId={workspaceId}
-          repositories={repositories}
-          taskRepositoryId={error.task_repository_id}
-          currentBase={currentBase}
-          pendingAction={pendingAction}
-          onRecover={sendRecovery}
-        />
-        {recoveryError && (
+        {isActive && (
+          <TaskLaunchRecoveryActions
+            actions={error.recovery_actions ?? []}
+            workspaceId={workspaceId}
+            repositories={repositories}
+            taskRepositoryId={error.task_repository_id}
+            currentBase={currentBase}
+            pendingAction={pendingAction}
+            onRecover={sendRecovery}
+          />
+        )}
+        {isActive && recoveryError && (
           <p
             className="mt-2 text-xs text-destructive"
             data-testid="task-launch-recovery-error"

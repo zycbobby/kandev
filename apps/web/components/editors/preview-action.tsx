@@ -2,6 +2,7 @@
 
 import { IconEye, IconLoader2 } from "@tabler/icons-react";
 import { Button } from "@kandev/ui/button";
+import { DropdownMenuItem } from "@kandev/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
 import type { FilePreviewKind } from "@/lib/utils/file-types";
 
@@ -85,7 +86,7 @@ export function PreviewActionButton({ action }: { action: PreviewAction }) {
           disabled={action.disabled}
           aria-label={action.label}
           title={action.trustWarning}
-          className="h-8 w-8 p-0 cursor-pointer"
+          className="h-6 w-6 p-0 cursor-pointer max-md:h-11 [@media(pointer:coarse)]:h-11 max-md:w-11 [@media(pointer:coarse)]:w-11"
           data-testid={action.testId}
         >
           {action.busy ? (
@@ -102,5 +103,23 @@ export function PreviewActionButton({ action }: { action: PreviewAction }) {
         )}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+/** The same control as an overflow-menu row, where a button does not fit. */
+export function PreviewActionMenuItem({ action }: { action: PreviewAction }) {
+  return (
+    <DropdownMenuItem
+      className="cursor-pointer gap-2"
+      disabled={action.disabled}
+      onSelect={action.onClick}
+    >
+      {action.busy ? (
+        <IconLoader2 className="size-4 animate-spin" />
+      ) : (
+        <IconEye className="size-4" />
+      )}
+      {action.label}
+    </DropdownMenuItem>
   );
 }

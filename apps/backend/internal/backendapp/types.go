@@ -14,6 +14,7 @@ import (
 	"github.com/kandev/kandev/internal/automation"
 	"github.com/kandev/kandev/internal/azuredevops"
 	canvasservice "github.com/kandev/kandev/internal/canvas"
+	"github.com/kandev/kandev/internal/coordinator"
 	editorservice "github.com/kandev/kandev/internal/editors/service"
 	editorstore "github.com/kandev/kandev/internal/editors/store"
 	"github.com/kandev/kandev/internal/gitcredentials"
@@ -25,6 +26,7 @@ import (
 	notificationstore "github.com/kandev/kandev/internal/notifications/store"
 	office "github.com/kandev/kandev/internal/office"
 	officesqlite "github.com/kandev/kandev/internal/office/repository/sqlite"
+	"github.com/kandev/kandev/internal/office/retention"
 	officeservice "github.com/kandev/kandev/internal/office/service"
 	"github.com/kandev/kandev/internal/org"
 	"github.com/kandev/kandev/internal/orgunit"
@@ -37,6 +39,7 @@ import (
 	"github.com/kandev/kandev/internal/secrets"
 	"github.com/kandev/kandev/internal/sentry"
 	systemsettings "github.com/kandev/kandev/internal/system/settings"
+	"github.com/kandev/kandev/internal/task/deliveryretention"
 	sqliterepo "github.com/kandev/kandev/internal/task/repository/sqlite"
 	taskservice "github.com/kandev/kandev/internal/task/service"
 	"github.com/kandev/kandev/internal/task/share"
@@ -78,6 +81,7 @@ type Repositories struct {
 }
 
 type Services struct {
+	DeliveryRetention        *deliveryretention.Worker
 	ManagedRuntimeSelections managedruntime.SelectionStore
 	DynamicProfileResolver   *agentruntime.ProfileExecutionResolver
 	DynamicBindingResolver   *dynamicruntime.CredentialBindingResolver
@@ -112,6 +116,12 @@ type Services struct {
 	// WorktreeMgr is the worktree manager. Exposed here so the install-wide
 	// storage-maintenance composition can reach it for workspace cleanup.
 	WorktreeMgr *worktree.Manager
+	// Retention owns the office_routine_runs/runs history sweep scheduler,
+	// its HTTP surface, and its health checker. Kept regardless of the
+	// Office feature flag, matching every other required-schema owner: rows
+	// written while Office was enabled still need bounding after it is
+	// turned off.
+	Retention *retention.Runtime
 	// Terminal is the first-class user-terminal service (rename, park, etc.).
 	// Wired into the gateway once lifecycle.Manager is up so the PTY backend
 	// is available.
@@ -125,9 +135,17 @@ type Services struct {
 	// registry, event delivery, health monitoring). Always constructed
 	// (non-nil) when initialization succeeds.
 	Plugins *plugins.Service
+	// AgentConversations is the managed workspace agent conversation
+	// service behind the agent_conversation Host capability. Nil when the
+	// plugins service itself is unavailable.
+	AgentConversations *taskservice.AgentConversationService
+	PluginsCleanup     func() error
 	// Canvas is the gated lifecycle service for agent-authored plugin web
 	// applications. It is nil while features.canvases is disabled.
 	Canvas *canvasservice.Service
+	// CanvasDistribution owns bounded, user-bound export and installation
+	// preparations. It is nil while features.canvases is disabled.
+	CanvasDistribution *canvasservice.DistributionService
 	// GitCredentials is the shared provider-neutral lease broker used by the
 	// GitHub HTTP endpoint and task executor helper leases.
 	GitCredentials *gitcredentials.Broker
@@ -138,6 +156,10 @@ type Services struct {
 	// Mode() == ModeDisabled and the middleware injects the synthetic identity.
 	Auth                    *authservice.Service
 	SessionHostnameResolver *hostnames.Resolver
+	// Coordinator is the workspace-coordinator service (CRUD, proposals-read,
+	// stalls-read). Nil while features.coordinator is disabled; the backing
+	// store is still always constructed (requiredstores catalog entry).
+	Coordinator *coordinator.Service
 }
 
 type schedulerStopper interface {

@@ -9,6 +9,7 @@ import { FileViewerHeader } from "./file-viewer-header";
 
 type FileImageViewerProps = {
   path: string;
+  isSymlink?: boolean;
   content: string; // base64-encoded when binary, UTF-8 text otherwise
   isBinary?: boolean;
   worktreePath?: string;
@@ -18,6 +19,7 @@ type FileImageViewerProps = {
 
 export function FileImageViewer({
   path,
+  isSymlink,
   content,
   isBinary = false,
   worktreePath,
@@ -31,6 +33,7 @@ export function FileImageViewer({
     <div className="flex flex-col h-full">
       <FileViewerHeader
         path={path}
+        isSymlink={isSymlink}
         worktreePath={worktreePath}
         actions={
           <>

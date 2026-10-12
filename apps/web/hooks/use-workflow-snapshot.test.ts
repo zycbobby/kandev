@@ -27,17 +27,25 @@ let mockState: MockState = {
   hydrate: mockHydrate,
 };
 
-vi.mock("@/components/state-provider", () => ({
-  useAppStore: (selector: (s: MockState) => unknown) => selector(mockState),
-  useAppStoreApi: () => ({
+function createMockStoreApi() {
+  return {
     getState: () => mockState,
     setState: (updater: (s: MockState) => MockState) => {
       const next = updater(mockState);
       mockSetState(next);
       mockState = next;
     },
-  }),
-}));
+  };
+}
+
+let mockStoreApi = createMockStoreApi();
+
+vi.mock("@/components/state-provider", () => {
+  return {
+    useAppStore: (selector: (s: MockState) => unknown) => selector(mockState),
+    useAppStoreApi: () => mockStoreApi,
+  };
+});
 
 vi.mock("@/lib/api", () => ({
   fetchWorkflowSnapshot: (...args: unknown[]) => mockFetchWorkflowSnapshot(...args),
@@ -48,6 +56,7 @@ vi.mock("@/lib/ssr/mapper", () => ({
     tasks?: Array<{
       id: string;
       auto_start_failed?: boolean;
+      workspace_orphaned?: boolean;
       parked_on_background_work?: boolean;
       parked_revision?: number;
       parked_epoch?: number;
@@ -59,6 +68,7 @@ vi.mock("@/lib/ssr/mapper", () => ({
       tasks: (snapshot.tasks ?? []).map((task) => ({
         id: task.id,
         autoStartFailed: task.auto_start_failed,
+        workspaceOrphaned: task.workspace_orphaned,
         parkedOnBackgroundWork: task.parked_on_background_work,
         parkedRevision: task.parked_revision,
         parkedEpoch: task.parked_epoch,
@@ -71,6 +81,8 @@ import { useWorkflowSnapshot } from "./use-workflow-snapshot";
 
 function resetState(kanban: Partial<MockKanban> = {}) {
   vi.clearAllMocks();
+  mockFetchWorkflowSnapshot.mockReset();
+  mockFetchWorkflowSnapshot.mockResolvedValue({ steps: [], tasks: [] });
   mockState = {
     connection: { status: "connected" },
     kanban: {
@@ -84,6 +96,7 @@ function resetState(kanban: Partial<MockKanban> = {}) {
     workspaceContextGeneration: 0,
     hydrate: mockHydrate,
   };
+  mockStoreApi = createMockStoreApi();
 }
 
 describe("useWorkflowSnapshot — kanban.isLoading", () => {
@@ -221,6 +234,35 @@ describe("useWorkflowSnapshot marker races", () => {
       expect.objectContaining({
         kanban: expect.objectContaining({
           tasks: [expect.objectContaining({ id: "task-live-marker", autoStartFailed: true })],
+        }),
+      }),
+    );
+  });
+
+  it("keeps a newer live workspace-orphaned marker when an older snapshot finishes later", async () => {
+    let resolveFetch: (snapshot: { steps: unknown[]; tasks: unknown[] }) => void = () => {};
+    mockFetchWorkflowSnapshot.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+
+    renderHook(() => useWorkflowSnapshot("wf-1"));
+    await waitFor(() => expect(mockFetchWorkflowSnapshot).toHaveBeenCalled());
+
+    mockState.kanban.tasks = [{ id: "task-live-orphan-marker", workspaceOrphaned: true }];
+    resolveFetch({
+      steps: [],
+      tasks: [{ id: "task-live-orphan-marker", workspace_orphaned: false }],
+    });
+
+    await waitFor(() => expect(mockHydrate).toHaveBeenCalled());
+    expect(mockHydrate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kanban: expect.objectContaining({
+          tasks: [
+            expect.objectContaining({ id: "task-live-orphan-marker", workspaceOrphaned: true }),
+          ],
         }),
       }),
     );

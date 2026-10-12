@@ -218,6 +218,7 @@ func TestBuildSSHCreateInstanceRequestMapsEveryField(t *testing.T) {
 		Metadata: map[string]interface{}{
 			MetadataKeyBaseBranches: map[string]string{"repo-a": "develop"},
 		},
+		DurableJournalOwnerID: "environment-9",
 	}
 
 	got := buildSSHCreateInstanceRequest(req, "/remote/task", "/remote/agentctl")
@@ -227,6 +228,9 @@ func TestBuildSSHCreateInstanceRequestMapsEveryField(t *testing.T) {
 	}
 	if got.WorkspacePath != "/remote/task" {
 		t.Fatalf("WorkspacePath = %q", got.WorkspacePath)
+	}
+	if got.DurableJournalPath != "/remote/task/.kandev/agentctl-journals/environment-9/delivery.bbolt" {
+		t.Fatalf("DurableJournalPath = %q", got.DurableJournalPath)
 	}
 	if got.AgentType != "opencode" {
 		t.Fatalf("AgentType = %q", got.AgentType)
@@ -254,6 +258,42 @@ func TestBuildSSHCreateInstanceRequestMapsEveryField(t *testing.T) {
 	}
 	if _, leaked := got.Env["UNRELATED"]; leaked {
 		t.Fatalf("Env leaked a non-allowlisted key: %+v", got.Env)
+	}
+}
+
+func TestBuildSSHCreateInstanceRequestStripsForkPRCredentials(t *testing.T) {
+	req := &ExecutorCreateRequest{
+		InstanceID: "instance-1",
+		Metadata:   map[string]interface{}{metadataCheckoutRef: "refs/pull/3527/head"},
+		Env: map[string]string{
+			"GITHUB_TOKEN":   "secret",
+			"GH_TOKEN":       "secret-2",
+			"OPENAI_API_KEY": "keep",
+		},
+	}
+
+	got := buildSSHCreateInstanceRequest(req, "/workspace", "/agentctl")
+	if _, ok := got.Env["GITHUB_TOKEN"]; ok {
+		t.Fatalf("fork PR agent env leaked GITHUB_TOKEN: %v", got.Env)
+	}
+	if _, ok := got.Env["GH_TOKEN"]; ok {
+		t.Fatalf("fork PR agent env leaked GH_TOKEN: %v", got.Env)
+	}
+	if got.Env["OPENAI_API_KEY"] != "keep" {
+		t.Fatalf("non-GitHub env was dropped: %v", got.Env)
+	}
+}
+
+func TestBuildSSHCreateInstanceRequestPreservesSelectedClaudeConfigDir(t *testing.T) {
+	configDir := "/home/agent/.kandev/sessions/instance-1/.claude"
+	req := &ExecutorCreateRequest{
+		InstanceID:  "instance-1",
+		AgentConfig: agents.NewClaudeACP(),
+		Env:         map[string]string{"CLAUDE_CONFIG_DIR": configDir},
+	}
+	got := buildSSHCreateInstanceRequest(req, "/workspace", "/agentctl")
+	if got.Env["CLAUDE_CONFIG_DIR"] != configDir {
+		t.Fatalf("selected agent config dir = %q, want unchanged %q", got.Env["CLAUDE_CONFIG_DIR"], configDir)
 	}
 }
 

@@ -109,6 +109,38 @@ func TestHealthRouteReturnsOK(t *testing.T) {
 	}
 }
 
+func TestSeedTaskManagementClaimUsesTaskVersionAndRecordsHistory(t *testing.T) {
+	repo, sqlxDB := newTestRepo(t)
+	seedTask(t, sqlxDB, "claim-seed-task")
+	router := newRouter(t, repo, nil)
+	requestBody := mustJSON(t, map[string]string{
+		"installation_id": "removed-manager",
+		"instance_key":    "manager-instance",
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/_test/tasks/claim-seed-task/management-claim", bytes.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("seed claim status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	claim, err := repo.GetTaskManagementClaim(context.Background(), "claim-seed-task")
+	if err != nil {
+		t.Fatalf("read claim: %v", err)
+	}
+	if claim == nil || claim.InstallationID != "removed-manager" || claim.Generation != 1 {
+		t.Fatalf("seed claim = %+v", claim)
+	}
+	history, err := repo.ListTaskManagementClaimHistory(context.Background(), "claim-seed-task")
+	if err != nil {
+		t.Fatalf("read claim history: %v", err)
+	}
+	if len(history) != 1 || history[0].Reason != "E2E unavailable manager" {
+		t.Fatalf("claim history = %+v", history)
+	}
+}
+
 func TestSeedCostEventPreservesOutputTokenPresence(t *testing.T) {
 	taskRepo, sqlxDB := newTestRepo(t)
 	omittedTaskID := uuid.New().String()
@@ -349,6 +381,51 @@ func TestSeedTaskSessionUsesRequestedSessionID(t *testing.T) {
 	}
 	if session.TaskID != taskID {
 		t.Fatalf("task_id = %q, want %q", session.TaskID, taskID)
+	}
+}
+
+func TestSeedTaskSessionUpdateAppliesErrorMessage(t *testing.T) {
+	repo, sqlxDB := newTestRepo(t)
+	taskID := uuid.New().String()
+	sessionID := uuid.New().String()
+	seedTask(t, sqlxDB, taskID)
+	r := newRouter(t, repo, nil)
+
+	body := mustJSON(t, map[string]interface{}{
+		"task_id":    taskID,
+		"session_id": sessionID,
+		"state":      "RUNNING",
+	})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/_test/task-sessions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	completedAt := time.Now().UTC().Format(time.RFC3339)
+	updateBody := mustJSON(t, map[string]interface{}{
+		"task_id":       taskID,
+		"session_id":    sessionID,
+		"state":         "FAILED",
+		"completed_at":  completedAt,
+		"error_message": "boom",
+	})
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/_test/task-sessions", bytes.NewReader(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	session, err := repo.GetTaskSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("get updated session: %v", err)
+	}
+	if session.ErrorMessage != "boom" {
+		t.Fatalf("error_message = %q, want %q", session.ErrorMessage, "boom")
 	}
 }
 
@@ -625,6 +702,13 @@ func TestSeedMessageUserAuthorPersistsPromptIndex(t *testing.T) {
 	}
 	if created, ok := data["created_at"].(string); !ok || !strings.Contains(created, ".") {
 		t.Fatalf("event created_at = %#v, want RFC3339Nano fractional precision", data["created_at"])
+	}
+	receipt, ok := data["conversation_receipt"].(*models.ConversationMutationReceipt)
+	if !ok {
+		t.Fatalf("conversation_receipt = %T, want *models.ConversationMutationReceipt", data["conversation_receipt"])
+	}
+	if !receipt.Complete || receipt.Revision != receipt.BaseRevision+1 {
+		t.Fatalf("conversation_receipt = %+v, want one complete revision", receipt)
 	}
 }
 

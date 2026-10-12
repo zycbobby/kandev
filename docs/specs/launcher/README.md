@@ -31,18 +31,6 @@ and source-checkout deploy of the live user-domain daemon.
   request.
 - Agent runtime launch and ACP probes are not backend startup readiness.
 
-## Specification map
-
-### Requirements
-
-- [Source-checkout user-service deploy](requirements/source-deploy.md)
-- [Startup recovery](requirements/startup-recovery.md)
-
-### System design
-
-- [Source-checkout user-service deploy](system-design/source-deploy.md)
-- [Startup recovery](system-design/startup-recovery.md)
-
 ## Migration status
 
 The startup-recovery documents are authoritative for bind-aware readiness and

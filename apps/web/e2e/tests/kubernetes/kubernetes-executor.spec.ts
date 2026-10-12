@@ -63,11 +63,16 @@ async function assertUserVisibleFailure(page: Page, taskId: string, expected: Re
   await page.goto(`/t/${taskId}`);
   const session = new SessionPage(page);
   await session.waitForLoad(30_000);
-  const launchError = session.activeChat().getByTestId("task-launch-error-entry");
-  await expect(launchError).toBeVisible({ timeout: 30_000 });
-  await launchError.getByRole("button", { name: "Show details" }).click();
-  const details = launchError.getByTestId("task-launch-error-details");
-  await expect(details).toBeVisible();
+  const chat = session.activeChat();
+  const recoveryRows = chat.locator(
+    "[data-testid='session-recovery-card']:has([data-testid='recovery-resume-button'], [data-testid='recovery-fresh-button'], [data-testid='recovery-restart-button'])",
+  );
+  await expect(recoveryRows).toHaveCount(1, { timeout: 30_000 });
+  const recovery = recoveryRows.first();
+  await expect(recovery).toBeVisible();
+  const details = recovery.locator("details");
+  await expect(details).toHaveCount(1);
+  await details.locator("summary").click();
   await expect(details).toContainText(expected);
 }
 
@@ -259,6 +264,10 @@ test("launches through kubeconfig with Pod exec and a loopback-only agentctl for
 test("launches from a real in-cluster service account", async ({ cluster }) => {
   test.setTimeout(300_000);
   const backend = await cluster.startInClusterBackend();
+  expect(
+    (await fetch(`${backend.baseUrl}/ready`)).status,
+    "the in-cluster fixture must provide an application-ready backend",
+  ).toBe(200);
   const apiClient = new ApiClient(backend.baseUrl);
   const seed = await seedKubernetesBackend(apiClient, cluster, {
     label: "in-cluster",
@@ -290,6 +299,19 @@ test("launches from a real in-cluster service account", async ({ cluster }) => {
     expect(task.session_id).toBeTruthy();
     const pod = await waitForKubernetesPod(cluster, task.id, task.session_id!);
     expect(pod.metadata.labels?.["kandev.ai/executor-id"]).toBe(seed.executorId);
+    const backendLogs = cluster.kubectl([
+      "-n",
+      cluster.controlNamespace,
+      "exec",
+      "pod/kandev-in-cluster",
+      "-c",
+      "backend",
+      "--",
+      "cat",
+      "/data/home/logs/backend-logs.log",
+    ]);
+    expect(backendLogs).toContain("using verified remote helper cache");
+    expect(backendLogs).toContain(cluster.remoteHelperCachePath);
   } finally {
     await apiClient.e2eReset(seed.workspaceId, [seed.workflowId]).catch(() => undefined);
     await apiClient.deleteExecutorProfile(seed.executorProfileId).catch(() => undefined);

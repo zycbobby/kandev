@@ -632,28 +632,44 @@ func userSettingsDomain() DomainDescriptor {
 		"tasks_list_group", "task grouping", "string", "tasks_list_show_details", "task details", "boolean", "initial_setup_complete", "setup complete", "boolean",
 		"preferred_shell", "preferred shell", "string", "default_editor_id", "default editor", "string", "enable_preview_on_click", "preview on click", "boolean",
 		"chat_submit_key", "chat submit key", "string", "review_auto_mark_on_scroll", "review auto mark", "boolean", "confirm_task_archive", "confirm task archive", "boolean",
-		"prevent_auto_start_agent_on_open", "prevent auto start", "boolean", "unread_divider", "unread divider", "boolean", "agent_generated_task_titles", "generated titles", "boolean",
+		"prevent_auto_start_agent_on_open", "prevent auto start", "boolean", "unread_divider", "unread divider", "boolean", "agent_generated_task_titles", "generated titles", "boolean", "auto_focus_new_tasks", "auto focus new tasks", "boolean",
 		"mcp_task_agent_profile_default", "MCP task profile", "string", "show_anchored_prompt_bar", "anchored prompt bar", "boolean", "show_scroll_to_last_prompt", "scroll to last prompt", "boolean",
 		"show_scroll_to_start", "scroll to start", "boolean", "show_transcript_auto_scroll_control", "transcript scroll control", "boolean", "show_todo_list_panel", "todo list panel", "boolean",
 		"show_todo_list_panel_only_when_not_empty", "todo list empty state", "boolean", "show_release_notification", "release notification", "boolean", "release_notes_last_seen_version", "release notes version", "string",
 		"lsp_auto_start_languages", "LSP auto start", "array", "lsp_auto_install_languages", "LSP auto install", "array", "lsp_server_configs", "LSP server configs", "object",
-		"lsp_status_location", "LSP status location", "string", "saved_layouts", "saved layouts", "array", "sidebar_views", "sidebar views", "array",
+		"lsp_status_location", "LSP status location", "string", "saved_layouts", "saved layouts", "array", "sidebar_views", "sidebar views", "array", "sidebar_layout_state", "sidebar layout state", "object",
 		"sidebar_active_view_id", "active sidebar view", "string", "sidebar_draft", "sidebar draft", "object", "thread_views", "thread views", "array",
 		"thread_active_view_id", "active thread view", "string", "thread_view_draft", "thread draft", "object", "sidebar_task_prefs", "sidebar task preferences", "object",
 		"sidebar_task_color_automation", "sidebar color automation", "object", "sidebar_task_colors", "sidebar task colors", "object", "sidebar_task_color_patch", "sidebar task color patch", "object", "task_create_last_used", "last task create values", "object",
-		"jira_saved_views", "Jira saved views", "object", "jira_task_presets", "Jira task presets", "object", "github_saved_presets", "GitHub saved presets", "object",
+		"jira_saved_views", "Jira saved views", "object", "jira_default_view_id", "Jira default view", "string", "jira_task_presets", "Jira task presets", "object", "github_saved_presets", "GitHub saved presets", "object",
 		"github_default_query_presets", "GitHub query presets", "object", "gitlab_saved_presets", "GitLab saved presets", "object", "azure_devops_browse_preferences", "Azure DevOps browse preferences", "object",
 		"default_utility_agent_id", "default utility agent", "string", "default_utility_model", "default utility model", "string", "default_utility_agent_profile_id", "default utility profile", "string",
 		"keyboard_shortcuts", "keyboard shortcuts", "object", "terminal_link_behavior", "terminal link behavior", "string", "terminal_font_family", "terminal font family", "string",
-		"terminal_font_size", "terminal font size", "integer", "changes_panel_layout", "changes panel layout", "string", "last_seen_display", "last seen display", "string",
+		"terminal_font_size", "terminal font size", "integer", "changes_panel_layout", "changes panel layout", "string", "last_seen_display", "last seen display", "string", "message_time_display", "message time display", "string", "agent_tab_close_behavior", "agent tab close behavior", "string",
+		"sidebar_fast_actions_enabled", "sidebar fast action icons", "boolean", "sidebar_new_task_style", "sidebar New Task style", "string",
+		"sidebar_hover_enabled", "sidebar hover enabled", "boolean", "sidebar_hover_delay_ms", "sidebar hover delay", "integer",
 		"system_metrics_display", "system metrics display", "object", "app_status_bar_enabled", "status bar", "boolean", "resolve_session_hostnames", "resolve hostnames", "boolean",
 		"app_status_bar_order", "status bar order", "object", "quick_chat_tab_order_by_workspace", "quick chat tab order", "object", "kanban_hidden_step_ids", "hidden kanban steps", "object",
-		"workflow_ids_with_auto_hide_empty_steps", "auto-hide workflows", "array",
+		"workflow_ids_with_auto_hide_empty_steps", "auto-hide workflows", "array", "kanban_sort", "kanban board sort", "string", "kanban_priority_filter_tokens", "kanban priority filter", "array",
 	}
 	fields := make([]FieldDescriptor, 0, len(values)/3)
 	for index := 0; index+2 < len(values); index += 3 {
 		field := preferenceField(values[index], values[index+1], values[index+2])
+		if values[index] == "sidebar_layout_state" {
+			// The update key is an atomic workspace-scoped operation. Reads
+			// project the complete persisted map so settings discovery can
+			// inspect it without exposing a whole-map replacement contract.
+			field.FieldPath = "sidebar_layouts_by_workspace"
+			field.Schema = map[string]any{"type": "object"}
+		}
 		switch values[index] {
+		case "sidebar_fast_actions_enabled":
+			field.SettingsHref = "/settings/preferences/layouts?tab=sidebar"
+			field.DefaultBehavior = "false for new users; true for existing users without a saved value"
+		case "sidebar_new_task_style":
+			field.SettingsHref = "/settings/preferences/layouts?tab=sidebar"
+			field.DefaultBehavior = "simple for new users; compact for existing users without a saved value"
+			field.Schema = map[string]any{"type": "string", "enum": []string{"simple", "compact"}}
 		case "keyboard_shortcuts":
 			field.Schema = keyboardShortcutsSchema()
 		case "sidebar_task_color_patch":
@@ -741,11 +757,14 @@ func profileDomain() DomainDescriptor {
 			profileWritable("agent_profile.model", "model", "Model", "string", "Preferred model. Empty inherits the provider default.", false),
 			profileWritable("agent_profile.fallback_model", "fallback_model", "Fallback model", "string", "Optional fallback model.", false),
 			profileWritable("agent_profile.auto_fallback", "auto_fallback", "Automatic fallback", "boolean", "Enable automatic fallback behavior.", false),
+			profileWritable("agent_profile.require_exact_model", "require_exact_model", "Require exact model", "boolean", "Require the configured model to be advertised and applied.", false),
 			profileWritable("agent_profile.mode", "mode", "Mode", "string", "Agent operating mode.", false),
 			profileWritable("agent_profile.config_options", "config_options", "Configuration options", "object", "Typed provider options. Supplied maps replace the saved map.", true),
 			profileWritable("agent_profile.allow_indexing", "allow_indexing", "Allow indexing", "boolean", "Legacy compatibility permission.", false),
 			profileWritable("agent_profile.auto_approve", "auto_approve", "Auto approve", "boolean", "Automatically approve supported agent permissions.", false),
 			profileWritable("agent_profile.cli_passthrough", "cli_passthrough", "CLI passthrough", "boolean", "Enable CLI passthrough mode.", false),
+			profileWritableWithDefault("agent_profile.cursor_mcp_auth_enabled", "cursor_mcp_auth_enabled", "Share Cursor MCP credentials", "boolean", "Reuse local Cursor MCP credentials when a Cursor profile launches.", "true for new profiles"),
+			profileWritableWithDefault("agent_profile.cursor_plugins_mcp_enabled", "cursor_plugins_mcp_enabled", "Import Cursor plugin MCP servers", "boolean", "Import local Cursor plugin MCP servers when a Cursor profile launches.", "true for new profiles"),
 			profileWritable("agent_profile.enabled", "enabled", "Enabled", "boolean", "Allow this profile for new work.", false),
 			profileWritable("agent_profile.cli_flags", "cli_flags", "CLI flags", "array", "Complete replacement list of validated CLI flags.", true),
 			profileWritableSensitive("agent_profile.env_vars", "env_vars", "Environment variables", "array", "Complete replacement list. Secret values remain references.", true),
@@ -798,6 +817,12 @@ func profileWritable(key, path, label, jsonType, description string, replacement
 			"x-kandev-dynamic":     "provider_config_options",
 		}
 	}
+	return field
+}
+
+func profileWritableWithDefault(key, path, label, jsonType, description, defaultBehavior string) FieldDescriptor {
+	field := profileWritable(key, path, label, jsonType, description, false)
+	field.DefaultBehavior = defaultBehavior
 	return field
 }
 

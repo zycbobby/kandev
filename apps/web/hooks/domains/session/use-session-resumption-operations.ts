@@ -1,4 +1,8 @@
-import { launchSession, type LaunchSessionRequest } from "@/lib/services/session-launch-service";
+import {
+  launchSession,
+  type LaunchActivationSource,
+  type LaunchSessionRequest,
+} from "@/lib/services/session-launch-service";
 import {
   buildResumeRequest,
   buildRestoreWorkspaceRequest,
@@ -10,9 +14,18 @@ import {
   type TaskId,
   type TaskSessionState,
 } from "@/lib/types/http";
+import {
+  recoveryInspectionBusyDetails,
+  recoveryInspectionBusyMessage,
+  sessionRecoveryGuardDetails,
+  sessionRecoveryGuardMessage,
+  type SessionRecoveryGuardDetails,
+} from "@/lib/services/session-recovery-service";
 import { isLaunchStateRegression } from "@/lib/session-state";
 import { t } from "@/lib/i18n";
 import { WebSocketRequestError } from "@/lib/ws/client";
+import type { WorkspaceRestorationCallbacks } from "./use-workspace-restoration";
+import type { WorkspaceRestorationAttempt } from "@/lib/state/slices/session-runtime/workspace-restoration";
 
 export type TaskArchiveState = boolean | null;
 
@@ -28,6 +41,9 @@ export type SessionStatus = {
   is_agent_running: boolean;
   is_resumable: boolean;
   needs_resume: boolean;
+  is_idle_suspended?: boolean;
+  auto_resume_allowed?: boolean;
+  auto_resume_blocked_reason?: string;
   needs_workspace_restore?: boolean;
   resume_reason?: string;
   acp_session_id?: string;
@@ -50,6 +66,7 @@ export type SessionStatus = {
 };
 
 export type ResumptionState = "idle" | "checking" | "resuming" | "resumed" | "running" | "error";
+export type SessionRecoveryNoticeKind = "workspace_read_only" | "inspection_busy";
 
 export type SessionRecoveryFailure =
   | {
@@ -60,12 +77,19 @@ export type SessionRecoveryFailure =
       outcome: "recovery_failed";
       resumeError: string;
       restoreError: string;
+      workspaceAttemptId?: string;
+    }
+  | {
+      outcome: "status_unavailable";
+      kind: "timeout" | "request";
+      statusError: string;
     };
 
 export type ResumeStateSetter = {
   setResumptionState: (s: ResumptionState) => void;
   setError: (e: string | null) => void;
   setNotice?: (notice: string | null) => void;
+  setNoticeKind?: (kind: SessionRecoveryNoticeKind | null) => void;
   setWorktreePath: (p: string | null) => void;
   setWorktreeBranch: (p: string | null) => void;
   setTaskSession: (s: {
@@ -86,6 +110,8 @@ export type ResumeStateSetter = {
   getLiveSession?: (sessionId: string) => SessionLike;
   /** Retains the causes from automatic resume and workspace-restore attempts. */
   setRecoveryFailure?: (failure: SessionRecoveryFailure | null) => void;
+  /** Publishes restore_workspace outcomes separately from agent recovery. */
+  workspaceRestoration?: WorkspaceRestorationCallbacks;
   /** Refreshes the owning task after a typed archive conflict. */
   onTaskArchiveConflict?: () => void;
 };
@@ -185,9 +211,13 @@ type ResumeResponse = {
   worktree_path?: string;
   worktree_branch?: string;
   error?: string;
+  activation_disposition?: "queued" | "suppressed";
+  activation_reason?: string;
 };
 
-type LaunchAttempt = { ok: true } | { ok: false; error: Error; archived?: boolean };
+type LaunchAttempt =
+  | { ok: true; waiting?: boolean }
+  | { ok: false; error: Error; archived?: boolean; workspaceAttemptId?: string };
 type FailedLaunchAttempt = Extract<LaunchAttempt, { ok: false }>;
 
 export function isTaskArchivedConflict(error: unknown): boolean {
@@ -198,6 +228,7 @@ export function clearArchiveRecovery(setters: ResumeStateSetter): void {
   setters.setResumptionState("idle");
   setters.setError(null);
   setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
   setters.setRecoveryFailure?.(null);
   setters.onTaskArchiveConflict?.();
 }
@@ -213,6 +244,7 @@ function applyResumeResponse(
   if (resp.success) {
     setters.setRecoveryFailure?.(null);
     setters.setResumptionState("resumed");
+    setters.setNoticeKind?.(null);
     if (resp.state) {
       setters.setTaskSession({
         id: toSessionId(sessionId),
@@ -240,46 +272,130 @@ type ResumeLaunchContext = {
   canContinue: () => boolean;
 };
 
+function beginWorkspaceRestore(
+  request: LaunchSessionRequest,
+  context: ResumeLaunchContext,
+): WorkspaceRestorationAttempt | null {
+  if (request.intent !== "restore_workspace") return null;
+  return context.setters.workspaceRestoration?.begin(context.taskId, context.sessionId) ?? null;
+}
+
+function settleWorkspaceRestoreFailure(
+  attempt: WorkspaceRestorationAttempt | null,
+  error: unknown,
+  context: ResumeLaunchContext,
+): void {
+  if (!attempt) return;
+  context.setters.workspaceRestoration?.fail(attempt, error);
+  context.setters.setResumptionState("error");
+  context.setters.setError(null);
+  context.setters.setNotice?.(null);
+  context.setters.setNoticeKind?.(null);
+  context.setters.setRecoveryFailure?.(null);
+}
+
+function isWorkspaceRestoreRequest(request: LaunchSessionRequest): boolean {
+  return request.intent === "restore_workspace";
+}
+
+function getLaunchResponseError(response: ResumeResponse, request: LaunchSessionRequest): Error {
+  if (response.error) return new Error(response.error);
+  if (isWorkspaceRestoreRequest(request)) return new Error(t("task:failedToRestoreWorkspace"));
+  return new Error(t("task:failedToResumeSession"));
+}
+
+function toLaunchError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(t("common:unknownError"));
+}
+
+function applyLaunchSuccess(
+  response: ResumeResponse,
+  request: LaunchSessionRequest,
+  context: ResumeLaunchContext,
+): LaunchAttempt {
+  if (
+    response.activation_disposition === "queued" ||
+    response.activation_disposition === "suppressed"
+  ) {
+    context.setters.setRecoveryFailure?.(null);
+    context.setters.setResumptionState("idle");
+    context.setters.setError(null);
+    context.setters.setNotice?.(null);
+    context.setters.setNoticeKind?.(null);
+    return { ok: true, waiting: true };
+  }
+  applyResumeResponse(
+    response,
+    context.taskId,
+    context.sessionId,
+    context.session,
+    context.setters,
+  );
+  if (!isWorkspaceRestoreRequest(request)) return { ok: true };
+  // restore_workspace only admits the retained workspace. Agentctl readiness
+  // is settled by the matching session.agentctl_ready event so a later health
+  // failure cannot be hidden by an optimistic response.
+  return { ok: true };
+}
+
+function applyLaunchFailure(
+  response: ResumeResponse,
+  request: LaunchSessionRequest,
+  workspaceAttempt: WorkspaceRestorationAttempt | null,
+  context: ResumeLaunchContext,
+): LaunchAttempt {
+  const error = getLaunchResponseError(response, request);
+  if (isWorkspaceRestoreRequest(request)) {
+    settleWorkspaceRestoreFailure(workspaceAttempt, error, context);
+  }
+  return {
+    ok: false,
+    error,
+    ...(workspaceAttempt?.attemptId ? { workspaceAttemptId: workspaceAttempt.attemptId } : {}),
+  };
+}
+
+function handleLaunchException(
+  error: unknown,
+  request: LaunchSessionRequest,
+  workspaceAttempt: WorkspaceRestorationAttempt | null,
+  context: ResumeLaunchContext,
+): LaunchAttempt {
+  const archived = isTaskArchivedConflict(error);
+  if (archived) {
+    if (workspaceAttempt) context.setters.workspaceRestoration?.clear(workspaceAttempt);
+    return { ok: false, error: toLaunchError(error), archived: true };
+  }
+  if (isWorkspaceRestoreRequest(request)) {
+    settleWorkspaceRestoreFailure(workspaceAttempt, error, context);
+  }
+  return {
+    ok: false,
+    error: toLaunchError(error),
+    archived: false,
+    ...(workspaceAttempt?.attemptId ? { workspaceAttemptId: workspaceAttempt.attemptId } : {}),
+  };
+}
+
 /** Launch a session via a request builder and apply the response. */
 async function resumeViaLaunch(
   buildRequest: (taskId: string, sessionId: string) => { request: LaunchSessionRequest },
   context: ResumeLaunchContext,
 ): Promise<boolean> {
-  const { taskId, sessionId, session, setters, canContinue } = context;
+  const { taskId, sessionId, setters, canContinue } = context;
   if (!canContinue()) return false;
   setters.setResumptionState("resuming");
   setters.setRecoveryFailure?.(null);
   const { request } = buildRequest(taskId, sessionId);
-  let launchResp: Awaited<ReturnType<typeof launchSession>>;
-  try {
-    launchResp = await launchSession(request);
-  } catch (error) {
-    if (isTaskArchivedConflict(error)) {
-      clearArchiveRecovery(setters);
-      return false;
-    }
-    throw error;
-  }
+  const launchAttempt = await tryLaunch(request, context);
   if (!canContinue()) return false;
-  const ok = applyResumeResponse(
-    {
-      success: launchResp.success,
-      state: launchResp.state,
-      worktree_path: launchResp.worktree_path,
-      worktree_branch: launchResp.worktree_branch,
-    },
-    taskId,
-    sessionId,
-    session,
-    setters,
-  );
-  // restore_workspace's whole purpose is to bring up agentctl HTTP for an
-  // otherwise-idle session. A successful response means the workspace and
-  // agentctl are ready even when a reconnect dropped the readiness event.
-  if (ok && request.intent === "restore_workspace" && setters.setAgentctlReady) {
-    setters.setAgentctlReady(sessionId);
+  if (launchAttempt.ok) return !launchAttempt.waiting;
+  if (launchAttempt.archived) {
+    clearArchiveRecovery(setters);
+    return false;
   }
-  return ok;
+  if (isWorkspaceRestoreRequest(request)) return false;
+  throw launchAttempt.error;
 }
 
 async function restoreAfterResumeFailure(
@@ -296,6 +412,7 @@ async function restoreAfterResumeFailure(
   if (restoreAttempt.ok) {
     setters.setError(null);
     setters.setNotice?.(t("task:resumeFailedWorkspaceReadOnly"));
+    setters.setNoticeKind?.("workspace_read_only");
     setters.setRecoveryFailure?.({
       outcome: "workspace_read_only",
       resumeError: resumeAttempt.error.message,
@@ -308,13 +425,78 @@ async function restoreAfterResumeFailure(
   }
   setters.setResumptionState("error");
   setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
   setters.setRecoveryFailure?.({
     outcome: "recovery_failed",
     resumeError: resumeAttempt.error.message,
     restoreError: restoreAttempt.error.message,
+    ...(restoreAttempt.workspaceAttemptId
+      ? { workspaceAttemptId: restoreAttempt.workspaceAttemptId }
+      : {}),
   });
   setters.setError(t("task:sessionRecoveryFailed"));
   return false;
+}
+
+function finishInspectionBusyResume(
+  setters: ResumeStateSetter,
+  startingProjection: ResumeStartingProjection | null,
+): false {
+  setters.setResumptionState("error");
+  setters.setError(null);
+  setters.setNotice?.(recoveryInspectionBusyMessage((key) => t(key)));
+  setters.setNoticeKind?.("inspection_busy");
+  setters.setRecoveryFailure?.(null);
+  startingProjection?.rollback();
+  return false;
+}
+
+function finishGuardedResumeFailure(
+  setters: ResumeStateSetter,
+  details: SessionRecoveryGuardDetails,
+  startingProjection: ResumeStartingProjection | null,
+): false {
+  setters.setResumptionState("error");
+  setters.setNotice?.(null);
+  setters.setNoticeKind?.(null);
+  setters.setError(sessionRecoveryGuardMessage(details, t));
+  startingProjection?.rollback();
+  return false;
+}
+
+async function finishSilentResume(
+  context: ResumeLaunchContext,
+  startingProjection: ResumeStartingProjection | null,
+  resumeAttempt: LaunchAttempt,
+): Promise<boolean> {
+  const { setters, canContinue } = context;
+  if (!canContinue()) {
+    startingProjection?.rollback();
+    return false;
+  }
+  if (resumeAttempt.ok) {
+    setters.setNotice?.(null);
+    setters.setNoticeKind?.(null);
+    if (resumeAttempt.waiting) startingProjection?.rollback();
+    return !resumeAttempt.waiting;
+  }
+  if (resumeAttempt.archived) {
+    clearArchiveRecovery(setters);
+    startingProjection?.rollback();
+    return false;
+  }
+  if (recoveryInspectionBusyDetails(resumeAttempt.error))
+    return finishInspectionBusyResume(setters, startingProjection);
+  // The startup recovery guard refuses every launch for this session, so a
+  // restore_workspace fallback would fail identically. Skip it and show the
+  // guard's own distinct, retryable-or-not message instead of the generic
+  // "resume and restore both failed" combination.
+  const resumeGuardDetails = sessionRecoveryGuardDetails(resumeAttempt.error);
+  if (resumeGuardDetails)
+    return finishGuardedResumeFailure(setters, resumeGuardDetails, startingProjection);
+  const restored = await restoreAfterResumeFailure(context, resumeAttempt);
+  if (!restored) startingProjection?.rollback();
+  return restored;
 }
 
 /** Attempt resume, silently falling back to restore_workspace on any failure. */
@@ -323,30 +505,21 @@ export async function resumeWithSilentFallback(
   sessionId: string,
   session: SessionLike,
   setters: ResumeStateSetter,
-  canContinue: () => boolean = () => true,
+  options: { canContinue?: () => boolean; activationSource?: LaunchActivationSource } = {},
 ): Promise<boolean> {
+  const canContinue = options.canContinue ?? (() => true);
   if (!canContinue()) return false;
   const startingProjection = markSessionStarting(taskId, sessionId, session, setters);
   setters.setResumptionState("resuming");
   setters.setRecoveryFailure?.(null);
   const context = { taskId, sessionId, session, setters, canContinue };
-  const resumeAttempt = await tryLaunch(buildResumeRequest(taskId, sessionId).request, context);
-  if (!canContinue()) {
-    startingProjection?.rollback();
-    return false;
-  }
-  if (resumeAttempt.ok) {
-    setters.setNotice?.(null);
-    return true;
-  }
-  if (resumeAttempt.archived) {
-    clearArchiveRecovery(setters);
-    startingProjection?.rollback();
-    return false;
-  }
-  const restored = await restoreAfterResumeFailure(context, resumeAttempt);
-  if (!restored) startingProjection?.rollback();
-  return restored;
+  const resumeAttempt = await tryLaunch(
+    buildResumeRequest(taskId, sessionId, {
+      activationSource: options.activationSource ?? "session_open",
+    }).request,
+    context,
+  );
+  return finishSilentResume(context, startingProjection, resumeAttempt);
 }
 
 /** Run a single launch attempt and retain its failure for the fallback notice. */
@@ -354,49 +527,33 @@ async function tryLaunch(
   request: LaunchSessionRequest,
   context: ResumeLaunchContext,
 ): Promise<LaunchAttempt> {
-  const { sessionId, session, setters, canContinue } = context;
+  const { canContinue, setters } = context;
   if (!canContinue()) return { ok: false, error: new Error() };
+  const workspaceAttempt = beginWorkspaceRestore(request, context);
+  if (isWorkspaceRestoreRequest(request) && setters.workspaceRestoration && !workspaceAttempt) {
+    return { ok: false, error: new Error(t("task:workspaceRestoreInProgress")) };
+  }
   try {
     const resp = await launchSession(request);
-    if (!canContinue()) return { ok: false, error: new Error() };
-    if (!resp.success) {
-      return {
-        ok: false,
-        error: new Error(
-          resp.error ??
-            (request.intent === "restore_workspace"
-              ? t("task:failedToRestoreWorkspace")
-              : t("task:failedToResumeSession")),
-        ),
-      };
+    if (!canContinue()) {
+      if (workspaceAttempt) setters.workspaceRestoration?.clear(workspaceAttempt);
+      return { ok: false, error: new Error() };
     }
-    applyResumeResponse(
-      {
-        success: true,
-        state: resp.state,
-        worktree_path: resp.worktree_path,
-        worktree_branch: resp.worktree_branch,
-      },
-      context.taskId,
-      sessionId,
-      session,
-      setters,
-    );
-    if (request.intent === "restore_workspace" && setters.setAgentctlReady) {
-      setters.setAgentctlReady(sessionId);
-    }
-    return { ok: true };
+    if (!resp.success) return applyLaunchFailure(resp, request, workspaceAttempt, context);
+    return applyLaunchSuccess(resp, request, context);
   } catch (err) {
     console.error("[tryLaunch] session launch failed", {
       intent: request.intent,
-      sessionId,
+      sessionId: context.sessionId,
       err,
     });
-    return {
-      ok: false,
-      error: err instanceof Error ? err : new Error(t("common:unknownError")),
-      archived: isTaskArchivedConflict(err),
-    };
+    if (!canContinue()) {
+      // A rejected stale request must not strand its pending workspace row.
+      // The attempt carries its own task/session/environment/revision fence.
+      if (workspaceAttempt) setters.workspaceRestoration?.clear(workspaceAttempt);
+      return { ok: false, error: toLaunchError(err) };
+    }
+    return handleLaunchException(err, request, workspaceAttempt, context);
   }
 }
 
@@ -404,6 +561,14 @@ export type ResumeAction = "running" | "skip" | "resume" | "restore" | "idle";
 
 export function decideResumeAction(status: SessionStatus, preventAutoStart: boolean): ResumeAction {
   if (status.is_agent_running) return "running";
+  if (status.is_idle_suspended) return "idle";
+  if (status.auto_resume_allowed === false) return "idle";
+  // Completed sessions remain passive until the user explicitly chooses the
+  // completed-chat Resume action. Workspace recovery is separate and does not
+  // revive the agent conversation.
+  if (status.state === "COMPLETED") {
+    return status.needs_workspace_restore ? "restore" : "idle";
+  }
   if (preventAutoStart && status.needs_resume && status.is_resumable) return "skip";
   if (status.needs_resume && status.is_resumable) return "resume";
   if (status.needs_workspace_restore) return "restore";

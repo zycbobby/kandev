@@ -99,7 +99,7 @@ func ProvideWithStoreErrors(cfg *config.Config, dbPool *db.Pool, secrets SecretV
 
 	registry := NewRegistry()
 	if err := registry.Load(pluginStore); err != nil {
-		warnProvider(log, "Plugins registry load failed; starting with an empty registry", err)
+		warnProvider(log, "Plugins registry migration reported an error; continuing with loaded records", err)
 	}
 
 	svc := NewService(pluginStore, registry, eventBus, log)
@@ -108,9 +108,12 @@ func ProvideWithStoreErrors(cfg *config.Config, dbPool *db.Pool, secrets SecretV
 	}
 	svc.warnLoadedWebhookAccessIssues()
 
-	stateStore, userStateStore, instanceStore, instanceState, sourceStore, settingsStore, storeErrors := initializeRequiredStores(dbPool)
+	stateStore, commandStore, userStateStore, instanceStore, instanceState, sourceStore, settingsStore, storeErrors := initializeRequiredStores(dbPool)
 	if stateStore != nil {
 		svc.SetState(stateStore)
+	}
+	if commandStore != nil {
+		svc.SetExactCommandStore(commandStore)
 	}
 	if userStateStore != nil {
 		svc.SetUserState(userStateStore)
@@ -118,7 +121,9 @@ func ProvideWithStoreErrors(cfg *config.Config, dbPool *db.Pool, secrets SecretV
 
 	configureWebAppStorage(cfg, svc, instanceStore, instanceState, log)
 	svc.SetSecrets(secrets)
-	svc.SetPluginsDir(dir)
+	if err := svc.SetPluginsDir(dir); err != nil {
+		warnProvider(log, "Plugins conversation binding key initialization failed; continuing with degraded conversation capabilities", err)
+	}
 
 	seedMarketplace(svc, sourceStore, storeErrors, log)
 	if settingsStore != nil {
@@ -131,12 +136,10 @@ func ProvideWithStoreErrors(cfg *config.Config, dbPool *db.Pool, secrets SecretV
 	if cfg.Features.Canvases {
 		stopArtifactCleanup = svc.StartWebAppArtifactCleanupWorker(context.Background())
 	}
-
 	cleanup := func() error {
 		stopArtifactCleanup()
 		svc.closeWebAppEvents()
-		rt.StopAll()
-		return nil
+		return svc.Close()
 	}
 	return svc, cleanup, storeErrors
 }
@@ -147,20 +150,22 @@ func recordStoreError(storeErrors StoreInitErrors, id string, err error) {
 	}
 }
 
-func initializeRequiredStores(dbPool *db.Pool) (*state.Store, *state.UserStore, *instances.Store, *state.InstanceStore, *marketplace.SourceStore, *settingsStore, StoreInitErrors) {
+func initializeRequiredStores(dbPool *db.Pool) (*state.Store, *state.CommandStore, *state.UserStore, *instances.Store, *state.InstanceStore, *marketplace.SourceStore, *settingsStore, StoreInitErrors) {
 	storeErrors := make(StoreInitErrors)
 	if dbPool == nil || dbPool.Writer() == nil || dbPool.Reader() == nil {
 		err := errors.New("database pool is unavailable")
 		for _, id := range []string{
-			"plugin-instances", "plugin-marketplace", "plugin-settings",
+			"plugin-instances", "plugin-marketplace", "plugin-settings", "plugin-command-receipts",
 			"plugin-state", "plugin-instance-state", "plugin-user-state",
 		} {
 			storeErrors[id] = err
 		}
-		return nil, nil, nil, nil, nil, nil, storeErrors
+		return nil, nil, nil, nil, nil, nil, nil, storeErrors
 	}
 	stateStore, err := state.NewStore(dbPool)
 	recordStoreError(storeErrors, "plugin-state", err)
+	commandStore, err := state.NewCommandStore(dbPool)
+	recordStoreError(storeErrors, "plugin-command-receipts", err)
 	userStateStore, err := state.NewUserStore(dbPool)
 	recordStoreError(storeErrors, "plugin-user-state", err)
 	instanceStore, err := instances.NewStore(dbPool)
@@ -171,7 +176,7 @@ func initializeRequiredStores(dbPool *db.Pool) (*state.Store, *state.UserStore, 
 	recordStoreError(storeErrors, "plugin-marketplace", err)
 	settingsStore, err := newSettingsStore(dbPool)
 	recordStoreError(storeErrors, "plugin-settings", err)
-	return stateStore, userStateStore, instanceStore, instanceState, sourceStore, settingsStore, storeErrors
+	return stateStore, commandStore, userStateStore, instanceStore, instanceState, sourceStore, settingsStore, storeErrors
 }
 
 func configureWebAppStorage(cfg *config.Config, svc *Service, instanceStore *instances.Store, instanceState *state.InstanceStore, log *logger.Logger) {

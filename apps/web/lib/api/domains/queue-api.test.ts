@@ -1,7 +1,11 @@
+/* eslint-disable sonarjs/no-duplicate-string -- Wire action and fixture IDs are intentionally repeated for readability. */
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import type { EntityReference } from "@/lib/types/entity-reference";
+import { planCommentAdmissionConflict } from "@/lib/plan-comment-refs";
+import { WebSocketRequestError } from "@/lib/ws/request-error";
 
 const getWebSocketClientMock = vi.hoisted(() => vi.fn());
+const QUEUE_ADD_ACTION = "message.queue.add";
 const SESSION_ID = `session-1`;
 const INCARNATION_ID = `incarnation-1`;
 
@@ -14,9 +18,13 @@ import {
   QueueSendNowError,
   QueueFullError,
   QueueEntryNotFoundError,
+  QueueEditConflictError,
   QueueReorderError,
+  beginQueuedMessageEdit,
+  endQueuedMessageEdit,
   mergeQueuedEntry,
   queueMessage,
+  renewQueuedMessageEdit,
   reorderQueuedEntries,
   rethrowQueueError,
   sendQueuedNow,
@@ -86,6 +94,15 @@ describe("rethrowQueueError", () => {
     ).toThrow(QueueEntryNotFoundError);
   });
 
+  it("maps edit lease conflicts to QueueEditConflictError", () => {
+    expect(() =>
+      rethrowQueueError({
+        code: "edit_conflict",
+        message: "Edit lease expired",
+      }),
+    ).toThrow(QueueEditConflictError);
+  });
+
   it("maps merge_reference_overflow errors to MergeReferenceOverflowError", () => {
     expect(() =>
       rethrowQueueError({
@@ -116,7 +133,83 @@ describe("rethrowQueueError", () => {
     }
     expect(caught).toBe(original);
   });
+});
 
+describe("structured plan comment conflicts", () => {
+  it("preserves structured plan comment conflicts and their snapshots", () => {
+    const details = {
+      snapshot: {
+        task_id: "task-1",
+        plan_id: "plan-1",
+        revision: 3,
+        comments: [],
+      },
+    };
+    const original = new WebSocketRequestError(
+      "Plan comments changed",
+      "plan_comments_changed",
+      details,
+    );
+    let caught: unknown;
+    try {
+      rethrowQueueError(original);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBe(original);
+    expect((caught as WebSocketRequestError).code).toBe("plan_comments_changed");
+    expect((caught as WebSocketRequestError).details).toEqual(details);
+    expect(planCommentAdmissionConflict(caught)).toMatchObject({
+      code: "plan_comments_changed",
+      snapshot: details.snapshot,
+    });
+  });
+
+  it("preserves structured primary-session conflicts and their details", () => {
+    const details = {
+      primary_session_id: "session-2",
+      primary_session_state: "RUNNING",
+    };
+    const original = new WebSocketRequestError(
+      "Primary session changed",
+      "primary_session_changed",
+      details,
+    );
+    let caught: unknown;
+    try {
+      rethrowQueueError(original);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBe(original);
+    expect((caught as WebSocketRequestError).code).toBe("primary_session_changed");
+    expect((caught as WebSocketRequestError).details).toEqual(details);
+    expect(planCommentAdmissionConflict(caught)).toMatchObject({
+      code: "primary_session_changed",
+      primarySessionId: "session-2",
+      primarySessionState: "RUNNING",
+    });
+  });
+
+  it("preserves admission-only validation errors for non-admission operations", () => {
+    const details = { field: "content" };
+    const original = new WebSocketRequestError("Invalid queue edit", "VALIDATION_ERROR", details);
+    let caught: unknown;
+    try {
+      rethrowQueueError(original);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBe(original);
+    expect((caught as WebSocketRequestError).code).toBe("VALIDATION_ERROR");
+    expect((caught as WebSocketRequestError).details).toEqual(details);
+  });
+});
+
+describe("rethrowQueueError values", () => {
   it("wraps non-Error non-WSError values in an Error so callers can rely on stack traces", () => {
     let caught: unknown;
     try {
@@ -142,7 +235,7 @@ describe("queue reference payloads", () => {
       entity_references: [reference],
     });
 
-    expect(request).toHaveBeenCalledWith("message.queue.add", {
+    expect(request).toHaveBeenCalledWith(QUEUE_ADD_ACTION, {
       session_id: SESSION_ID,
       session_incarnation_id: INCARNATION_ID,
       task_id: "task-1",
@@ -163,7 +256,7 @@ describe("queue reference payloads", () => {
       context_files: [{ path: "src/components", name: "components", is_directory: true }],
     });
 
-    expect(request).toHaveBeenCalledWith("message.queue.add", {
+    expect(request).toHaveBeenCalledWith(QUEUE_ADD_ACTION, {
       session_id: SESSION_ID,
       session_incarnation_id: INCARNATION_ID,
       task_id: "task-1",
@@ -171,7 +264,9 @@ describe("queue reference payloads", () => {
       context_files: [{ path: "src/components", name: "components", is_directory: true }],
     });
   });
+});
 
+describe("queued message reference updates", () => {
   it("sends an explicit empty reference array when replacing a queued message", async () => {
     const request = vi.fn().mockResolvedValue({ entry_id: "q-1" });
     getWebSocketClientMock.mockReturnValue({ request });
@@ -214,6 +309,78 @@ describe("queue reference payloads", () => {
       entry_id: "q-1",
       content: "reference kept",
       entity_references: [reference],
+    });
+  });
+});
+
+describe("queued message edit leases", () => {
+  const lease = {
+    session_id: "session-1",
+    entry_id: "q-1",
+    lease_id: "lease-1",
+    target_revision: 3,
+  };
+
+  it("uses dedicated begin, renew, and end actions", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(lease)
+      .mockResolvedValueOnce({ ...lease, lease_generation: 2 })
+      .mockResolvedValueOnce(undefined);
+    getWebSocketClientMock.mockReturnValue({ request });
+
+    await expect(beginQueuedMessageEdit("session-1", "q-1")).resolves.toEqual(lease);
+    await expect(renewQueuedMessageEdit(lease)).resolves.toMatchObject({
+      lease_generation: 2,
+    });
+    await expect(endQueuedMessageEdit(lease)).resolves.toBeUndefined();
+    expect(request).toHaveBeenNthCalledWith(1, "message.queue.edit.begin", {
+      session_id: "session-1",
+      entry_id: "q-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "message.queue.edit.renew", lease);
+    expect(request).toHaveBeenNthCalledWith(3, "message.queue.edit.end", lease);
+  });
+  it("requests a policy-preserving drain after a successful save", async () => {
+    const request = vi.fn().mockResolvedValue(undefined);
+    getWebSocketClientMock.mockReturnValue({ request });
+
+    await endQueuedMessageEdit(lease, true);
+
+    expect(request).toHaveBeenCalledWith("message.queue.edit.end", {
+      ...lease,
+      dispatch_if_auto_run: true,
+    });
+  });
+
+  it("forwards operation and target revision fences when replacing content", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ entry_id: "q-1", operation_id: "op-1", target_revision: 4 });
+    getWebSocketClientMock.mockReturnValue({ request });
+
+    await updateQueuedMessage({
+      task_id: "task-1",
+      session_id: "session-1",
+      session_incarnation_id: INCARNATION_ID,
+      entry_id: "q-1",
+      lease_id: "lease-1",
+      operation_id: "op-1",
+      expected_target_revision: 3,
+      content: "edited",
+      entity_references: [],
+    });
+
+    expect(request).toHaveBeenCalledWith("message.queue.update", {
+      task_id: "task-1",
+      session_id: "session-1",
+      session_incarnation_id: INCARNATION_ID,
+      entry_id: "q-1",
+      lease_id: "lease-1",
+      operation_id: "op-1",
+      expected_target_revision: 3,
+      content: "edited",
+      entity_references: [],
     });
   });
 });
@@ -302,21 +469,15 @@ describe("sendQueuedNow", () => {
     });
     getWebSocketClientMock.mockReturnValue({ request });
 
-    await sendQueuedNow({
+    const params = {
       task_id: "task-1",
       session_id: SESSION_ID,
       session_incarnation_id: INCARNATION_ID,
       scope: "entry",
       entry_id: "q-2",
-    });
-
-    expect(request).toHaveBeenCalledWith("message.queue.send_now", {
-      task_id: "task-1",
-      session_id: SESSION_ID,
-      session_incarnation_id: INCARNATION_ID,
-      scope: "entry",
-      entry_id: "q-2",
-    });
+    } as const;
+    await sendQueuedNow(params);
+    expect(request).toHaveBeenCalledWith("message.queue.send_now", params, 35_000);
   });
 
   it("omits entry_id for an all scope snapshot", async () => {
@@ -327,26 +488,23 @@ describe("sendQueuedNow", () => {
     });
     getWebSocketClientMock.mockReturnValue({ request });
 
-    await sendQueuedNow({
+    const params = {
       task_id: "task-1",
       session_id: SESSION_ID,
       session_incarnation_id: INCARNATION_ID,
       scope: "all",
-    });
-
-    expect(request).toHaveBeenCalledWith("message.queue.send_now", {
-      task_id: "task-1",
-      session_id: SESSION_ID,
-      session_incarnation_id: INCARNATION_ID,
-      scope: "all",
-    });
+    } as const;
+    await sendQueuedNow(params);
+    expect(request).toHaveBeenCalledWith("message.queue.send_now", params, 35_000);
   });
 
   it("maps send-now conflict codes to a typed error", async () => {
-    const request = vi.fn().mockRejectedValue({
-      code: "send_now_conflict",
-      message: "Another cancellation is in progress",
-    });
+    const conflict = new WebSocketRequestError(
+      "Another cancellation is in progress",
+      "send_now_conflict",
+      { session_id: SESSION_ID },
+    );
+    const request = vi.fn().mockRejectedValue(conflict);
     getWebSocketClientMock.mockReturnValue({ request });
 
     await expect(

@@ -99,27 +99,32 @@ func TestManager_ResetAgentContext_ReappliesSessionRuntimeConfig(t *testing.T) {
 	require.Equal(t, v1.AgentStatusReady, exec.Status)
 }
 
-func TestReapplySessionModel_UsesUniqueAdvertisedVariation(t *testing.T) {
+func TestApplySessionModeAfterResetDoesNotCacheUnconfirmedRequest(t *testing.T) {
 	mgr := newTestManager(t)
 	mock := newRestartMockAgentctlServer(t, false, false)
+	mock.modeResult = &agentctl.ModeResult{Requested: "acceptEdits"}
 	client := createTestClient(t, mock.server.URL)
 	t.Cleanup(client.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	require.NoError(t, client.StreamUpdates(ctx, func(agentctl.AgentEvent) {}, nil, nil))
 
 	exec := runtimeConfigResetExecution(client, true)
-	exec.SetModelState(&CachedModelState{
-		CurrentModelID: "provider-default",
-		Models:         []streams.SessionModelInfo{{ModelID: "opus[1m]"}},
+	exec.SetModeState(&CachedModeState{
+		CurrentModeID: "default",
+		AvailableModes: []streams.SessionModeInfo{
+			{ID: "default"}, {ID: "acceptEdits"},
+		},
 	})
 
-	require.NoError(t, mgr.reapplySessionModelAfterReset(ctx, exec, "reset-session", "opus"))
-	require.Equal(t, []string{"opus[1m]"}, mock.getSetModelIDs())
+	err := mgr.applySessionModeAfterReset(ctx, exec, "reset-session", "acceptEdits")
+	require.ErrorContains(t, err, "not confirmed")
+	require.Equal(t, "default", exec.GetModeState().CurrentModeID)
 }
 
-func TestWorkspaceRebindModel_UsesUniqueAdvertisedVariation(t *testing.T) {
+func TestReapplySessionModel_RejectsUnadvertisedExactModel(t *testing.T) {
 	mgr := newTestManager(t)
+	mgr.profileResolver = &restartProfileResolver{profile: &AgentProfileInfo{RequireExactModel: true}}
 	mock := newRestartMockAgentctlServer(t, false, false)
 	client := createTestClient(t, mock.server.URL)
 	t.Cleanup(client.Close)
@@ -133,15 +138,37 @@ func TestWorkspaceRebindModel_UsesUniqueAdvertisedVariation(t *testing.T) {
 		Models:         []streams.SessionModelInfo{{ModelID: "opus[1m]"}},
 	})
 
-	require.NoError(t, mgr.reapplyReboundSessionConfig(
+	err := mgr.reapplySessionModelAfterReset(ctx, exec, "reset-session", "opus")
+	require.ErrorContains(t, err, "requested_not_advertised")
+	require.Empty(t, mock.getSetModelIDs())
+}
+
+func TestWorkspaceRebindModel_RejectsUnadvertisedExactModel(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.profileResolver = &restartProfileResolver{profile: &AgentProfileInfo{RequireExactModel: true}}
+	mock := newRestartMockAgentctlServer(t, false, false)
+	client := createTestClient(t, mock.server.URL)
+	t.Cleanup(client.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	require.NoError(t, client.StreamUpdates(ctx, func(agentctl.AgentEvent) {}, nil, nil))
+
+	exec := runtimeConfigResetExecution(client, true)
+	exec.SetModelState(&CachedModelState{
+		CurrentModelID: "provider-default",
+		Models:         []streams.SessionModelInfo{{ModelID: "opus[1m]"}},
+	})
+
+	err := mgr.reapplyReboundSessionConfig(
 		ctx,
 		exec,
 		"rebind-session",
 		&CachedModelState{},
 		"opus",
 		nil,
-	))
-	require.Equal(t, []string{"opus[1m]"}, mock.getSetModelIDs())
+	)
+	require.ErrorContains(t, err, "requested_not_advertised")
+	require.Empty(t, mock.getSetModelIDs())
 }
 
 func TestManager_RestartAgentProcess_ReappliesSessionRuntimeConfig(t *testing.T) {

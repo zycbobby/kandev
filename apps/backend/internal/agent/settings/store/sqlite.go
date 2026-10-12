@@ -21,11 +21,13 @@ import (
 )
 
 type sqliteRepository struct {
-	db      *sqlx.DB // writer
-	ro      *sqlx.DB // reader
-	ownsDB  bool
-	log     *logger.Logger
-	migrate *db.MigrateLogger
+	db                             *sqlx.DB // writer
+	ro                             *sqlx.DB // reader
+	ownsDB                         bool
+	log                            *logger.Logger
+	migrate                        *db.MigrateLogger
+	profileOrderAfterLock          func(operation, agentID string) error
+	profileOrderAfterOwnershipRead func(profileID, agentID, workspaceID string) error
 }
 
 var _ Repository = (*sqliteRepository)(nil)
@@ -103,10 +105,25 @@ func (r *sqliteRepository) initSchema() error {
 		consecutive_failures INTEGER NOT NULL DEFAULT 0,
 		failure_threshold INTEGER NOT NULL DEFAULT 3,
 		executor_preference TEXT NOT NULL DEFAULT '',
+		execution_agent_profile_id TEXT NOT NULL DEFAULT '',
 		budget_monthly_cents INTEGER NOT NULL DEFAULT 0,
 		settings TEXT NOT NULL DEFAULT '{}',
 		permissions TEXT NOT NULL DEFAULT '{}',
 		command_prefix TEXT NOT NULL DEFAULT '',
+		provider_kind TEXT NOT NULL DEFAULT '',
+		provider_base_url TEXT NOT NULL DEFAULT '',
+		provider_api_key_secret_id TEXT NOT NULL DEFAULT '',
+		cursor_mcp_auth_enabled INTEGER NOT NULL DEFAULT 1,
+		cursor_plugins_mcp_enabled INTEGER NOT NULL DEFAULT 1,
+		mcp_selection_mode TEXT NOT NULL DEFAULT 'inherit',
+		mcp_selected_servers TEXT NOT NULL DEFAULT '[]',
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS agent_profile_orders (
+		agent_id TEXT PRIMARY KEY,
+		revision INTEGER NOT NULL DEFAULT 0,
 		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 	);
 
@@ -174,6 +191,9 @@ func (r *sqliteRepository) initSchema() error {
 	if err := r.migrateDropModelCheckConstraint(); err != nil {
 		return fmt.Errorf("failed to migrate agent_profiles model constraint: %w", err)
 	}
+	if err := r.migrate.Apply("agent_profiles.sort_order", `ALTER TABLE agent_profiles ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("failed to migrate agent profile order: %w", err)
+	}
 
 	// Migration: ADR 0005 Wave A — enrich agent_profiles with office columns.
 	// Duplicate-column errors are the only replay result tolerated by the
@@ -193,6 +213,22 @@ func (r *sqliteRepository) initSchema() error {
 	// recreates agent_profiles would otherwise lose columns added before it.
 	r.migrate.Apply("agent_profiles.fallback_model", `ALTER TABLE agent_profiles ADD COLUMN fallback_model TEXT NOT NULL DEFAULT ''`)
 	r.migrate.Apply("agent_profiles.auto_fallback", `ALTER TABLE agent_profiles ADD COLUMN auto_fallback INTEGER NOT NULL DEFAULT 0`)
+
+	// OpenAI-compatible providers: added after the table-recreation block for
+	// the same reason as command_prefix / fallback_model — a legacy DB that
+	// recreates agent_profiles copies only pre-existing columns.
+	_ = r.migrate.Apply("agent_profiles.provider_kind", `ALTER TABLE agent_profiles ADD COLUMN provider_kind TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("agent_profiles.provider_base_url", `ALTER TABLE agent_profiles ADD COLUMN provider_base_url TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("agent_profiles.provider_api_key_secret_id", `ALTER TABLE agent_profiles ADD COLUMN provider_api_key_secret_id TEXT NOT NULL DEFAULT ''`)
+	_ = r.migrate.Apply("agent_profiles.require_exact_model", `ALTER TABLE agent_profiles ADD COLUMN require_exact_model INTEGER NOT NULL DEFAULT 0`)
+	_ = r.migrate.Apply("agent_profiles.cursor_mcp_auth_enabled", `ALTER TABLE agent_profiles ADD COLUMN cursor_mcp_auth_enabled INTEGER NOT NULL DEFAULT 1`)
+	_ = r.migrate.Apply("agent_profiles.cursor_plugins_mcp_enabled", `ALTER TABLE agent_profiles ADD COLUMN cursor_plugins_mcp_enabled INTEGER NOT NULL DEFAULT 1`)
+	_ = r.migrate.Apply("agent_profiles.mcp_selection_mode", `ALTER TABLE agent_profiles ADD COLUMN mcp_selection_mode TEXT NOT NULL DEFAULT 'inherit'`)
+	_ = r.migrate.Apply("agent_profiles.mcp_selected_servers", `ALTER TABLE agent_profiles ADD COLUMN mcp_selected_servers TEXT NOT NULL DEFAULT '[]'`)
+	// Office identifiers bind the execution profile that owns their launches.
+	// Added after the table-recreation block for the same reason as
+	// command_prefix / provider_kind.
+	_ = r.migrate.Apply("agent_profiles.execution_agent_profile_id", `ALTER TABLE agent_profiles ADD COLUMN execution_agent_profile_id TEXT NOT NULL DEFAULT ''`)
 	if err := r.migrate.Err(); err != nil {
 		return fmt.Errorf("required agent settings migration: %w", err)
 	}
@@ -320,6 +356,16 @@ func (r *sqliteRepository) recreateAgentProfilesWithoutModelCheck() error {
 	srcHasCLIFlags := columnExists(tx, "agent_profiles", "cli_flags")
 	srcHasEnvVars := columnExists(tx, "agent_profiles", "env_vars")
 	srcHasEnabled := columnExists(tx, "agent_profiles", "enabled")
+	srcHasSortOrder := columnExists(tx, "agent_profiles", "sort_order")
+
+	srcHasCommandPrefix := columnExists(tx, "agent_profiles", "command_prefix")
+	srcHasFallbackModel := columnExists(tx, "agent_profiles", "fallback_model")
+	srcHasAutoFallback := columnExists(tx, "agent_profiles", "auto_fallback")
+	srcHasRequireExactModel := columnExists(tx, "agent_profiles", "require_exact_model")
+	srcHasCursorMCPAuthEnabled := columnExists(tx, "agent_profiles", "cursor_mcp_auth_enabled")
+	srcHasCursorPluginsMCPEnabled := columnExists(tx, "agent_profiles", "cursor_plugins_mcp_enabled")
+	srcHasMCPSelectionMode := columnExists(tx, "agent_profiles", "mcp_selection_mode")
+	srcHasMCPSelectedServers := columnExists(tx, "agent_profiles", "mcp_selected_servers")
 	srcCols := `id, agent_id, name, agent_display_name, model, mode, migrated_from,
 		auto_approve, dangerously_skip_permissions, allow_indexing,
 		cli_passthrough, user_modified, plan, created_at, updated_at, deleted_at`
@@ -335,6 +381,42 @@ func (r *sqliteRepository) recreateAgentProfilesWithoutModelCheck() error {
 	if srcHasEnabled {
 		srcCols += ", enabled"
 		dstCols += ", enabled"
+	}
+	if srcHasCommandPrefix {
+		srcCols += ", command_prefix"
+		dstCols += ", command_prefix"
+	}
+	if srcHasFallbackModel {
+		srcCols += ", fallback_model"
+		dstCols += ", fallback_model"
+	}
+	if srcHasAutoFallback {
+		srcCols += ", auto_fallback"
+		dstCols += ", auto_fallback"
+	}
+	if srcHasRequireExactModel {
+		srcCols += ", require_exact_model"
+		dstCols += ", require_exact_model"
+	}
+	if srcHasCursorMCPAuthEnabled {
+		srcCols += ", cursor_mcp_auth_enabled"
+		dstCols += ", cursor_mcp_auth_enabled"
+	}
+	if srcHasCursorPluginsMCPEnabled {
+		srcCols += ", cursor_plugins_mcp_enabled"
+		dstCols += ", cursor_plugins_mcp_enabled"
+	}
+	if srcHasMCPSelectionMode {
+		srcCols += ", mcp_selection_mode"
+		dstCols += ", mcp_selection_mode"
+	}
+	if srcHasMCPSelectedServers {
+		srcCols += ", mcp_selected_servers"
+		dstCols += ", mcp_selected_servers"
+	}
+	if srcHasSortOrder {
+		srcCols += ", sort_order"
+		dstCols += ", sort_order"
 	}
 
 	if _, err := tx.Exec(`CREATE TABLE agent_profiles_new (
@@ -357,6 +439,16 @@ func (r *sqliteRepository) recreateAgentProfilesWithoutModelCheck() error {
 		created_at TIMESTAMP NOT NULL,
 		updated_at TIMESTAMP NOT NULL,
 		deleted_at TIMESTAMP,
+		command_prefix TEXT NOT NULL DEFAULT '',
+		fallback_model TEXT NOT NULL DEFAULT '',
+		auto_fallback INTEGER NOT NULL DEFAULT 0,
+		require_exact_model INTEGER NOT NULL DEFAULT 0,
+		cursor_mcp_auth_enabled INTEGER NOT NULL DEFAULT 1,
+		cursor_plugins_mcp_enabled INTEGER NOT NULL DEFAULT 1,
+		mcp_selection_mode TEXT NOT NULL DEFAULT 'inherit',
+		mcp_selected_servers TEXT NOT NULL DEFAULT '[]',
+		sort_order INTEGER NOT NULL DEFAULT 0,
+
 		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 	)`); err != nil {
 		return fmt.Errorf("create new table: %w", err)
@@ -467,7 +559,15 @@ func (r *sqliteRepository) UpdateAgent(ctx context.Context, agent *models.Agent)
 }
 
 func (r *sqliteRepository) DeleteAgent(ctx context.Context, id string) error {
-	result, err := r.db.ExecContext(ctx, r.db.Rebind(`DELETE FROM agents WHERE id = ?`), id)
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := r.lockMembership(ctx, tx, "delete-agent", id); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, tx.Rebind(`DELETE FROM agents WHERE id = ?`), id)
 	if err != nil {
 		return err
 	}
@@ -475,7 +575,7 @@ func (r *sqliteRepository) DeleteAgent(ctx context.Context, id string) error {
 	if rows == 0 {
 		return fmt.Errorf("agent not found: %s", id)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (r *sqliteRepository) ListAgents(ctx context.Context) ([]*models.Agent, error) {
@@ -644,14 +744,25 @@ func (r *sqliteRepository) CreateAgentProfile(ctx context.Context, profile *mode
 	if profile.ID == "" {
 		profile.ID = uuid.New().String()
 	}
+	profile.Enabled = true
 	now := time.Now().UTC()
 	profile.CreatedAt = now
 	profile.UpdatedAt = now
 	// New profiles are created enabled — the DB column default is 1 and
 	// nothing creates a profile pre-disabled. Setting the field here keeps
 	// callers' in-memory copy consistent with the row.
-	profile.Enabled = true
-	return r.insertAgentProfile(ctx, r.db, profile)
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := r.lockMembership(ctx, tx, "create-profile", profile.AgentID); err != nil {
+		return err
+	}
+	if err := r.insertAgentProfile(ctx, tx, profile); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 var _ DynamicProfileRepository = (*sqliteRepository)(nil)
@@ -810,24 +921,28 @@ func (r *sqliteRepository) UpdateAgentProfileWithDynamic(
 	expectedVersion int64,
 	routes []models.DynamicAgentRoute,
 ) error {
+	if profile == nil {
+		return fmt.Errorf("profile and dynamic profile IDs are required")
+	}
+	return r.UpdateAgentProfileWithDynamicEnabledIntent(ctx, profile, dynamic, expectedVersion, routes, &profile.Enabled)
+}
+
+// UpdateAgentProfileWithDynamicEnabledIntent commits the base profile and
+// versioned routes together, exposing the written enabled value after commit.
+func (r *sqliteRepository) UpdateAgentProfileWithDynamicEnabledIntent(
+	ctx context.Context,
+	profile *models.AgentProfile,
+	dynamic *models.DynamicAgentProfile,
+	expectedVersion int64,
+	routes []models.DynamicAgentRoute,
+	enabled *bool,
+) error {
 	if profile == nil || dynamic == nil || profile.ID == "" || dynamic.ProfileID != profile.ID {
 		return fmt.Errorf("profile and dynamic profile IDs are required")
 	}
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := r.updateAgentProfile(ctx, tx, profile); err != nil {
-		return err
-	}
-	if err := r.updateDynamicAgentProfileTx(ctx, tx, dynamic, expectedVersion, routes); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+	return r.updateAgentProfileWithMembershipLocks(ctx, profile, enabled, func(tx *sqlx.Tx) error {
+		return r.updateDynamicAgentProfileTx(ctx, tx, dynamic, expectedVersion, routes)
+	})
 }
 
 func (r *sqliteRepository) ListDynamicProfileReferencesByExecutionProfile(
@@ -881,6 +996,9 @@ func (r *sqliteRepository) DuplicateAgentProfile(ctx context.Context, input Dupl
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := r.lockMembership(ctx, tx, "duplicate-profile", input.Profile.AgentID); err != nil {
+		return err
+	}
 
 	if err := r.verifySourceSnapshot(ctx, tx, input); err != nil {
 		return err
@@ -972,6 +1090,10 @@ func (r *sqliteRepository) insertAgentProfile(ctx context.Context, execer profil
 	if err != nil {
 		return err
 	}
+	mcpSelectedServersJSON, err := mcpSelectedServersToJSON(profile.MCPSelectedServers)
+	if err != nil {
+		return err
+	}
 	enrich, err := enrichmentValues(profile)
 	if err != nil {
 		return err
@@ -987,7 +1109,11 @@ func (r *sqliteRepository) insertAgentProfile(ctx context.Context, execer profil
 			max_concurrent_sessions, cooldown_sec, skip_idle_runs,
 			consecutive_failures, failure_threshold,
 			executor_preference, budget_monthly_cents, settings, permissions,
-			command_prefix, fallback_model, auto_fallback
+			command_prefix, fallback_model, auto_fallback,
+			provider_kind, provider_base_url, provider_api_key_secret_id, require_exact_model,
+			cursor_mcp_auth_enabled, cursor_plugins_mcp_enabled,
+			mcp_selection_mode, mcp_selected_servers,
+			execution_agent_profile_id
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?,
@@ -998,7 +1124,11 @@ func (r *sqliteRepository) insertAgentProfile(ctx context.Context, execer profil
 			?, ?, ?,
 			?, ?,
 			?, ?, ?, ?,
-			?, ?, ?
+			?, ?, ?,
+			?, ?, ?, ?,
+			?, ?,
+			?, ?,
+			?
 		)
 	`),
 		profile.ID, profile.AgentID, profile.Name, profile.AgentDisplayName, profile.Model,
@@ -1015,6 +1145,13 @@ func (r *sqliteRepository) insertAgentProfile(ctx context.Context, execer profil
 		profile.CommandPrefix,
 		profile.FallbackModel,
 		dialect.BoolToInt(profile.AutoFallback),
+		profile.ProviderKind, profile.ProviderBaseURL, profile.ProviderAPIKeySecretID,
+		dialect.BoolToInt(profile.RequireExactModel),
+		dialect.BoolToInt(profile.CursorMCPAuthEnabled),
+		dialect.BoolToInt(profile.CursorPluginsMCPEnabled),
+		normalizeMCPSelectionMode(profile.MCPSelectionMode),
+		mcpSelectedServersJSON,
+		profile.ExecutionAgentProfileID,
 	)
 	return err
 }
@@ -1220,29 +1357,86 @@ func envVarsToJSON(envVars []models.ProfileEnvVar) (string, error) {
 	return string(data), nil
 }
 
-func (r *sqliteRepository) UpdateAgentProfile(ctx context.Context, profile *models.AgentProfile) error {
-	return r.updateAgentProfile(ctx, r.db, profile)
+func mcpSelectedServersToJSON(servers []string) (string, error) {
+	if servers == nil {
+		servers = []string{}
+	}
+	data, err := json.Marshal(servers)
+	if err != nil {
+		return "", fmt.Errorf("marshal mcp_selected_servers: %w", err)
+	}
+	return string(data), nil
 }
 
-func (r *sqliteRepository) updateAgentProfile(ctx context.Context, execer profileExecer, profile *models.AgentProfile) error {
+func normalizeMCPSelectionMode(mode string) string {
+	if mode == "" {
+		return "inherit"
+	}
+	return mode
+}
+
+func (r *sqliteRepository) UpdateAgentProfile(ctx context.Context, profile *models.AgentProfile) error {
+	return r.UpdateAgentProfileWithEnabledIntent(ctx, profile, &profile.Enabled)
+}
+
+// UpdateAgentProfileWithEnabledIntent returns the enabled value from this
+// update's statement, so a later toggle cannot alter its response snapshot.
+func (r *sqliteRepository) UpdateAgentProfileWithEnabledIntent(ctx context.Context, profile *models.AgentProfile, enabled *bool) error {
+	return r.updateAgentProfileWithMembershipLocks(ctx, profile, enabled, nil)
+}
+
+// UpdateAgentProfileModelIfEmpty adopts a probed model without replacing any
+// other profile fields. The model predicate makes the read/check/write one
+// atomic operation, so a concurrent profile edit wins over the background
+// probe instead of being overwritten by a full-row update.
+func (r *sqliteRepository) UpdateAgentProfileModelIfEmpty(
+	ctx context.Context,
+	profileID, model string,
+) (bool, error) {
+	result, err := r.db.ExecContext(ctx, r.db.Rebind(`
+		UPDATE agent_profiles
+		SET model = ?, updated_at = ?
+		WHERE id = ? AND deleted_at IS NULL AND model = ''
+	`), model, time.Now().UTC(), profileID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
+}
+
+type profileUpdater interface {
+	QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row
+	Rebind(query string) string
+}
+
+func (r *sqliteRepository) updateAgentProfile(ctx context.Context, updater profileUpdater, profile *models.AgentProfile, enabled *bool) (bool, error) {
 	profile.UpdatedAt = time.Now().UTC()
 	cliFlagsJSON, err := cliFlagsToJSON(profile.CLIFlags)
 	if err != nil {
-		return err
+		return false, err
 	}
 	envVarsJSON, err := envVarsToJSON(profile.EnvVars)
 	if err != nil {
-		return err
+		return false, err
+	}
+	mcpSelectedServersJSON, err := mcpSelectedServersToJSON(profile.MCPSelectedServers)
+	if err != nil {
+		return false, err
 	}
 	enrich, err := enrichmentValues(profile)
 	if err != nil {
-		return err
+		return false, err
 	}
-	result, err := execer.ExecContext(ctx, execer.Rebind(`
+	enabledValue := dialect.BoolToInt(enabled != nil && *enabled)
+	row := updater.QueryRowxContext(ctx, updater.Rebind(`
 		UPDATE agent_profiles
 		SET agent_id = ?, name = ?, agent_display_name = ?, model = ?, mode = ?, migrated_from = ?,
 			auto_approve = ?, dangerously_skip_permissions = ?, allow_indexing = ?,
-			cli_passthrough = ?, enabled = ?, user_modified = ?, cli_flags = ?, env_vars = ?, updated_at = ?,
+			cli_passthrough = ?, enabled = CASE WHEN ? = 1 THEN ? ELSE enabled END, user_modified = ?, cli_flags = ?, env_vars = ?, updated_at = ?,
 			workspace_id = ?, role = ?, icon = ?, reports_to = ?,
 			skill_ids = ?, desired_skills = ?, custom_prompt = ?,
 			status = CASE
@@ -1262,13 +1456,18 @@ func (r *sqliteRepository) updateAgentProfile(ctx context.Context, execer profil
 			consecutive_failures = ?, failure_threshold = ?,
 			executor_preference = ?,
 			budget_monthly_cents = ?, settings = ?, permissions = ?,
-			command_prefix = ?, fallback_model = ?, auto_fallback = ?
+			command_prefix = ?, fallback_model = ?, auto_fallback = ?,
+			provider_kind = ?, provider_base_url = ?, provider_api_key_secret_id = ?, require_exact_model = ?,
+			cursor_mcp_auth_enabled = ?, cursor_plugins_mcp_enabled = ?,
+			mcp_selection_mode = ?, mcp_selected_servers = ?,
+			execution_agent_profile_id = ?
 		WHERE id = ? AND deleted_at IS NULL
+		RETURNING enabled
 	`), profile.AgentID, profile.Name, profile.AgentDisplayName, profile.Model,
 		nullableString(profile.Mode), nullableString(profile.MigratedFrom),
 		dialect.BoolToInt(profile.AutoApprove),
 		dialect.BoolToInt(profile.DangerouslySkipPermissions), dialect.BoolToInt(profile.AllowIndexing),
-		dialect.BoolToInt(profile.CLIPassthrough), dialect.BoolToInt(profile.Enabled), dialect.BoolToInt(profile.UserModified), cliFlagsJSON, envVarsJSON, profile.UpdatedAt,
+		dialect.BoolToInt(profile.CLIPassthrough), dialect.BoolToInt(enabled != nil), enabledValue, dialect.BoolToInt(profile.UserModified), cliFlagsJSON, envVarsJSON, profile.UpdatedAt,
 		enrich.workspaceID, enrich.role, enrich.icon, enrich.reportsTo,
 		enrich.skillIDs, enrich.desiredSkills, enrich.customPrompt,
 		enrich.status, enrich.status, enrich.status, enrich.pauseReason, profile.LastRunFinishedAt,
@@ -1279,15 +1478,22 @@ func (r *sqliteRepository) updateAgentProfile(ctx context.Context, execer profil
 		profile.CommandPrefix,
 		profile.FallbackModel,
 		dialect.BoolToInt(profile.AutoFallback),
+		profile.ProviderKind, profile.ProviderBaseURL, profile.ProviderAPIKeySecretID,
+		dialect.BoolToInt(profile.RequireExactModel),
+		dialect.BoolToInt(profile.CursorMCPAuthEnabled),
+		dialect.BoolToInt(profile.CursorPluginsMCPEnabled),
+		normalizeMCPSelectionMode(profile.MCPSelectionMode),
+		mcpSelectedServersJSON,
+		profile.ExecutionAgentProfileID,
 		profile.ID)
-	if err != nil {
-		return err
+	var committedEnabled bool
+	if err := row.Scan(&committedEnabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("agent profile not found: %s", profile.ID)
+		}
+		return false, err
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("agent profile not found: %s", profile.ID)
-	}
-	return nil
+	return committedEnabled, nil
 }
 
 // UpdateAgentProfileEnabled changes only the selection flag. Keeping this
@@ -1311,18 +1517,61 @@ func (r *sqliteRepository) UpdateAgentProfileEnabled(ctx context.Context, id str
 }
 
 func (r *sqliteRepository) DeleteAgentProfile(ctx context.Context, id string) error {
-	now := time.Now().UTC()
-	result, err := r.db.ExecContext(ctx, r.db.Rebind(`
-		UPDATE agent_profiles SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL
-	`), now, now, id)
-	if err != nil {
-		return err
+	for range 3 {
+		profile, err := r.GetAgentProfile(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("agent profile not found: %s", id)
+		}
+		if err != nil {
+			return err
+		}
+		if r.profileOrderAfterOwnershipRead != nil {
+			if err := r.profileOrderAfterOwnershipRead(profile.ID, profile.AgentID, profile.WorkspaceID); err != nil {
+				return err
+			}
+		}
+		tx, err := r.db.BeginTxx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		// Lock the candidate owner even for workspace-scoped rows; an owner move
+		// between reads must not bypass membership serialization.
+		if err := r.lockMembership(ctx, tx, "delete-profile", profile.AgentID); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := lockAgentProfileIdentity(ctx, tx, r.db.DriverName(), profile.ID); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		var agentID, workspaceID string
+		err = tx.QueryRowxContext(ctx, tx.Rebind(`SELECT agent_id, workspace_id FROM agent_profiles WHERE id = ? AND deleted_at IS NULL`), id).Scan(&agentID, &workspaceID)
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return fmt.Errorf("agent profile not found: %s", id)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if agentID != profile.AgentID || workspaceID != profile.WorkspaceID {
+			_ = tx.Rollback()
+			continue
+		}
+		now := time.Now().UTC()
+		result, err := tx.ExecContext(ctx, tx.Rebind(`UPDATE agent_profiles SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`), now, now, id)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			_ = tx.Rollback()
+			return fmt.Errorf("agent profile not found: %s", id)
+		}
+		return tx.Commit()
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("agent profile not found: %s", id)
-	}
-	return nil
+	return ErrProfileChanged
 }
 
 // agentProfileSelectColumns is the SELECT projection used by every
@@ -1349,7 +1598,14 @@ const agentProfileSelectColumns = `
 		COALESCE(budget_monthly_cents, 0),
 		COALESCE(settings, '{}'), COALESCE(permissions, '{}'),
 		COALESCE(command_prefix, ''),
-		COALESCE(fallback_model, ''), COALESCE(auto_fallback, 0)
+		COALESCE(fallback_model, ''), COALESCE(auto_fallback, 0),
+		COALESCE(provider_kind, ''), COALESCE(provider_base_url, ''),
+		COALESCE(provider_api_key_secret_id, ''), COALESCE(require_exact_model, 0),
+		COALESCE(cursor_mcp_auth_enabled, 1),
+		COALESCE(cursor_plugins_mcp_enabled, 1),
+		COALESCE(mcp_selection_mode, 'inherit'),
+		COALESCE(mcp_selected_servers, '[]'),
+		COALESCE(execution_agent_profile_id, '')
 	FROM agent_profiles`
 
 func (r *sqliteRepository) GetAgentProfile(ctx context.Context, id string) (*models.AgentProfile, error) {
@@ -1377,7 +1633,7 @@ func (r *sqliteRepository) GetAgentProfileIncludingDeleted(ctx context.Context, 
 
 func (r *sqliteRepository) ListAgentProfiles(ctx context.Context, agentID string) ([]*models.AgentProfile, error) {
 	rows, err := r.ro.QueryContext(ctx,
-		r.ro.Rebind(agentProfileSelectColumns+` WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC`),
+		r.ro.Rebind(agentProfileSelectColumns+` WHERE agent_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at DESC, id ASC`),
 		agentID)
 	if err != nil {
 		return nil, err
@@ -1530,6 +1786,10 @@ func scanAgentProfile(scanner interface {
 	var skipIdleRuns int
 	var failureThreshold int
 	var autoFallback int
+	var requireExactModel int
+	var cursorMCPAuthEnabled int
+	var cursorPluginsMCPEnabled int
+	var mcpSelectedServersJSON string
 	if err := scanner.Scan(
 		&profile.ID,
 		&profile.AgentID,
@@ -1572,6 +1832,15 @@ func scanAgentProfile(scanner interface {
 		&profile.CommandPrefix,
 		&profile.FallbackModel,
 		&autoFallback,
+		&profile.ProviderKind,
+		&profile.ProviderBaseURL,
+		&profile.ProviderAPIKeySecretID,
+		&requireExactModel,
+		&cursorMCPAuthEnabled,
+		&cursorPluginsMCPEnabled,
+		&profile.MCPSelectionMode,
+		&mcpSelectedServersJSON,
+		&profile.ExecutionAgentProfileID,
 	); err != nil {
 		return nil, err
 	}
@@ -1589,6 +1858,16 @@ func scanAgentProfile(scanner interface {
 	profile.UserModified = userModified == 1
 	profile.SkipIdleRuns = skipIdleRuns == 1
 	profile.AutoFallback = autoFallback == 1
+	profile.RequireExactModel = requireExactModel == 1
+	profile.CursorMCPAuthEnabled = cursorMCPAuthEnabled == 1
+	profile.CursorPluginsMCPEnabled = cursorPluginsMCPEnabled == 1
+	profile.MCPSelectionMode = normalizeMCPSelectionMode(profile.MCPSelectionMode)
+	if err := json.Unmarshal([]byte(mcpSelectedServersJSON), &profile.MCPSelectedServers); err != nil {
+		return nil, fmt.Errorf("failed to parse mcp_selected_servers for profile %s: %w", profile.ID, err)
+	}
+	if profile.MCPSelectedServers == nil {
+		profile.MCPSelectedServers = []string{}
+	}
 	profile.Role = models.AgentRole(role)
 	profile.Status = models.AgentStatus(status)
 	profile.ConfigOptions = configOptionsFromSettings(profile.Settings)

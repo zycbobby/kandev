@@ -18,7 +18,10 @@ provider capabilities, and agent-facing runtime contracts.
 
 This system owns agent profile data, role governance, profile-backed utility
 agents, provider model options, agent permissions, and the agent capability
-surface shared by task and Office consumers.
+surface shared by task and Office consumers. Provider-neutral background-work
+identity, observations, and capabilities belong here; task storage and UI consume
+them without owning protocol semantics. Existing prompt admission and public
+session-activity authority remain with Tasks and Platform.
 
 ## Exclusions
 
@@ -45,6 +48,7 @@ surface shared by task and Office consumers.
 - [Agent Git permission boundary](requirements/git-operations-permission-boundary.md)
 - [Agent Creation Governance](requirements/governance.md)
 - [Granular Agent Permissions](requirements/granular-permissions.md)
+- [Harness session continuity](requirements/harness-session-continuity.md) (draft)
 - [Hide Disabled Agent Profiles from Left Panel Navigation](requirements/hide-disabled-profiles-nav.md)
 - [Injected Skill Naming](requirements/injected-skill-naming.md)
 - [Agent MCP Timeout Budgets](requirements/mcp-timeout-budgets.md)
@@ -72,6 +76,7 @@ surface shared by task and Office consumers.
 
 - [Agent Resume and Runtime Recovery](system-design/agent-resume-runtime-recovery.md)
 - [Google Antigravity ACP Agent](system-design/antigravity-acp-agent.md)
+- [Harness session continuity](system-design/harness-session-continuity.md) (draft)
 - [Injected Skill Naming](system-design/injected-skill-naming.md)
 - [Injected Skill Naming Migration](system-design/injected-skill-naming-migration.md)
 - [Dynamic Agent Routing System Design Part 1](system-design/dynamic-agent-routing-01.md)
@@ -102,13 +107,14 @@ surface shared by task and Office consumers.
 ## Migration record
 
 Migration remains in progress while legacy source detail is extracted from the
-canonical requirement and system-design documents above.
+canonical requirement and system-design documents. Use the catalog command to
+find current sources.
 
 ## Related systems
 
 - [Settings parity](../platform/requirements/agent-settings-parity.md): owns the
   shared discovery and interface contract. Agents retain profile data ownership.
-
 - [Tasks](../tasks/README.md): consumes agent profiles for task execution.
 - [Office](../office/README.md): consumes agent identities for autonomous work.
 - [Platform](../platform/README.md): owns shared process and runtime services.
+- [Costs](../costs/README.md): owns usage accounting and conversation cost projections from normalized provider observations.

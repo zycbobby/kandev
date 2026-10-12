@@ -97,6 +97,7 @@ export function FileTabContent({
     <TabsContent value={`file:${getFileTabKey(tab)}`} className="flex-1 min-h-0">
       {view.showImage && (
         <FileImageViewer
+          isSymlink={!!tab.resolvedPath}
           path={tab.path}
           content={tab.content}
           isBinary={!!tab.isBinary}
@@ -107,6 +108,7 @@ export function FileTabContent({
       )}
       {view.viewerKind === "binary" && (
         <FileBinaryViewer
+          isSymlink={!!tab.resolvedPath}
           path={tab.path}
           worktreePath={workspacePath}
           headerActions={externalLink}
@@ -114,6 +116,7 @@ export function FileTabContent({
       )}
       {(view.viewerKind === "text" || view.showSource) && (
         <FileEditorContent
+          isSymlink={!!tab.resolvedPath}
           path={tab.path}
           content={tab.content}
           originalContent={tab.originalContent}

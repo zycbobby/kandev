@@ -18,6 +18,7 @@ import (
 	"github.com/kandev/kandev/internal/persistence/requiredstores"
 	quickterminalrepository "github.com/kandev/kandev/internal/quickterminal/repository"
 	"github.com/kandev/kandev/internal/secrets"
+	"github.com/kandev/kandev/internal/startup"
 	systemsettings "github.com/kandev/kandev/internal/system/settings"
 	"github.com/kandev/kandev/internal/task/repository"
 	"github.com/kandev/kandev/internal/telemetrycontract"
@@ -34,90 +35,167 @@ import (
 )
 
 func provideRepositories(ctx context.Context, cfg *config.Config, log *logger.Logger, version string) (*db.Pool, *Repositories, []func() error, error) {
+	// Each check is an admission barrier. Constructors that predate context
+	// support may finish one in-flight statement after cancellation, but the
+	// next store is never admitted and cleanup runs only after this synchronous
+	// initializer has returned.
 	cleanups := make([]func() error, 0, 12)
+	initialized := false
+	defer func() {
+		if !initialized {
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				if cleanups[i] != nil {
+					_ = cleanups[i]()
+				}
+			}
+		}
+	}()
 	tracker, err := requiredstores.NewCatalogTracker()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	pool, cleanup, err := persistence.Provide(cfg, log, version)
+	pool, cleanup, err := persistence.ProvideContext(ctx, cfg, log, version)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	cleanups = append(cleanups, cleanup)
+	startup.SetPhase(ctx, startup.ApplyingMigrations)
 	writer, reader := pool.Writer(), pool.Reader()
-	if err := recordRequiredStore(tracker, "schema-meta", nil); err != nil {
+	if err := checkStartupContext(ctx, "task repository"); err != nil {
 		return nil, nil, nil, err
 	}
+	// repository.ProvideContext's own migrations and backfills open and
+	// close several of their own steps under this same ApplyingMigrations
+	// phase (journal turns/messages, prompt_seq, message_timestamps,
+	// subagent_context). It must finish before the sweep step below opens:
+	// steps must never overlap, so any of those steps beginning while
+	// stores.repositories was already active would silently end the sweep
+	// and turn every later recordRequiredStore call in this function into a
+	// no-op against a step that is no longer current.
+	taskRepoImpl, cleanup, taskRepoErr := repository.ProvideContext(ctx, writer, reader, log)
+	cleanups = append(cleanups, cleanup)
 
-	taskRepoImpl, cleanup, err := repository.Provide(writer, reader, log)
-	if err := recordRequiredStore(tracker, "task", err); err != nil {
+	startup.BeginStep(ctx, startup.StepStoresRepositories)
+	startup.SetTotal(ctx, startup.StepStoresRepositories, int64(tracker.SweepTotal(startup.StepStoresRepositories)))
+	if err := checkStartupContext(ctx, "schema metadata"); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := recordRequiredStore(ctx, tracker, "schema-meta", nil); err != nil {
+		return nil, nil, nil, err
+	}
+	if taskRepoErr == nil {
+		taskRepoErr = taskRepoImpl.RecoverInterruptedKubernetesOperations(ctx)
+	}
+	if err := recordRequiredStore(ctx, tracker, "task", taskRepoErr); err != nil {
 		return nil, nil, nil, fmt.Errorf("task store: %w", err)
 	}
-	cleanups = append(cleanups, cleanup)
 	// Workflow repo must be initialized before analytics repo because
 	// analytics creates indexes on the workflow_steps table.
+	if err := checkStartupContext(ctx, "workflow repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	workflowRepo, err := workflowrepository.NewWithDB(writer, reader, log)
-	if err := recordRequiredStore(tracker, "workflow", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "workflow", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("workflow store: %w", err)
 	}
+	if err := checkStartupContext(ctx, "analytics repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	analyticsRepo, cleanup, err := analyticsrepository.Provide(writer, reader)
-	if err := recordRequiredStore(tracker, "analytics", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "analytics", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("analytics store: %w", err)
 	}
 	cleanups = append(cleanups, cleanup)
+	if err := checkStartupContext(ctx, "agent settings repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	agentSettingsRepo, cleanup, err := settingsstore.Provide(writer, reader, log)
-	if err := recordRequiredStore(tracker, "agent-settings", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "agent-settings", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("agent settings store: %w", err)
 	}
 	cleanups = append(cleanups, cleanup)
+	if err := checkStartupContext(ctx, "support repositories"); err != nil {
+		return nil, nil, nil, err
+	}
 	supportRepos, supportCleanups, err := provideSupportRepos(ctx, writer, reader, tracker)
 	if err != nil {
+		cleanups = append(cleanups, supportCleanups...)
 		return nil, nil, nil, err
 	}
 	cleanups = append(cleanups, supportCleanups...)
+	if err := checkStartupContext(ctx, "office repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	officeRepo, officeCleanup, err := office.Provide(writer, reader, log)
-	if err := recordRequiredStore(tracker, "office", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "office", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("office repo: %w", err)
 	}
 	cleanups = append(cleanups, officeCleanup)
+	if err := checkStartupContext(ctx, "terminal repositories"); err != nil {
+		return nil, nil, nil, err
+	}
 	terminalRepoImpl, err := terminalrepo.NewWithDB(writer, reader, log)
-	if err := recordRequiredStore(tracker, "terminal", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "terminal", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("terminal repo: %w", err)
 	}
+	if err := checkStartupContext(ctx, "quick terminal repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	quickTerminalRepoImpl, err := quickterminalrepository.NewWithDB(writer, reader)
-	if err := recordRequiredStore(tracker, "quick-terminal", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "quick-terminal", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("quick terminal repo: %w", err)
 	}
+	if err := checkStartupContext(ctx, "runtime flags repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	runtimeFlagsStore, err := runtimeflags.NewSQLiteStore(writer, reader)
-	if err := recordRequiredStore(tracker, "runtime-flags", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "runtime-flags", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("runtime flags store: %w", err)
 	}
 
+	if err := checkStartupContext(ctx, "auth repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	authRepo, err := authstore.New(writer, reader)
-	if err := recordRequiredStore(tracker, "auth", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "auth", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("auth store: %w", err)
+	}
+	if err := checkStartupContext(ctx, "secret repository"); err != nil {
+		return nil, nil, nil, err
 	}
 	masterKeyProvider, err := secrets.NewMasterKeyProvider(cfg.ResolvedDataDir())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("master key: %w", err)
 	}
+	if err := checkStartupContext(ctx, "secret store"); err != nil {
+		return nil, nil, nil, err
+	}
 	secretStore, cleanup, err := secrets.Provide(writer, reader, masterKeyProvider)
-	if err := recordRequiredStore(tracker, "secrets", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "secrets", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("secret store: %w", err)
 	}
 	cleanups = append(cleanups, cleanup)
 
+	if err := checkStartupContext(ctx, "system settings and hostname repositories"); err != nil {
+		return nil, nil, nil, err
+	}
 	systemSettings, err := systemsettings.NewStore(pool)
-	if err := recordRequiredStore(tracker, "system-settings", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "system-settings", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("system settings store: %w", err)
 	}
+	if err := checkStartupContext(ctx, "hostname repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	hostnameCache, err := hostnames.NewStore(writer, reader)
-	if err := recordRequiredStore(tracker, "auth-hostnames", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "auth-hostnames", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("hostname cache store: %w", err)
 	}
 
+	if err := checkStartupContext(ctx, "telemetry contract repository"); err != nil {
+		return nil, nil, nil, err
+	}
 	telemetryStore, err := telemetrycontract.NewWithDB(writer, reader)
-	if err := recordRequiredStore(tracker, "telemetry-contract", err); err != nil {
+	if err := recordRequiredStore(ctx, tracker, "telemetry-contract", err); err != nil {
 		return nil, nil, nil, fmt.Errorf("telemetry contract store: %w", err)
 	}
 	activateTelemetryContracts(ctx, telemetryStore, log)
@@ -143,7 +221,22 @@ func provideRepositories(ctx context.Context, cfg *config.Config, log *logger.Lo
 		HostnameCache:  hostnameCache,
 		SystemSettings: systemSettings,
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	initialized = true
+	startup.EndStep(ctx, startup.StepStoresRepositories)
+	startup.SetPhase(ctx, startup.InitializingServices)
+	startup.BeginStep(ctx, startup.StepStoresServices)
+	startup.SetTotal(ctx, startup.StepStoresServices, int64(tracker.SweepTotal(startup.StepStoresServices)))
 	return pool, repos, cleanups, nil
+}
+
+func checkStartupContext(ctx context.Context, stage string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("startup canceled before %s: %w", stage, err)
+	}
+	return nil
 }
 
 // supportRepositorySet groups the lighter-weight support repositories
@@ -164,54 +257,74 @@ func provideSupportRepos(ctx context.Context, writer, reader *sqlx.DB, tracker *
 	var cleanups []func() error
 	var repos supportRepositorySet
 
-	userRepo, cleanup, err := userstore.Provide(writer, reader)
-	if err := recordRequiredStore(tracker, "user", err); err != nil {
-		return repos, nil, err
+	if err := checkStartupContext(ctx, "user repository"); err != nil {
+		return repos, cleanups, err
 	}
+	userRepo, cleanup, err := userstore.Provide(writer, reader)
 	cleanups = append(cleanups, cleanup)
+	if err := recordRequiredStore(ctx, tracker, "user", err); err != nil {
+		return repos, cleanups, err
+	}
 	repos.user = userRepo
 	// Same concrete store, account-management view (used by internal/auth).
 	repos.userAccounts = userRepo
 
-	notificationRepo, cleanup, err := notificationstore.Provide(ctx, writer, reader)
-	if err := recordRequiredStore(tracker, "notification", err); err != nil {
-		return repos, nil, err
+	if err := checkStartupContext(ctx, "notification repository"); err != nil {
+		return repos, cleanups, err
 	}
+	notificationRepo, cleanup, err := notificationstore.Provide(ctx, writer, reader)
 	cleanups = append(cleanups, cleanup)
+	if err := recordRequiredStore(ctx, tracker, "notification", err); err != nil {
+		return repos, cleanups, err
+	}
 	repos.notification = notificationRepo
 
-	editorRepo, cleanup, err := editorstore.Provide(writer, reader)
-	if err := recordRequiredStore(tracker, "editor", err); err != nil {
-		return repos, nil, err
+	if err := checkStartupContext(ctx, "editor repository"); err != nil {
+		return repos, cleanups, err
 	}
+	editorRepo, cleanup, err := editorstore.Provide(writer, reader)
 	cleanups = append(cleanups, cleanup)
+	if err := recordRequiredStore(ctx, tracker, "editor", err); err != nil {
+		return repos, cleanups, err
+	}
 	repos.editor = editorRepo
 
-	promptRepo, cleanup, err := promptstore.Provide(writer, reader)
-	if err := recordRequiredStore(tracker, "prompts", err); err != nil {
-		return repos, nil, err
+	if err := checkStartupContext(ctx, "prompt repository"); err != nil {
+		return repos, cleanups, err
 	}
+	promptRepo, cleanup, err := promptstore.Provide(writer, reader)
 	cleanups = append(cleanups, cleanup)
+	if err := recordRequiredStore(ctx, tracker, "prompts", err); err != nil {
+		return repos, cleanups, err
+	}
 	repos.prompts = promptRepo
 
-	utilityRepo, cleanup, err := utilitystore.Provide(writer, reader)
-	if err := recordRequiredStore(tracker, "utility", err); err != nil {
-		return repos, nil, err
+	if err := checkStartupContext(ctx, "utility repository"); err != nil {
+		return repos, cleanups, err
 	}
+	utilityRepo, cleanup, err := utilitystore.Provide(writer, reader)
 	cleanups = append(cleanups, cleanup)
+	if err := recordRequiredStore(ctx, tracker, "utility", err); err != nil {
+		return repos, cleanups, err
+	}
 	repos.utility = utilityRepo
 
 	return repos, cleanups, nil
 }
 
 // recordRequiredStore records a constructor result before the process can
-// expose readiness. Initialization failures remain fatal to the caller.
-func recordRequiredStore(tracker *requiredstores.Tracker, id string, initErr error) error {
+// expose readiness. Initialization failures remain fatal to the caller. A
+// successful admission advances the store-admission sweep step its catalog
+// descriptor names, by one.
+func recordRequiredStore(ctx context.Context, tracker *requiredstores.Tracker, id string, initErr error) error {
 	if trackerErr := tracker.Record(id, initErr); trackerErr != nil {
 		return trackerErr
 	}
 	if initErr != nil {
 		return fmt.Errorf("required store %q: %w", id, initErr)
+	}
+	if sweep, ok := tracker.DescriptorSweep(id); ok {
+		startup.Advance(ctx, sweep, 1)
 	}
 	return nil
 }

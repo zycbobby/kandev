@@ -5,18 +5,30 @@ import type { ApiClient } from "../../helpers/api-client";
 import { typeWhileBusy, waitForComposerQueueMode } from "../../helpers/type-while-busy";
 import { SessionPage } from "../../pages/session-page";
 import { seedRunningGeneratingSession } from "../../helpers/generating-session";
+import { waitForAgentMessage, waitForSessionDone } from "../../helpers/session";
+import { waitForSessionAgentctlReady } from "../../helpers/session-store";
 import { expectFullQueueScrolls, seedFullQueueTask } from "./message-queue-scroll-helpers";
-import { waitForQuickChatComposerReady } from "./quick-chat-helpers";
-import { expectSendNowWorkflowRunning } from "./message-queue-workflow-helpers";
+import { startQuickChatFromSetup } from "./quick-chat-helpers";
+import {
+  expectSendNowInterruptsRunningFIFOTurn,
+  expectSendNowWorkflowRunning,
+} from "./message-queue-workflow-helpers";
 import {
   registerSeparateQueueRows,
   requestMessageQueueSettings,
 } from "../../helpers/message-queue-settings";
+import { waitForHttp, watchWs } from "../../helpers/causal-waits";
 
 registerSeparateQueueRows(test);
 
 test("Send Now keeps a workflow transition running", async ({ testPage, apiClient, seedData }) => {
   await expectSendNowWorkflowRunning(testPage, apiClient, seedData, false);
+});
+
+test("Send Now interrupts a running FIFO turn", async ({ testPage, apiClient, seedData }) => {
+  test.setTimeout(150_000);
+  const gateway = watchWs(testPage);
+  await expectSendNowInterruptsRunningFIFOTurn(testPage, apiClient, seedData, false, gateway);
 });
 
 // ---------------------------------------------------------------------------
@@ -62,9 +74,12 @@ async function openQuickChatWithAgent(page: Page): Promise<Locator> {
     await agentSelector.click();
     await page.getByRole("option").first().click();
   }
-  await dialog.getByTestId("quick-chat-start").click();
-
-  await waitForQuickChatComposerReady(dialog);
+  const quickChatStarted = waitForHttp(page, "POST", /^\/api\/v1\/workspaces\/[^/]+\/quick-chat$/, {
+    timeout: 30_000,
+  });
+  await startQuickChatFromSetup(dialog, page, undefined, quickChatStarted);
+  const startResponse = await quickChatStarted;
+  expect(startResponse.ok(), "Quick Chat startup request should succeed").toBe(true);
   return dialog;
 }
 
@@ -167,13 +182,18 @@ test.describe("Quick chat queue", () => {
 // Task session queue tests
 // ---------------------------------------------------------------------------
 
+type SeededSessionPage = SessionPage & {
+  taskId: string;
+  sessionId: string;
+};
+
 async function seedTaskAndWaitForIdle(
   testPage: Page,
   apiClient: ApiClient,
   seedData: SeedData,
   title: string,
   description = "/e2e:simple-message",
-): Promise<SessionPage> {
+): Promise<SeededSessionPage> {
   const task = await apiClient.createTaskWithAgent(
     seedData.workspaceId,
     title,
@@ -191,8 +211,11 @@ async function seedTaskAndWaitForIdle(
   const session = new SessionPage(testPage);
   await session.waitForLoad();
   await session.waitForChatIdle({ timeout: 30_000 });
+  if (!task.session_id) {
+    throw new Error("task did not have a primary session");
+  }
 
-  return session;
+  return Object.assign(session, { taskId: task.id, sessionId: task.session_id });
 }
 
 async function queueMessages(
@@ -232,8 +255,6 @@ async function expectSeparateTurnsInOrder(scope: Locator, markers: string[]): Pr
 }
 
 test.describe("Task session queue", () => {
-  test.describe.configure({ retries: 1 });
-
   test("full queue scrolls internally without hiding the composer", async ({
     testPage,
     apiClient,
@@ -370,70 +391,90 @@ test.describe("Task session queue", () => {
     testPage,
     apiClient,
     seedData,
+    backend,
   }) => {
     test.setTimeout(120_000);
-
-    const session = await seedTaskAndWaitForIdle(
-      testPage,
-      apiClient,
-      seedData,
-      "Queue Send Now row test",
-    );
-    await session.sendMessage("/slow 30s");
-    await expect(session.agentStatus()).toBeVisible({ timeout: 15_000 });
-    await expect(session.chat.getByText("Running slow response (30s total)...")).toBeVisible({
-      timeout: 15_000,
+    const gateway = watchWs(testPage);
+    const releaseEnv = await backend.useEnv({
+      KANDEV_E2E_CANCEL_HOLD_DURATION: "8s",
+      KANDEV_E2E_PROMPT_CANCEL_JOIN_TIMEOUT: "12s",
     });
-    const taskID = new URL(testPage.url()).pathname.split("/").pop();
-    if (!taskID) throw new Error("task URL did not contain a task ID");
-    const workflowStepBefore = (await apiClient.getTask(taskID)).workflow_step_id;
+    try {
+      const session = await seedTaskAndWaitForIdle(
+        testPage,
+        apiClient,
+        seedData,
+        "Queue Send Now row test",
+      );
+      await session.sendMessage("/e2e:cancel-hold send-now-held-provider");
+      await expect(session.agentStatus()).toBeVisible({ timeout: 15_000 });
+      await expect(session.chat.getByText("send-now-held-provider", { exact: true })).toBeVisible({
+        timeout: 15_000,
+      });
+      const taskID = new URL(testPage.url()).pathname.split("/").pop();
+      if (!taskID) throw new Error("task URL did not contain a task ID");
+      const workflowStepBefore = (await apiClient.getTask(taskID)).workflow_step_id;
 
-    const markerA = "targeted A response";
-    const markerB = "targeted B response";
-    const markerC = "targeted C response";
-    const task = await apiClient.getTask(taskID);
-    const sessionID = task.primary_session_id;
-    if (!sessionID) throw new Error("task did not have a primary session");
-    await queueMessages(apiClient, taskID, sessionID, [
-      scriptedQueueMessage(markerA),
-      scriptedQueueMessage(markerB, 5_000),
-      scriptedQueueMessage(markerC),
-    ]);
+      const markerA = "targeted A response";
+      const markerB = "targeted B response";
+      const markerC = "targeted C response";
+      const task = await apiClient.getTask(taskID);
+      const sessionID = task.primary_session_id;
+      if (!sessionID) throw new Error("task did not have a primary session");
+      await queueMessages(apiClient, taskID, sessionID, [
+        scriptedQueueMessage(markerA),
+        scriptedQueueMessage(markerB, 5_000),
+        scriptedQueueMessage(markerC),
+      ]);
 
-    await openQueuePanel(testPage);
-    const panel = testPage.getByTestId("queued-ghost-list");
-    await expect(panel.getByTestId("queue-entry-text")).toHaveCount(3);
-    const autoRun = panel.getByTestId("queue-auto-run");
-    await expect(autoRun).toHaveAttribute("data-state", "checked");
-    await autoRun.click();
-    await expect(autoRun).toHaveAttribute("data-state", "unchecked");
+      await openQueuePanel(testPage);
+      const panel = testPage.getByTestId("queued-ghost-list");
+      await expect(panel.getByTestId("queue-entry-text")).toHaveCount(3);
+      const autoRun = panel.getByTestId("queue-auto-run");
+      await expect(autoRun).toHaveAttribute("data-state", "checked");
+      await autoRun.click();
+      await expect(autoRun).toHaveAttribute("data-state", "unchecked");
 
-    const target = panel.getByTestId("queue-entry").filter({ hasText: markerB });
-    await expect(target).toBeVisible();
-    await target.hover();
-    const sendNow = target.getByTestId("queue-entry-send-now");
-    await expect(sendNow).toBeVisible({ timeout: 10_000 });
-    await expect(sendNow).toBeEnabled({ timeout: 10_000 });
-    await sendNow.click();
+      const target = panel.getByTestId("queue-entry").filter({ hasText: markerB });
+      await expect(target).toBeVisible();
+      await target.hover();
+      const sendNow = target.getByTestId("queue-entry-send-now");
+      await expect(sendNow).toBeVisible({ timeout: 10_000 });
+      await expect(sendNow).toBeEnabled({ timeout: 10_000 });
+      const sendErrors: string[] = [];
+      testPage.on("console", (message) => {
+        if (message.text().includes("Failed to send queued message now:")) {
+          sendErrors.push(message.text());
+        }
+      });
+      const sendNowResponse = gateway.waitForResponse("message.queue.send_now");
+      await sendNow.click();
+      await sendNowResponse;
 
-    await expect(panel.getByTestId("queue-entry-text")).toHaveCount(2, { timeout: 10_000 });
-    await expect(panel.getByTestId("queue-entry-text").nth(0)).toContainText(markerA);
-    await expect(panel.getByTestId("queue-entry-text").nth(1)).toContainText(markerC);
-    await expect(autoRun).toHaveAttribute("data-state", "checked", { timeout: 10_000 });
+      // The selected replacement message proves cancellation and admission settled.
+      await expect(
+        session.chat.getByTestId("user-message-bubble").filter({ hasText: markerB }),
+      ).toHaveCount(1, { timeout: 20_000 });
 
-    // Send Now's internal interruption must not behave like an explicit user
-    // cancellation. Check while the selected replacement turn is still active;
-    // successful turn completion may legitimately advance the workflow later.
-    await expect(
-      session.chat.getByTestId("user-message-bubble").filter({ hasText: markerB }),
-    ).toHaveCount(1, { timeout: 20_000 });
-    await expect(session.agentStatus()).toBeVisible({ timeout: 20_000 });
-    expect((await apiClient.getTask(taskID)).workflow_step_id).toBe(workflowStepBefore);
+      expect(sendErrors).toEqual([]);
+      await expect(panel.getByTestId("queue-entry-text")).toHaveCount(2, { timeout: 10_000 });
+      await expect(panel.getByTestId("queue-entry-text").nth(0)).toContainText(markerA);
+      await expect(panel.getByTestId("queue-entry-text").nth(1)).toContainText(markerC);
+      await expect(autoRun).toHaveAttribute("data-state", "checked", { timeout: 10_000 });
 
-    await expectSeparateTurnsInOrder(session.chat, [markerB, markerA, markerC]);
-    await session.waitForChatIdle({ timeout: 45_000 });
-    await expect(panel).not.toBeVisible({ timeout: 15_000 });
-    await expect(session.chat).not.toContainText("Turn cancelled by user");
+      // Send Now's internal interruption must not behave like an explicit user
+      // cancellation. Check while the selected replacement turn is still active;
+      // successful turn completion may legitimately advance the workflow later.
+      await expect(session.agentStatus()).toBeVisible({ timeout: 20_000 });
+      expect((await apiClient.getTask(taskID)).workflow_step_id).toBe(workflowStepBefore);
+
+      await expectSeparateTurnsInOrder(session.chat, [markerB, markerA, markerC]);
+      await session.waitForChatIdle({ timeout: 45_000 });
+      await expect(panel).not.toBeVisible({ timeout: 15_000 });
+      await expect(session.chat).not.toContainText("Turn cancelled by user");
+    } finally {
+      await releaseEnv();
+    }
   });
 
   test("Auto-run OFF finishes the current turn, survives reload, then resumes FIFO", async ({
@@ -558,6 +599,171 @@ test.describe("Task session queue", () => {
         { timeout: 5_000 },
       )
       .toEqual({ scrollable: true, maxHeight: "200px", overflowY: "auto" });
+  });
+
+  test("editing a later queued entry does not pause earlier FIFO delivery", async ({
+    testPage,
+    apiClient,
+    seedData,
+  }) => {
+    test.setTimeout(120_000);
+    const gateway = watchWs(testPage);
+
+    const session = await seedTaskAndWaitForIdle(
+      testPage,
+      apiClient,
+      seedData,
+      "Queue edit lease ordering test",
+    );
+    await waitForSessionAgentctlReady(testPage, session.sessionId);
+    await session.sendMessage("/slow 10s");
+    await expect(session.agentStatus()).toBeVisible({ timeout: 15_000 });
+    await waitForComposerQueueMode(testPage);
+    const queueIdentity = await apiClient.getQueueSessionIdentity(
+      session.taskId,
+      session.sessionId,
+    );
+
+    await queueMessages(apiClient, session.taskId, session.sessionId, [
+      scriptedQueueMessage("first queued"),
+      scriptedQueueMessage("second queued"),
+    ]);
+    await openQueuePanel(testPage);
+
+    const rows = testPage.getByTestId("queue-entry");
+    await expect(rows).toHaveCount(2, { timeout: 10_000 });
+    await rows.nth(1).getByTestId("queue-entry-edit").click();
+
+    const textarea = testPage.getByTestId("queue-edit-textarea");
+    await expect(textarea).toBeVisible({ timeout: 5_000 });
+    await textarea.fill(scriptedQueueMessage("second edited"));
+
+    // The later entry stays leased while the earlier FIFO turn drains.
+    await waitForAgentMessage(apiClient, session.sessionId, "first queued");
+    await expect.poll(async () => (await apiClient.getQueueStatus(queueIdentity)).count).toBe(1);
+
+    const saveResponse = gateway.waitForResponse("message.queue.update");
+    await testPage.getByRole("button", { name: "Save", exact: true }).click();
+    await saveResponse;
+
+    // Saving releases the lease and resumes Auto-run for the edited entry.
+    await waitForAgentMessage(apiClient, session.sessionId, "second edited");
+    await expect.poll(async () => (await apiClient.getQueueStatus(queueIdentity)).count).toBe(0);
+    await expect(rows).toHaveCount(0);
+  });
+
+  test("saving the held head after its turn completes resumes Auto-run", async ({
+    testPage,
+    apiClient,
+    seedData,
+  }) => {
+    const gateway = watchWs(testPage);
+    test.setTimeout(120_000);
+
+    const session = await seedTaskAndWaitForIdle(
+      testPage,
+      apiClient,
+      seedData,
+      "Queue edit save dispatch test",
+    );
+    await session.sendMessage("/slow 10s");
+    await expect(session.agentStatus()).toBeVisible({ timeout: 15_000 });
+    await waitForComposerQueueMode(testPage);
+    const queueIdentity = await apiClient.getQueueSessionIdentity(
+      session.taskId,
+      session.sessionId,
+    );
+    await queueMessages(apiClient, session.taskId, session.sessionId, [
+      scriptedQueueMessage("edited head dispatched"),
+    ]);
+
+    await openQueuePanel(testPage);
+    const row = testPage.getByTestId("queue-entry").first();
+    await row.getByTestId("queue-entry-edit").click();
+    await testPage
+      .getByTestId("queue-edit-textarea")
+      .fill(scriptedQueueMessage("edited head dispatched after save"));
+
+    await waitForAgentMessage(apiClient, session.sessionId, "Slow response complete");
+    await expect.poll(async () => (await apiClient.getQueueStatus(queueIdentity)).count).toBe(1);
+
+    const saveResponse = gateway.waitForResponse("message.queue.update");
+    await testPage.getByRole("button", { name: "Save", exact: true }).click();
+    await saveResponse;
+    await waitForAgentMessage(apiClient, session.sessionId, "edited head dispatched after save");
+    await expect.poll(async () => (await apiClient.getQueueStatus(queueIdentity)).count).toBe(0);
+    await expect(testPage.getByTestId("queue-entry")).toHaveCount(0);
+  });
+
+  test("queue editor reconciles after switching sessions", async ({
+    testPage,
+    apiClient,
+    seedData,
+  }) => {
+    test.setTimeout(120_000);
+
+    const replacementTask = await apiClient.createTaskWithAgent(
+      seedData.workspaceId,
+      "Queue editor replacement B",
+      seedData.agentProfileId,
+      {
+        description: "/e2e:simple-message",
+        workflow_id: seedData.workflowId,
+        workflow_step_id: seedData.startStepId,
+        repository_ids: [seedData.repositoryId],
+      },
+    );
+    if (!replacementTask.session_id) {
+      throw new Error("replacement task did not have a primary session");
+    }
+    await waitForSessionDone(
+      apiClient,
+      replacementTask.id,
+      replacementTask.session_id,
+      "replacement task should finish its seed turn",
+    );
+
+    const session = await seedTaskAndWaitForIdle(
+      testPage,
+      apiClient,
+      seedData,
+      "Queue editor replacement A",
+    );
+    await session.sendMessage("/slow 30s");
+    await expect(session.agentStatus()).toBeVisible({ timeout: 15_000 });
+    await waitForComposerQueueMode(testPage);
+    await queueMessages(apiClient, session.taskId, session.sessionId, [
+      scriptedQueueMessage("replacement first"),
+      scriptedQueueMessage("replacement second"),
+    ]);
+
+    await openQueuePanel(testPage);
+    const rows = testPage.getByTestId("queue-entry");
+    await expect(rows).toHaveCount(2, { timeout: 10_000 });
+    await rows.nth(1).getByTestId("queue-entry-edit").click();
+    await expect(testPage.getByTestId("queue-edit-textarea")).toBeVisible();
+
+    await session.clickTaskInSidebar("Queue editor replacement B");
+    await expect(testPage).toHaveURL(new RegExp(`/t/${replacementTask.id}$`), {
+      timeout: 15_000,
+    });
+    await session.waitForLoad();
+    await session.waitForChatIdle({ timeout: 30_000 });
+
+    await session.clickTaskInSidebar("Queue editor replacement A");
+    await expect(testPage).toHaveURL(new RegExp(`/t/${session.taskId}$`), {
+      timeout: 15_000,
+    });
+    await session.waitForLoad();
+    await openQueuePanel(testPage);
+    const remountedRows = testPage.getByTestId("queue-entry");
+    await expect(remountedRows).toHaveCount(2, { timeout: 10_000 });
+    await remountedRows.nth(1).getByTestId("queue-entry-edit").click();
+    await testPage.getByTestId("queue-edit-textarea").fill("replacement second edited");
+    await testPage.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(testPage.getByTestId("queue-entry-text").last()).toContainText(
+      "replacement second edited",
+    );
   });
 
   test("merges a queued message into the message above it", async ({

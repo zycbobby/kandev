@@ -88,16 +88,35 @@ function mergeTaskParkedFields(
   merged.parkedEpoch = existingEpoch;
 }
 
+// Ordered delivery is not guaranteed, so a client comparing two events must
+// ignore one whose updated_at is older than the cached value rather than
+// trust arrival order. Missing timestamps on either side skip the check.
+function isStaleTaskUpdate(existing: KanbanTask, nextTask: KanbanTask): boolean {
+  if (!existing.updatedAt || !nextTask.updatedAt) return false;
+  return new Date(nextTask.updatedAt).getTime() < new Date(existing.updatedAt).getTime();
+}
+
 export function mergeTaskUpdate(
   existing: KanbanTask | undefined,
   nextTask: KanbanTask,
   payload: TaskEventPayload,
 ): KanbanTask {
-  if (!existing) return nextTask;
+  if (!existing) {
+    return hasPayloadField(payload, "interrupted")
+      ? { ...nextTask, interruptedGeneration: 1 }
+      : nextTask;
+  }
+  if (isStaleTaskUpdate(existing, nextTask)) return existing;
   const merged = {
     ...nextTask,
     ...mergeTaskRepositoryFields(existing, nextTask),
   };
+  // A snapshot can observe the same boolean value before and after a live
+  // false -> true -> false marker episode. Count every explicit marker update
+  // so an in-flight snapshot cannot erase that newer generation.
+  merged.interruptedGeneration = hasPayloadField(payload, "interrupted")
+    ? (existing.interruptedGeneration ?? 0) + 1
+    : existing.interruptedGeneration;
   preserveOmittedField(existing, merged, payload, nextTask, {
     payloadKey: "parent_id",
     taskField: "parentTaskId",
@@ -126,6 +145,10 @@ export function mergeTaskUpdate(
   if (!hasPayloadField(payload, "labels")) merged.labels = existing.labels;
   if (!hasPayloadField(payload, "origin")) merged.origin = existing.origin;
   preserveOmittedField(existing, merged, payload, nextTask, {
+    payloadKey: "is_from_office",
+    taskField: "isFromOffice",
+  });
+  preserveOmittedField(existing, merged, payload, nextTask, {
     payloadKey: "task_pending_action",
     taskField: "taskPendingAction",
   });
@@ -144,6 +167,10 @@ export function mergeTaskUpdate(
   preserveOmittedField(existing, merged, payload, nextTask, {
     payloadKey: "auto_start_failed",
     taskField: "autoStartFailed",
+  });
+  preserveOmittedField(existing, merged, payload, nextTask, {
+    payloadKey: "workspace_orphaned",
+    taskField: "workspaceOrphaned",
   });
   preserveOmittedField(existing, merged, payload, nextTask, {
     payloadKey: "active_subagent_count",

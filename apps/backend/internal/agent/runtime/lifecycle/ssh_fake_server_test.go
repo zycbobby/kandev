@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pkg/sftp"
@@ -44,6 +45,14 @@ type sshExecResult struct {
 // sshExecHandler answers a single remote command.
 type sshExecHandler func(command, stdin string) sshExecResult
 
+// sshStreamHandler serves a remote command that streams in both directions
+// instead of returning a canned result. It owns the channel until it returns,
+// and its return value is the command's exit status. `docker system
+// dial-stdio` is the motivating case: the Engine API is a full HTTP
+// conversation over stdin/stdout, so a handler that must read stdin to EOF
+// before writing anything cannot serve it.
+type sshStreamHandler func(command string, stream ssh.Channel) int
+
 type fakeSSHServer struct {
 	t        *testing.T
 	listener net.Listener
@@ -52,9 +61,10 @@ type fakeSSHServer struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 
-	mu      sync.Mutex
-	calls   []sshExecCall
-	handler sshExecHandler
+	mu            sync.Mutex
+	calls         []sshExecCall
+	handler       sshExecHandler
+	streamHandler sshStreamHandler
 
 	reverseMu       sync.Mutex
 	reverseForwards map[string]net.Listener
@@ -66,7 +76,21 @@ type fakeSSHServer struct {
 	// tcpTarget maps a requested direct-tcpip port onto a real local address.
 	// Returning "" rejects the channel.
 	tcpTarget func(port uint32) string
+
+	// silent, when set, makes the server accept a global request or a new
+	// channel open and answer neither — so SendRequest and Client.NewSession
+	// both block, as on a wedged link. Toggled live so a test can run a
+	// session healthy, then flip the server silent mid-test.
+	silent atomic.Bool
 }
+
+// setSilent switches the server's silent mode on or off. While silent, every
+// global request (including keepalive@openssh.com) and every new channel
+// open (including a session for a remote command) goes unanswered, so the
+// requester's SendRequest or Client.NewSession blocks exactly as it would on
+// a transport that has stopped carrying traffic. Existing, already-open
+// channels are unaffected.
+func (s *fakeSSHServer) setSilent(v bool) { s.silent.Store(v) }
 
 // newFakeSSHServer starts a listener on 127.0.0.1 and serves SSH until the
 // test finishes. handler may be nil, in which case every command succeeds with
@@ -200,6 +224,13 @@ func (s *fakeSSHServer) serveConn(conn net.Conn) {
 	go s.serveGlobalRequests(serverConn, reqs)
 
 	for newChan := range chans {
+		if s.silent.Load() {
+			// Stall the channel open: neither Accept nor Reject, so the
+			// client's OpenChannel blocks until the connection itself tears
+			// down. No goroutine needed — the pending request resolves on
+			// its own when the mux beneath it closes.
+			continue
+		}
 		switch newChan.ChannelType() {
 		case "session":
 			s.wg.Add(1)
@@ -213,9 +244,16 @@ func (s *fakeSSHServer) serveConn(conn net.Conn) {
 	}
 }
 
+// serveGlobalRequests answers every global request (replying false to one
+// that wants a reply, mirroring ssh.DiscardRequests) unless the server is
+// silent, in which case it drains the request without replying — so a
+// wantReply sender's SendRequest blocks until the connection tears down.
 func (s *fakeSSHServer) serveGlobalRequests(conn *ssh.ServerConn, requests <-chan *ssh.Request) {
 	defer s.wg.Done()
 	for req := range requests {
+		if s.silent.Load() {
+			continue
+		}
 		switch req.Type {
 		case "tcpip-forward":
 			s.handleTCPIPForward(conn, req)
@@ -378,7 +416,27 @@ func (s *fakeSSHServer) serveSession(newChan ssh.NewChannel) {
 	}
 }
 
+// setStreamHandler installs a bidirectional handler, which takes precedence
+// over the canned exec handler for every command.
+func (s *fakeSSHServer) setStreamHandler(h sshStreamHandler) {
+	s.mu.Lock()
+	s.streamHandler = h
+	s.mu.Unlock()
+}
+
 func (s *fakeSSHServer) runExec(channel ssh.Channel, command string) {
+	s.mu.Lock()
+	stream := s.streamHandler
+	s.mu.Unlock()
+	if stream != nil {
+		s.mu.Lock()
+		s.calls = append(s.calls, sshExecCall{Command: command})
+		s.mu.Unlock()
+		status := stream(command, channel)
+		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status)}))
+		return
+	}
+
 	stdin, _ := io.ReadAll(channel)
 
 	s.mu.Lock()

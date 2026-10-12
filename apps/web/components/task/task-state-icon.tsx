@@ -34,6 +34,8 @@ export type TaskStateIconProps = {
    * foregroundActivity (AC-34).
    */
   parkedOnBackgroundWork?: boolean;
+  /** True while an accepted archive or delete request is still in flight. */
+  isPendingRemoval?: boolean;
   accessibleLabel?: string;
   showBackgroundTooltip?: boolean;
 };
@@ -133,7 +135,36 @@ function TaskReviewIcon({
   );
 }
 
-export function TaskStateIcon({
+function TaskReadyIcon({ accessibleLabel }: Pick<TaskStateIconProps, "accessibleLabel">) {
+  return withAccessibleLabel(
+    <IconCircleCheck
+      aria-hidden="true"
+      data-testid="task-state-ready"
+      className="mt-[1px] h-3.5 w-3.5 shrink-0 text-green-500"
+    />,
+    accessibleLabel,
+  );
+}
+
+function PendingRemovalTaskIcon() {
+  return (
+    <CompositorSpin
+      aria-hidden="true"
+      data-testid="task-state-removal-pending"
+      data-legacy-testid="task-state-archive-pending"
+      className="mt-[1px] h-3.5 w-3.5 shrink-0 text-muted-foreground/60"
+    >
+      <IconCircleDashed className="size-full" />
+    </CompositorSpin>
+  );
+}
+
+export function TaskStateIcon(props: TaskStateIconProps) {
+  if (props.isPendingRemoval) return <PendingRemovalTaskIcon />;
+  return <TaskStateIconContent {...props} />;
+}
+
+function TaskStateIconContent({
   sessionState,
   state,
   foregroundActivity,
@@ -194,6 +225,30 @@ export function TaskStateIcon({
       />,
       accessibleLabel,
     );
+  }
+  return (
+    <TaskSessionStateIcon
+      sessionState={sessionState}
+      state={state}
+      interrupted={interrupted}
+      isOnLastWorkflowStep={isOnLastWorkflowStep}
+      accessibleLabel={accessibleLabel}
+    />
+  );
+}
+
+function TaskSessionStateIcon({
+  sessionState,
+  state,
+  interrupted,
+  isOnLastWorkflowStep,
+  accessibleLabel,
+}: Pick<
+  TaskStateIconProps,
+  "sessionState" | "state" | "interrupted" | "isOnLastWorkflowStep" | "accessibleLabel"
+>) {
+  if (sessionState === "IDLE" && state !== "SCHEDULING") {
+    return <TaskReadyIcon accessibleLabel={accessibleLabel} />;
   }
   if (computeIsPreparing(state, sessionState)) {
     return withAccessibleLabel(

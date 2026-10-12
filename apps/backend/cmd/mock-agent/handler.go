@@ -145,8 +145,10 @@ var transportLostErrorData = map[string]any{"error": "peer disconnected before r
 // transportLostCmdRe matches `/transport-lost` or `/e2e:transport-lost`,
 // optionally followed by `:N` — the number of consecutive prompts to fail
 // with the ACP peer-disconnected signature before recovering (default 1).
-// Use a large N (e.g. `/transport-lost:9`) to exhaust the retry budget and
-// fall through to the red recovery banner.
+// The signature lives only in the error's Data, which the generic
+// prompt-error projection never reads, so every failure presents as
+// terminal and exposes manual recovery; N does not drive an automatic
+// retry ladder here the way it does for `/overloaded`.
 var transportLostCmdRe = regexp.MustCompile(`(?i)^/(?:e2e:)?transport-lost(?::(\d+))?$`)
 
 // parseTransportLostCmd reports whether the prompt is the /transport-lost
@@ -364,7 +366,7 @@ func handleAutopilotParentQuestion(e *emitter, prompt string) bool {
 		toolKeyTaskID:          childTaskID,
 		"reply_to_question_id": questionID,
 	})
-	result, err := callMCPTool("kandev", "message_task_kandev", map[string]any{
+	result, err := e.callMCPTool("kandev", "message_task_kandev", map[string]any{
 		toolKeyTaskID:          childTaskID,
 		clarificationPromptKey: "Use the first safe option and continue.",
 		"reply_to_question_id": questionID,
@@ -433,6 +435,8 @@ func handlePrompt(e *emitter, prompt, model string) {
 		emitSubagentSequence(e, model)
 	case strings.EqualFold(cmd, "/subtask") || strings.HasPrefix(strings.ToLower(cmd), "/subtask "):
 		emitCreateSubtask(e, cmd, model)
+	case strings.EqualFold(cmd, "/e2e:utility-profile"):
+		e.text("utility profile model: " + model)
 	case strings.HasPrefix(cmd, "/e2e:"):
 		rest := strings.TrimPrefix(cmd, "/e2e:")
 		scenarioName, _, _ := strings.Cut(strings.TrimSpace(rest), " ")
@@ -663,7 +667,11 @@ func emitError(e *emitter, model string) {
 func emitCrash(e *emitter, model string) {
 	randomDelay(model)
 	e.text("Processing your request...")
-	randomDelay(model)
+	// SessionUpdate notifications are not acknowledged by ACP. Give the
+	// backend time to persist the final visible update before terminating the
+	// process, especially when the mock agent is running under a loaded E2E
+	// shard.
+	fixedDelay(500)
 	fmt.Fprintln(os.Stderr, "mock-agent: simulating crash (exit 1)")
 	os.Exit(1)
 }
@@ -816,7 +824,7 @@ func emitCreateSubtask(e *emitter, cmd, model string) {
 	e.startTool(toolID, "create_task_kandev", acp.ToolKindOther, args)
 	randomDelay(model)
 
-	result, err := callMCPTool("kandev", "create_task_kandev", args)
+	result, err := e.callMCPTool("kandev", "create_task_kandev", args)
 	if err != nil {
 		e.completeTool(toolID, map[string]any{toolKeyError: "MCP error: " + err.Error()})
 		e.text(fmt.Sprintf("Failed to create subtask: %v", err))

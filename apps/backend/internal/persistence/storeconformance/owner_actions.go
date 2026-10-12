@@ -2,6 +2,7 @@
 package storeconformance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"github.com/kandev/kandev/internal/automation"
 	"github.com/kandev/kandev/internal/azuredevops"
 	"github.com/kandev/kandev/internal/canvas"
+	"github.com/kandev/kandev/internal/common/authcircuit"
 	"github.com/kandev/kandev/internal/common/logger"
+	"github.com/kandev/kandev/internal/coordinator"
 	"github.com/kandev/kandev/internal/delivery"
 	"github.com/kandev/kandev/internal/github"
 	"github.com/kandev/kandev/internal/gitlab"
@@ -55,6 +58,25 @@ type metaBehaviorRecord struct {
 	Value     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type queueAdmissionStore interface {
+	AdmitQueueMessage(
+		context.Context,
+		messagequeue.QueueSessionIdentity,
+		string,
+		*messagequeue.QueuedMessage,
+		*messagequeue.QueueAttachmentClaim,
+		int,
+		*messagequeue.AutoMergePolicy,
+		*messagequeue.WorkflowEntryIdentity,
+	) (*messagequeue.QueuedMessage, bool, error)
+	LookupQueueAdmission(
+		context.Context,
+		messagequeue.QueueSessionIdentity,
+		string,
+		*messagequeue.QueuedMessage,
+	) (*messagequeue.QueuedMessage, bool, error)
 }
 
 //nolint:funlen // The catalog-to-owner mapping is deliberately explicit.
@@ -170,6 +192,7 @@ func buildOwnerBehaviors() map[string]ownerBehavior {
 	behaviors["workflow-sync"] = ownerBehavior{actions: []apiAction{workflowSyncAction()}}
 	behaviors["office-config-sync"] = ownerBehavior{actions: []apiAction{officeConfigSyncAction()}}
 	behaviors["automation"] = ownerBehavior{actions: []apiAction{automationAction()}}
+	behaviors["coordinator"] = ownerBehavior{actions: []apiAction{coordinatorAction()}}
 
 	analytics := standardAction(reflectedSpec{
 		name: "analytics-task-view", factory: taskFactory,
@@ -351,6 +374,10 @@ func automationFactory(s testconformance.ScenarioContext) (any, error) {
 	return automation.NewStore(s.DB, s.DB)
 }
 
+func coordinatorFactory(s testconformance.ScenarioContext) (any, error) {
+	return coordinator.NewStore(s.DB, s.DB)
+}
+
 func userAction() apiAction {
 	action := standardAction(reflectedSpec{
 		name: "users", factory: userFactory,
@@ -484,7 +511,10 @@ func taskAction() apiAction {
 		return nil
 	}
 	action.transaction = func(s testconformance.ScenarioContext, id string) error {
-		return transactionAPICheck(action, s, id)
+		if err := transactionAPICheck(action, s, id); err != nil {
+			return err
+		}
+		return silentRestoreRepositoryCheck(s, id)
 	}
 	return action
 }
@@ -1192,8 +1222,48 @@ func messageQueueAction() apiAction {
 			return nil, err
 		}
 		msg := &messagequeue.QueuedMessage{ID: id, SessionID: sessionID, TaskID: taskID, Content: "initial", Model: "model", QueuedBy: "conformance", Metadata: map[string]interface{}{}}
-		if err := store.(messagequeue.Repository).Insert(s.Context, msg, 10); err != nil {
+		repository, ok := store.(messagequeue.Repository)
+		if !ok {
+			return nil, fmt.Errorf("message queue store %T does not implement Repository", store)
+		}
+		if err := repository.Insert(s.Context, msg, 10); err != nil {
 			return nil, err
+		}
+		admissions, ok := store.(queueAdmissionStore)
+		if !ok {
+			return nil, fmt.Errorf("message queue store %T does not implement admission API", store)
+		}
+		var incarnationID string
+		if err := s.DB.GetContext(s.Context, &incarnationID, s.DB.Rebind(`
+			SELECT queue_incarnation_id FROM task_sessions WHERE id = ? AND task_id = ?
+		`), sessionID, taskID); err != nil {
+			return nil, fmt.Errorf("read conformance queue session identity: %w", err)
+		}
+		identity := messagequeue.QueueSessionIdentity{
+			TaskID: taskID, SessionID: sessionID, SessionIncarnationID: incarnationID,
+		}
+		admissionID := id + "-admission"
+		candidate := &messagequeue.QueuedMessage{
+			ID: admissionID, SessionID: sessionID, TaskID: taskID,
+			Content: "admitted", Model: "model", QueuedBy: "conformance",
+			Metadata: map[string]interface{}{},
+		}
+		admitted, replay, err := admissions.AdmitQueueMessage(s.Context, identity, admissionID, candidate, nil, 10, nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("admit identified queue message: %w", err)
+		}
+		if replay || admitted == nil || admitted.ID != admissionID || admitted.Content != candidate.Content {
+			return nil, fmt.Errorf("identified queue admission = %+v, replay=%t", admitted, replay)
+		}
+		replayed, replay, err := admissions.LookupQueueAdmission(s.Context, identity, admissionID, candidate)
+		if err != nil {
+			return nil, fmt.Errorf("lookup identified queue admission: %w", err)
+		}
+		if !replay || replayed == nil || replayed.ID != admitted.ID || replayed.Content != admitted.Content {
+			return nil, fmt.Errorf("identified queue admission replay = %+v, replay=%t", replayed, replay)
+		}
+		if err := repository.DeleteByID(s.Context, sessionID, admitted.ID); err != nil {
+			return nil, fmt.Errorf("clean up identified queue admission: %w", err)
 		}
 		return &queueRecord{ID: msg.ID, SessionID: msg.SessionID, TaskID: msg.TaskID, Content: msg.Content, QueuedAt: msg.QueuedAt, PlanMode: msg.PlanMode}, nil
 	}
@@ -2926,7 +2996,7 @@ func workflowSyncAction() apiAction {
 		if err != nil {
 			return nil, err
 		}
-		if err := store.(*workflowsync.Store).RecordSyncStatus(s.Context, id, enabled, "", nil, "hash", time.Now().UTC()); err != nil {
+		if err := store.(*workflowsync.Store).RecordSyncStatus(s.Context, id, enabled, "", nil, "hash", time.Now().UTC(), authcircuit.State{}); err != nil {
 			return nil, err
 		}
 		return readConfig(s, store.(*workflowsync.Store), id)
@@ -3127,6 +3197,76 @@ func automationRead(s testconformance.ScenarioContext, store *automation.Store, 
 		return nil, err
 	}
 	return requireProviderConfig(value, "automation")
+}
+
+// coordinatorAction covers coordinator.Store, whose Get/Patch/Delete methods
+// are workspace-scoped (unlike automation's bare-ID lookups), so every
+// closure resolves the conformance workspace itself.
+func coordinatorAction() apiAction {
+	action := apiAction{name: "coordinators", key: func(record any, fallback string) string {
+		if value, ok := record.(*coordinator.Coordinator); ok && value.ID != "" {
+			return value.ID
+		}
+		return fallback
+	}}
+	action.create = func(s testconformance.ScenarioContext, id string) (any, error) {
+		store, err := coordinatorFactory(s)
+		if err != nil {
+			return nil, err
+		}
+		workspaceID, err := conformanceWorkspaceID(s)
+		if err != nil {
+			return nil, err
+		}
+		record := &coordinator.Coordinator{
+			ID: id, WorkspaceID: workspaceID, Name: "Conformance " + id,
+			AgentProfileID: "conformance-agent-profile", ExecutorProfileID: "conformance-executor-profile",
+			Context: "conformance context",
+		}
+		if err := store.(*coordinator.Store).CreateCoordinator(s.Context, record); err != nil {
+			return nil, err
+		}
+		return store.(*coordinator.Store).GetCoordinator(s.Context, workspaceID, id)
+	}
+	action.read = func(s testconformance.ScenarioContext, id string) (any, error) {
+		store, err := coordinatorFactory(s)
+		if err != nil {
+			return nil, err
+		}
+		workspaceID, err := conformanceWorkspaceID(s)
+		if err != nil {
+			return nil, err
+		}
+		return store.(*coordinator.Store).GetCoordinator(s.Context, workspaceID, id)
+	}
+	action.update = func(s testconformance.ScenarioContext, id string, _ any) error {
+		store, err := coordinatorFactory(s)
+		if err != nil {
+			return err
+		}
+		workspaceID, err := conformanceWorkspaceID(s)
+		if err != nil {
+			return err
+		}
+		name := "Updated " + id
+		_, _, err = store.(*coordinator.Store).PatchCoordinator(s.Context, workspaceID, id, coordinator.CoordinatorPatch{Name: &name}, nil)
+		return err
+	}
+	action.delete = func(s testconformance.ScenarioContext, id string) error {
+		store, err := coordinatorFactory(s)
+		if err != nil {
+			return err
+		}
+		workspaceID, err := conformanceWorkspaceID(s)
+		if err != nil {
+			return err
+		}
+		return store.(*coordinator.Store).DeleteCoordinator(s.Context, workspaceID, id)
+	}
+	action.transaction = func(s testconformance.ScenarioContext, id string) error {
+		return transactionAPICheck(action, s, id)
+	}
+	return action
 }
 
 func reflectValue(record any) reflect.Value {

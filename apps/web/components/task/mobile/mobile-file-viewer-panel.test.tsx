@@ -25,7 +25,18 @@ const state = {
     },
   },
   tasks: { activeTaskId: "task-1" },
+  kanban: { tasks: [] },
+  kanbanMulti: { snapshots: {} },
+  workspaces: { activeId: null },
+  previewFeedback: {
+    byTaskId: {},
+    loadedByTaskId: {},
+    loadingByTaskId: {},
+    errorByTaskId: {},
+  },
+  connection: { status: "disconnected" },
 };
+const storeApi = { getState: () => state };
 const README_CONTENT = "# README";
 const REPORT_CONTENT = "<h1>Report</h1>";
 const README_PATH = "README.md";
@@ -36,6 +47,7 @@ const SOURCE_ACTION_TEST_ID = "svg-preview-toggle";
 
 vi.mock("@/components/state-provider", () => ({
   useAppStore: (selector: (value: typeof state) => unknown) => selector(state),
+  useAppStoreApi: () => storeApi,
 }));
 
 vi.mock("@/components/editors/external-vcs-file-link", () => ({

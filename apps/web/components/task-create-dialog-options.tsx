@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore, useAppStoreApi } from "@/components/state-provider";
 import { t } from "@/lib/i18n";
-import { IconGitBranch, IconTerminal2 } from "@tabler/icons-react";
+import { IconAlertTriangle, IconGitBranch, IconTerminal2 } from "@tabler/icons-react";
 import { Badge } from "@kandev/ui/badge";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@kandev/ui/drawer";
 import { ScrollOnOverflow } from "@kandev/ui/scroll-on-overflow";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
 import type {
   LocalRepository,
   Repository,
@@ -14,18 +23,22 @@ import type {
   Executor,
   ExecutorProfile,
 } from "@/lib/types/http";
+import type { AvailableAgent } from "@/lib/types/http-agents";
 import type { AgentProfileOption } from "@/lib/state/slices";
 import { useAvailableAgents } from "@/hooks/domains/settings/use-available-agents";
 import { useFeature } from "@/hooks/domains/features/use-feature";
-import {
-  isSelectableAgentProfile,
-  refreshProfileCapabilities,
-} from "@/lib/state/slices/settings/types";
+import { isSelectableAgentProfile } from "@/lib/state/slices/settings/types";
 import { formatUserHomePath, truncateRepoPath } from "@/lib/utils";
 import { getExecutorIcon } from "@/lib/executor-icons";
+import {
+  executorProfileUnavailableReason,
+  localizedExecutorProviderMessage,
+  executorProviderRetentionText,
+} from "@/lib/executor-provider-display";
 import { AgentLogo } from "@/components/agent-logo";
 import { getCapabilityWarning } from "@/lib/capability-warning";
-import { buildBranchKeywords } from "./branch-picker-options";
+import { useTouchDrawer } from "@/hooks/use-compact-task-chrome";
+import { branchOptionValue, buildBranchKeywords } from "./branch-picker-options";
 import {
   ensureAgentProfileRecentUseLoaded,
   orderAgentProfilesByRecentUse,
@@ -39,7 +52,54 @@ type OptionItem = {
   renderTriggerLabel?: () => React.ReactNode;
   disabled?: boolean;
   disabledReason?: string;
+  description?: string;
 };
+
+function ModelProbeWarning({ note }: { note: string }) {
+  const usesTouchDrawer = useTouchDrawer();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const trigger = (
+    <button
+      type="button"
+      className="inline-flex min-h-0 min-w-8 shrink-0 cursor-help items-center justify-center rounded-sm border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11"
+      aria-label={note}
+      aria-expanded={usesTouchDrawer ? drawerOpen : undefined}
+      aria-haspopup={usesTouchDrawer ? "dialog" : undefined}
+      data-testid="agent-profile-model-probe-warning"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <IconAlertTriangle className="size-3.5 text-amber-500" aria-hidden />
+    </button>
+  );
+
+  if (usesTouchDrawer) {
+    return (
+      <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <DrawerTrigger asChild>{trigger}</DrawerTrigger>
+        <DrawerContent style={{ zIndex: 80 }}>
+          <DrawerHeader>
+            <DrawerTitle className="sr-only">{note}</DrawerTitle>
+            <DrawerDescription>{note}</DrawerDescription>
+          </DrawerHeader>
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+      <TooltipContent side="top" style={{ zIndex: 80 }}>
+        {note}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ModelProbeWarningIndicator({ note }: { note: string }) {
+  return <IconAlertTriangle className="size-3.5 text-amber-500" title={note} aria-hidden />;
+}
 
 export function useRepositoryOptions(
   repositories: Repository[],
@@ -103,10 +163,7 @@ export function useRepositoryOptions(
 export function useBranchOptions(branchOptionsRaw: Branch[]) {
   return useMemo(() => {
     return branchOptionsRaw.map((branchObj: Branch) => {
-      const displayName =
-        branchObj.type === "remote" && branchObj.remote
-          ? `${branchObj.remote}/${branchObj.name}`
-          : branchObj.name;
+      const displayName = branchOptionValue(branchObj);
       // Keywords give the scorer extra surfaces to match against: the leaf
       // branch name, every path segment, and (for remotes) the remote name.
       const keywords = buildBranchKeywords(branchObj.name, branchObj.remote);
@@ -132,15 +189,19 @@ export function useBranchOptions(branchOptionsRaw: Branch[]) {
   }, [branchOptionsRaw]);
 }
 
+// advertisedModelIDs returns the currently advertised model IDs for an agent
+// from the host-utility probe cache (empty when the probe has not landed).
+function advertisedModelIDs(availableAgents: AvailableAgent[], agentName: string): string[] {
+  const agent = availableAgents.find((a) => a.name === agentName);
+  return agent?.model_config?.available_models?.map((m) => m.id) ?? [];
+}
+
 export function useAgentProfileOptions(
   agentProfiles: AgentProfileOption[],
   context?: AgentProfileRecentUseContext,
 ): OptionItem[] {
   const { t } = useTranslation();
-  // Keep capability discovery alive for every selector surface. The host
-  // catalog supplies health status only; it never participates in model-ID
-  // matching or selector eligibility.
-  const availableAgents = useAvailableAgents();
+  const { items: availableAgents } = useAvailableAgents();
   const dynamicRoutingEnabled = useFeature("dynamicAgentRouting");
   const storeApi = useAppStoreApi();
   const recentUseLoaded = useAppStore((state) => !context || state.agentProfileRecentUse.loaded);
@@ -152,13 +213,9 @@ export function useAgentProfileOptions(
     void ensureAgentProfileRecentUseLoaded(storeApi);
   }, [context, recentUseLoaded, storeApi]);
   return useMemo(() => {
-    const profilesWithCapabilities = refreshProfileCapabilities(
-      agentProfiles,
-      availableAgents.items,
-    );
     // Disabled profiles stay in the store (existing sessions keep their
     // labels) but are never offered as a choice for new work.
-    const selectable = profilesWithCapabilities.filter((profile) =>
+    const selectable = agentProfiles.filter((profile) =>
       isSelectableAgentProfile(profile, dynamicRoutingEnabled),
     );
     const orderedProfiles = context
@@ -170,7 +227,20 @@ export function useAgentProfileOptions(
       const profileLabel = parts[1] ?? "";
       const isPassthrough = profile.cli_passthrough === true;
       const warning = getCapabilityWarning(profile.capability_status, profile.capability_error);
-      const renderProfileLabel = () => (
+      // The host-utility probe is an editing hint only. The selected
+      // executor owns the launch-time model catalog, so a host-only mismatch
+      // must never remove a profile from the task selector.
+      const advertised = advertisedModelIDs(availableAgents, profile.agent_name);
+      const startModelGone = Boolean(
+        profile.model && advertised.length > 0 && !advertised.includes(profile.model),
+      );
+      let modelProbeNote: string | undefined;
+      if (startModelGone) {
+        modelProbeNote = t("settings:profileStartModelNotAdvertisedOnHost", {
+          model: profile.model,
+        });
+      }
+      const renderProfileLabel = (modelProbeWarning: React.ReactNode) => (
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex shrink-0 items-center justify-between gap-2">
             <span className="flex shrink-0 items-center gap-1.5">
@@ -179,6 +249,7 @@ export function useAgentProfileOptions(
               {warning && (
                 <warning.Icon className={`size-3.5 ${warning.color}`} title={warning.title} />
               )}
+              {modelProbeWarning}
             </span>
             <span className="flex shrink-0 items-center gap-1.5">
               {isPassthrough && (
@@ -201,11 +272,15 @@ export function useAgentProfileOptions(
         label: profile.label,
         disabled: undefined,
         disabledReason: undefined,
-        renderLabel: renderProfileLabel,
-        renderTriggerLabel: renderProfileLabel,
+        renderLabel: () =>
+          renderProfileLabel(modelProbeNote ? <ModelProbeWarning note={modelProbeNote} /> : null),
+        renderTriggerLabel: () =>
+          renderProfileLabel(
+            modelProbeNote ? <ModelProbeWarningIndicator note={modelProbeNote} /> : null,
+          ),
       };
     });
-  }, [agentProfiles, availableAgents.items, context, dynamicRoutingEnabled, recentProfileIds, t]);
+  }, [agentProfiles, availableAgents, context, dynamicRoutingEnabled, recentProfileIds, t]);
 }
 
 export function useExecutorOptions(executors: Executor[]): OptionItem[] {
@@ -282,32 +357,48 @@ export function useExecutorProfileOptions(
   allProfiles: ExecutorProfile[],
   config?: ExecutorProfileOptionsConfig,
 ): ExecutorProfileOptionItem[] {
+  const { t } = useTranslation();
   const disabledReasonFor = config?.disabledReasonFor;
   return useMemo(() => {
     return allProfiles.map((profile) => {
       const Icon = getExecutorIcon(profile.executor_type ?? "local");
-      const disabledReason = disabledReasonFor?.(profile) ?? null;
+      const providerUnavailableReason = executorProfileUnavailableReason(profile, t);
+      const disabledReason = providerUnavailableReason ?? disabledReasonFor?.(profile) ?? null;
+      const retentionText = executorProviderRetentionText(profile.provider, t);
+      const description = providerUnavailableReason ?? retentionText ?? undefined;
+      const executorLabel = localizedExecutorProviderMessage(
+        profile.provider,
+        "display_name",
+        profile.provider?.display_name ?? profile.executor_name ?? "",
+        t,
+      );
       return {
         value: profile.id,
         label: profile.name,
+        description,
         executorType: profile.executor_type,
         executorName: profile.executor_name,
         disabled: !!disabledReason,
         disabledReason: disabledReason ?? undefined,
         renderLabel: () => (
-          <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{profile.name}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5 py-1">
+              <span className="flex min-w-0 items-center justify-between gap-2">
+                <span className="truncate">{profile.name}</span>
+                {executorLabel && (
+                  <Badge variant="outline" className="shrink-0 text-xs">
+                    {executorLabel}
+                  </Badge>
+                )}
+              </span>
+              {description && (
+                <span className="truncate text-xs text-muted-foreground">{description}</span>
+              )}
             </span>
-            {profile.executor_name && (
-              <Badge variant="outline" className="text-xs">
-                {profile.executor_name}
-              </Badge>
-            )}
           </span>
         ),
       };
     });
-  }, [allProfiles, disabledReasonFor]);
+  }, [allProfiles, disabledReasonFor, t]);
 }
