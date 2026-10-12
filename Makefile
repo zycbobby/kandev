@@ -122,8 +122,9 @@ help:
 	@echo "  service-restart          Restart current user service"
 	@echo "  service-uninstall        Uninstall current user service"
 	@echo "  service-config           Show service launcher/config paths"
+	@echo "  instances                List running kandev backends on this host (ports, home dir, data paths)"
 	@echo "  service-install PORT=3000 HOME_DIR=/path  Optional install overrides"
-	@echo "  service-install NO_BOOT_START=1  Skip Linux user-service boot hint"
+	@echo "  service-install NO_BOOT_START=1  Skip start-at-boot (systemd enable / launchd RunAtLoad)"
 	@echo "  sync-workflow                Export all runtime workflows into workflows/ (one file per workflow)"
 	@echo "  sync-workflow URL=http://localhost:38429  Backend base URL override"
 	@echo ""
@@ -444,6 +445,13 @@ service-logs-follow: service-cli-check
 service-config: service-cli-check
 	@$(SERVICE_ENV) "$(SERVICE_LAUNCHER)" service config
 
+# Which kandev instances are running on this host, and where each keeps its data.
+# The lister is OS-neutral (Linux /proc, macOS ps/lsof) and --paths adds the
+# SQLite and log paths; see .agents/skills/debug-kandev.
+.PHONY: instances
+instances:
+	@scripts/kandev-instances --paths
+
 .PHONY: build-backend
 build-backend:
 	@printf "$(CYAN)Building backend...$(RESET)\n"
@@ -591,6 +599,8 @@ test-scripts:
 	@bash scripts/dev-prod-db-path.test.sh
 	@bash scripts/deploy-user-service.test.sh
 	@bash scripts/make-deploy.test.sh
+	@bash scripts/kandev-instances.test.sh
+	@bash scripts/kandev-kill.test.sh
 	@bash scripts/sync-workflow.test.sh
 	@bash scripts/opencode-code-review.test.sh
 	@python3 scripts/opencode-code-review.test.py

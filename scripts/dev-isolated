@@ -234,6 +234,16 @@ WEB_PIDFILE="/tmp/kandev-dev-isolated-${BACKEND_PORT}.web.pid"
 # feature flags) from profiles.yaml. We also force mock providers so the
 # isolated instance needs no real GitHub/agents.
 echo "dev-isolated: starting backend on :$BACKEND_PORT ..."
+
+# setsid(1) gives each process its own session so a teardown can signal the whole
+# group at once. macOS has no setsid; there scripts/kandev-kill signals the
+# discovered PIDs individually, which is what it does whenever the target is not
+# its own group leader. Unquoted on purpose: it expands to nothing when unset.
+SETSID=""
+if command -v setsid >/dev/null 2>&1; then
+  SETSID="setsid"
+fi
+
 env -i \
   PATH="$PATH" \
   HOME="$HOME_ISO" \
@@ -250,7 +260,7 @@ env -i \
   KANDEV_MOCK_JIRA=true \
   KANDEV_MOCK_LINEAR=true \
   KANDEV_LOG_LEVEL="${KANDEV_LOG_LEVEL:-info}" \
-  setsid "$BACKEND_BIN" __backend >"$BACKEND_LOG" 2>&1 &
+  $SETSID "$BACKEND_BIN" __backend >"$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 echo "$BACKEND_PID" >"$PIDFILE"
 
@@ -291,7 +301,7 @@ if [[ "$WANT_WEB" -eq 1 ]]; then
     PORT="$WEB_PORT" \
     HOSTNAME="127.0.0.1" \
     VITE_KANDEV_DEBUG="true" \
-    setsid pnpm -C "$REPO_ROOT/apps" --filter @kandev/web dev >"$WEB_LOG" 2>&1 &
+    $SETSID pnpm -C "$REPO_ROOT/apps" --filter @kandev/web dev >"$WEB_LOG" 2>&1 &
   WEB_PID=$!
   echo "$WEB_PID" >"$WEB_PIDFILE"
 

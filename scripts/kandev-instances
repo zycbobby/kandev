@@ -3,58 +3,91 @@
 #
 # For each backend process (binary named `kandev` with a listening TCP socket)
 # it prints, tab-separated:
-#   PID  BACKEND_PORT  WEB_PORT  AGENTCTL_PORT  HOME_DIR  REPO_PATH
+#   PID  BACKEND_PORT  WEB_PORT  AGENTCTL_PORT  HOME_DIR  REPO_PATH  MANAGER
+#
+# MANAGER is the service manager owning the process (`systemd` or `launchd`);
+# `-` marks a foreground instance (a console `make dev` / `kandev dev`, or an
+# isolated instance from scripts/dev-isolated), which no service manager will
+# restart for you.
 #
 # Sources:
 #   - backend PID + listening port: `ss -tlnp` (falls back to `lsof`)
 #   - web port: a separate Vite dev listener from KANDEV_WEB_INTERNAL_URL when
 #     configured and reachable; otherwise the backend port, because production
 #     serves the SPA from the Go backend.
-#   - agentctl port: KANDEV_AGENT_STANDALONE_PORT / AGENTCTL_PORT in environ,
-#     else the `-port=` flag of a child `agentctl` process (else `?`)
-#   - HOME_DIR: KANDEV_HOME_DIR in environ, else HOME, else `?`
-#   - repo path: derived from /proc/<pid>/exe (…/apps/backend/bin/kandev →
-#     repo root) or /proc/<pid>/cwd (else `?`)
+#   - agentctl port: KANDEV_AGENT_STANDALONE_PORT / AGENTCTL_PORT in the
+#     process environment, else the `-port=` flag of a child `agentctl` process
+#     (else `?`)
+#   - HOME_DIR / MANAGER: KANDEV_HOME_DIR and KANDEV_SERVICE_MANAGER from the
+#     process environment (Linux /proc, macOS `ps eww`); HOME is the fallback
+#     home, else `?`
+#   - repo path: the checkout a dev/`make dev` backend runs from (derived from
+#     the executable path or cwd); `?` when the instance is an installed runtime
+#     (…/runtime/bin/kandev), which belongs to no checkout
 #
 # This is the tool a debugger uses to tell "my isolated instance" apart from
 # "the user's live instance" before touching anything. Unresolved fields print
 # as `?` rather than failing the whole listing.
 #
+# Runs on Linux and macOS: no /proc assumption, and no bash-4-only syntax
+# (macOS ships bash 3.2 as /bin/bash).
+#
 # Usage:
 #   scripts/kandev-instances            # human-readable table
+#   scripts/kandev-instances --paths    # table plus each instance's data paths
 #   scripts/kandev-instances --raw      # tab-separated, no header (scriptable)
+#   scripts/kandev-instances --raw --paths   # same, with db + log columns appended
 #
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/proc-info.sh
+. "$SCRIPT_DIR/lib/proc-info.sh"
+
 RAW=0
-if [[ "${1:-}" == "--raw" ]]; then
-  RAW=1
-fi
+WITH_PATHS=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --raw)
+      RAW=1
+      shift
+      ;;
+    --paths)
+      WITH_PATHS=1
+      shift
+      ;;
+    -h | --help)
+      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "kandev-instances: unknown argument '$1' (try --help)" >&2
+      exit 2
+      ;;
+  esac
+done
 
 # Read a single env var value from a process's environ. Prints empty on miss.
 read_environ_var() {
   local pid="$1" var="$2"
-  [[ -r "/proc/$pid/environ" ]] || return 0
-  tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
+  proc_environ "$pid" |
     awk -F= -v k="$var" '$1==k {sub("^"k"=",""); print; exit}'
 }
 
-# Resolve the repo path from a kandev binary's exe path or cwd.
-# …/apps/backend/bin/kandev → repo root (strip the trailing 4 segments).
+# Resolve the checkout an instance runs from: a dev/`make dev` backend executes
+# <repo>/apps/backend/bin/kandev, so the repo root is the exe path minus that
+# suffix. An installed runtime (<home>/runtime/bin/kandev) runs from no checkout
+# at all and reports `?` rather than a misleading cwd.
 resolve_repo() {
   local pid="$1" exe cwd
-  exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+  exe="$(proc_exe "$pid")"
   if [[ "$exe" == */apps/backend/bin/kandev ]]; then
     printf '%s\n' "${exe%/apps/backend/bin/kandev}"
     return 0
   fi
-  cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+  cwd="$(proc_cwd "$pid")"
   if [[ "$cwd" == */apps/backend/bin ]]; then
     printf '%s\n' "${cwd%/apps/backend/bin}"
-    return 0
-  fi
-  if [[ -n "$cwd" ]]; then
-    printf '%s\n' "$cwd"
     return 0
   fi
   printf '?\n'
@@ -69,8 +102,8 @@ resolve_agentctl_port() {
   if [[ -z "$port" ]]; then
     # Inspect child processes for an `agentctl -port=NNNN`.
     local child cmd
-    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-      cmd="$(tr '\0' ' ' <"/proc/$child/cmdline" 2>/dev/null || true)"
+    for child in $(proc_children "$pid"); do
+      cmd="$(proc_cmdline "$child")"
       case "$cmd" in
         *agentctl*-port=*)
           port="$(printf '%s' "$cmd" | grep -oE 'port=[0-9]+' | head -1 | cut -d= -f2)"
@@ -143,49 +176,59 @@ list_backend_sockets() {
 
 # Build a unique "PID PORT" list, keeping the lowest port per PID (the backend
 # HTTP server binds the configured KANDEV_SERVER_PORT; that is the canonical one
-# we report).
-declare -A SEEN_PORT
-mapfile -t PAIRS < <(list_backend_sockets | sort -u)
-for pair in "${PAIRS[@]:-}"; do
-  [[ -z "$pair" ]] && continue
-  pid="${pair%% *}"
-  port="${pair##* }"
-  cur="${SEEN_PORT[$pid]:-}"
-  if [[ -z "$cur" || "$port" -lt "$cur" ]]; then
-    SEEN_PORT[$pid]="$port"
-  fi
-done
+# we report). awk rather than a bash associative array so this runs on the
+# bash 3.2 that macOS still ships.
+SOCKETS="$(list_backend_sockets |
+  awk '{ pid=$1; port=$2+0; if (!(pid in best) || port < best[pid]) best[pid]=port }
+       END { for (p in best) printf "%s %s\n", p, best[p] }' |
+  sort -k2,2n)"
 
 if [[ "$RAW" -eq 0 ]]; then
-  printf '%-7s  %-12s  %-8s  %-13s  %-28s  %s\n' \
-    "PID" "BACKEND_PORT" "WEB_PORT" "AGENTCTL_PORT" "HOME_DIR" "REPO_PATH"
+  printf '%-7s  %-12s  %-8s  %-13s  %s  %s  %s\n' \
+    "PID" "BACKEND_PORT" "WEB_PORT" "AGENTCTL_PORT" "HOME_DIR" "REPO_PATH" "MANAGER"
 fi
 
-# `set -u` treats an empty associative array as unbound when expanded, so
-# collect the keys with -u temporarily relaxed.
-set +u
-pids=("${!SEEN_PORT[@]}")
-set -u
-
-if [[ ${#pids[@]} -eq 0 ]]; then
+if [[ -z "$SOCKETS" ]]; then
   [[ "$RAW" -eq 0 ]] && echo "(no running kandev instances found)" >&2
   exit 0
 fi
 
-for pid in "${pids[@]}"; do
-  backend_port="${SEEN_PORT[$pid]}"
+printf '%s\n' "$SOCKETS" | while read -r pid backend_port; do
+  [[ -z "$pid" ]] && continue
   web_port="$(resolve_web_port "$pid" "$backend_port")"
   agentctl_port="$(resolve_agentctl_port "$pid")"
   home_dir="$(read_environ_var "$pid" KANDEV_HOME_DIR)"
   [[ -z "$home_dir" ]] && home_dir="$(read_environ_var "$pid" HOME)"
   [[ -z "$home_dir" ]] && home_dir="?"
+  manager="$(read_environ_var "$pid" KANDEV_SERVICE_MANAGER)"
+  [[ -z "$manager" ]] && manager="-"
   repo="$(resolve_repo "$pid")"
+  # KANDEV_DATABASE_PATH overrides the default location; an unknown home dir
+  # leaves the derived paths empty rather than guessing.
+  db_path=""
+  log_path=""
+  if [[ "$home_dir" != "?" ]]; then
+    db_path="$(read_environ_var "$pid" KANDEV_DATABASE_PATH)"
+    [[ -z "$db_path" ]] && db_path="$home_dir/data/kandev.db"
+    log_path="$home_dir/logs/backend-logs.log"
+  fi
 
   if [[ "$RAW" -eq 1 ]]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$pid" "$backend_port" "$web_port" "$agentctl_port" "$home_dir" "$repo"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+      "$pid" "$backend_port" "$web_port" "$agentctl_port" "$home_dir" "$repo" "$manager"
+    # --paths appends the data paths as extra columns, so a caller can read the
+    # database it should query without a second pass over the table.
+    if [[ "$WITH_PATHS" -eq 1 ]]; then
+      printf '\t%s\t%s' "$db_path" "$log_path"
+    fi
+    printf '\n'
   else
-    printf '%-7s  %-12s  %-8s  %-13s  %-28s  %s\n' \
-      "$pid" "$backend_port" "$web_port" "$agentctl_port" "$home_dir" "$repo"
+    printf '%-7s  %-12s  %-8s  %-13s  %s  %s  %s\n' \
+      "$pid" "$backend_port" "$web_port" "$agentctl_port" "$home_dir" "$repo" "$manager"
+    if [[ "$WITH_PATHS" -eq 1 && -n "$db_path" ]]; then
+      printf '    home: %s\n' "$home_dir"
+      printf '    db:   %s\n' "$db_path"
+      printf '    log:  %s\n' "$log_path"
+    fi
   fi
-done | sort -k2 -n
+done
