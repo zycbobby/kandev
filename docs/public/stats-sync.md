@@ -63,6 +63,7 @@ Useful options:
 ## Limits and recovery
 
 - A failed push (REMOTE cannot reach LOCAL, wrong secret, LOCAL down) leaves the watermark untouched. The next scheduled run re-pushes the whole accumulated delta; LOCAL de-duplicates, so nothing is double-counted.
+- The script splits a large delta (a first push ships the instance's whole history) into POSTs of at most 16 MiB. The reconcile inventory travels in its own final POST. A single row bigger than one POST still fails the push, with the endpoint's real HTTP status: the ingest endpoint consumes the unread request body before rejecting, so senders see 413/401 instead of a connection reset.
 - REMOTE databases on PostgreSQL are rejected by the preflight in v1.
 - Rows deleted on REMOTE converge only on the reconcile push, so a deletion can remain visible for up to N pushes.
 - Message content never leaves REMOTE: the payload carries counts, types, and timestamps, plus the agent profile snapshot trimmed to `model`, `model_name`, and `llm`.

@@ -23,6 +23,30 @@ The remote sync script SHALL persist a watermark locally and advance it only aft
 - **WHEN** a push fails (network error, non-2xx response)
 - **THEN** the watermark stays unchanged and the next scheduled run re-pushes the same delta
 
+### Requirement: 大载荷分块投递
+
+The remote sync script SHALL split an extracted delta into multiple ingest POSTs whose serialized bodies stay within a fixed budget below the local ingest endpoint's body limit; the reconcile inventory SHALL never be split and SHALL ride in its own final POST after every row chunk. A failed chunk SHALL retain the watermark like a failed push.
+
+#### Scenario: 首次全量推送超过单个请求体预算
+- **WHEN** a push carries more rows than one POST's budget allows
+- **THEN** the script sends several delta POSTs and the ingest stores all rows once
+
+#### Scenario: 对账清单完整到达
+- **WHEN** a reconciliation run pushes chunks
+- **THEN** the full inventory arrives in one final POST after the row chunks, and the deletions never remove rows the same run re-pushed
+
+#### Scenario: 单行超过预算
+- **WHEN** a single row's serialized size exceeds one POST's budget
+- **THEN** the row is sent alone and an over-limit rejection surfaces to the operator with the real HTTP status
+
+### Requirement: 错误响应不掩盖状态码
+
+The local ingest endpoint SHALL consume the unread request body before answering an early rejection (missing or wrong secret, over-limit payload), so the sender receives the real status code instead of a connection reset.
+
+#### Scenario: 超限载荷收到 413 而不是连接重置
+- **WHEN** a POST body exceeds the endpoint's size limit
+- **THEN** the endpoint drains the unread remainder and answers 413, and the sender reports the HTTP status rather than a network error
+
 ### Requirement: 幂等 upsert
 
 The local ingest SHALL upsert rows keyed by (source_instance, original row ID); re-pushing rows already stored SHALL update them in place without creating duplicates.
