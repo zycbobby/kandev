@@ -69,6 +69,9 @@ CREATE TABLE task_session_git_snapshots (
 T0 = "2026-10-10 08:00:00.000000+00:00"
 T1 = "2026-10-11 09:00:00.000000+00:00"
 T2 = "2026-10-12 10:00:00.000000+00:00"
+# Strictly older than T1, so a row stamped with it can never enter a
+# delta whose watermark already reached T1.
+T_MID = "2026-10-10 12:00:00.000000+00:00"
 
 
 class IngestStub:
@@ -362,7 +365,9 @@ class TestIncrementalExtraction(PushTestBase):
         self.assertIn("remote-test:task-2", second_uids)
         self.run_push(db_path, stub)
         third_uids = [row["uid"] for row in stub.requests[2]["body"]["tasks"]]
-        self.assertEqual(third_uids, ["remote-test:task-2"])
+        # task-2 is the new row; task-1 rides along because the overlap tail
+        # re-includes sess-1's children and every child pulls its parent.
+        self.assertEqual(third_uids, ["remote-test:task-2", "remote-test:task-1"])
 
     def test_legacy_schema_without_new_columns_still_extracts(self):
         db_path = self.make_db(legacy_tasks=True)
@@ -658,6 +663,124 @@ class TestOrphanChildExtraction(PushTestBase):
         exit_code = self.run_push(db_path, stub)
         self.assertEqual(exit_code, 0)
         self.assertEqual(stub.requests[0]["body"]["sessions"], [])
+
+
+class TestParentClosureExtraction(PushTestBase):
+    def test_backdated_parent_is_pulled_into_a_later_delta(self):
+        # A task whose updated_at stays below the tasks watermark while its
+        # session is touched: the session reaches the delta, the task does
+        # not. The envelope must still carry the task — the ingest FKs
+        # reject a child whose parent row is absent.
+        db_path = self.make_db()
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            INSERT INTO workspaces VALUES ('ws-remote');
+            INSERT INTO tasks (id, workspace_id, title, state, origin, is_ephemeral, created_at, updated_at)
+                VALUES ('task-early', 'ws-remote', 'Early', 'DONE', 'manual', 0, '%s', '%s');
+            """
+            % ((T1,) * 2)
+        )
+        conn.commit()
+        conn.close()
+
+        stub = IngestStub(status=200)
+        self.addCleanup(stub.close)
+        self.run_push(db_path, stub)
+        watermark_tasks = self.read_state()["watermarks"]["tasks"]
+
+        # Backdated import: the task's updated_at predates the watermark the
+        # first push recorded, so it can never enter a tasks delta on its own.
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            INSERT INTO tasks (id, workspace_id, title, state, origin, is_ephemeral, created_at, updated_at)
+                VALUES ('task-late', 'ws-remote', 'Late', 'TODO', 'manual', 0, '%s', '%s');
+            INSERT INTO task_sessions (id, task_id, started_at, completed_at, updated_at)
+                VALUES ('sess-late', 'task-late', '%s', '%s', '%s');
+            INSERT INTO task_session_messages (id, task_session_id, turn_id, author_type, type, created_at)
+                VALUES ('msg-late', 'sess-late', '', 'user', 'message', '%s');
+            """
+            % ((T_MID,) * 2 + (T2,) * 3 + (T2,))
+        )
+        conn.commit()
+        conn.close()
+
+        exit_code = self.run_push(db_path, stub)
+        self.assertEqual(exit_code, 0)
+        shipped_tasks = [
+            row["uid"]
+            for request in stub.requests[1:]
+            for row in request["body"]["tasks"]
+        ]
+        shipped_sessions = [
+            row["uid"]
+            for request in stub.requests[1:]
+            for row in request["body"]["sessions"]
+        ]
+        self.assertIn("remote-test:sess-late", shipped_sessions)
+        self.assertIn(
+            "remote-test:task-late",
+            shipped_tasks,
+            "a delta session must carry its parent task even when the task "
+            "is outside the tasks watermark",
+        )
+
+    def test_turn_closure_pulls_its_session_chain(self):
+        db_path = self.make_db()
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            INSERT INTO workspaces VALUES ('ws-remote');
+            INSERT INTO tasks (id, workspace_id, title, state, origin, is_ephemeral, created_at, updated_at)
+                VALUES ('task-early', 'ws-remote', 'Early', 'DONE', 'manual', 0, '%s', '%s');
+            INSERT INTO task_sessions (id, task_id, started_at, completed_at, updated_at)
+                VALUES ('sess-early', 'task-early', '%s', '%s', '%s');
+            """
+            % ((T1,) * 5)
+        )
+        conn.commit()
+        conn.close()
+
+        stub = IngestStub(status=200)
+        self.addCleanup(stub.close)
+        self.run_push(db_path, stub)
+        watermark_tasks = self.read_state()["watermarks"]["tasks"]
+
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            INSERT INTO tasks (id, workspace_id, title, state, origin, is_ephemeral, created_at, updated_at)
+                VALUES ('task-late', 'ws-remote', 'Late', 'TODO', 'manual', 0, '%s', '%s');
+            INSERT INTO task_sessions (id, task_id, started_at, completed_at, updated_at)
+                VALUES ('sess-late', 'task-late', '%s', '%s', '%s');
+            INSERT INTO task_session_turns (id, task_session_id, started_at, completed_at, updated_at)
+                VALUES ('turn-late', 'sess-late', '%s', '%s', '%s');
+            """
+            % ((T_MID,) * 2 + (T2,) * 6)
+        )
+        conn.commit()
+        conn.close()
+
+        exit_code = self.run_push(db_path, stub)
+        self.assertEqual(exit_code, 0)
+        shipped_tasks = [
+            row["uid"]
+            for request in stub.requests[1:]
+            for row in request["body"]["tasks"]
+        ]
+        shipped_sessions = [
+            row["uid"]
+            for request in stub.requests[1:]
+            for row in request["body"]["sessions"]
+        ]
+        self.assertIn("remote-test:turn-late", [
+            row["uid"]
+            for request in stub.requests[1:]
+            for row in request["body"]["turns"]
+        ])
+        self.assertIn("remote-test:sess-late", shipped_sessions)
+        self.assertIn("remote-test:task-late", shipped_tasks)
 
 
 class TestPreflight(PushTestBase):

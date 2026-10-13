@@ -42,6 +42,10 @@ SEPARATOR = ":"
 # equivalent to the single large one.
 MAX_POST_BYTES = 16 << 20
 
+# Parent-closure lookups batch their IN() lists well under SQLite's
+# bound-parameter ceiling.
+CLOSURE_ID_CHUNK = 500
+
 # Per-table extraction contracts: table -> (timestamp column order, row
 # category, uid column). The watermark advances on the first available
 # timestamp column; commits and snapshots only carry their event time.
@@ -424,6 +428,34 @@ def parse_json_object(raw):
     return parsed if isinstance(parsed, dict) else None
 
 
+def extract_rows_by_id(conn, contract, columns, ids, child_filter, source):
+    """Pull rows by id so a delta child never ships without its parent.
+
+    Re-pushing a parent the mirror already stores is an idempotent upsert.
+    """
+    table = contract["table"]
+    available = [name for name in TABLE_COLUMNS[table] if name in columns]
+    if "id" not in available or not ids:
+        return []
+    has_workflow_columns = table == "tasks" and "workflow_step_id" in columns
+    rows = []
+    for start in range(0, len(ids), CLOSURE_ID_CHUNK):
+        chunk = ids[start:start + CLOSURE_ID_CHUNK]
+        where = "id IN (%s)" % ",".join("?" * len(chunk))
+        if child_filter:
+            where += " AND " + child_filter
+        query = "SELECT %s FROM %s WHERE %s" % (", ".join(available), table, where)
+        for row in conn.execute(query, chunk).fetchall():
+            rows.append(
+                build_payload_row(conn, contract["category"], table, row, source, has_workflow_columns, columns)
+            )
+    return rows
+
+
+def strip_source(uid, source):
+    return uid[len(source) + 1:] if uid else ""
+
+
 def extract_payload(conn, source, state, overlap_seconds, include_inventory):
     envelope = {
         "schema_version": SCHEMA_VERSION,
@@ -440,6 +472,47 @@ def extract_payload(conn, source, state, overlap_seconds, include_inventory):
         )
         envelope[contract["category"]] = rows
         state.setdefault("watermarks", {})[table] = newest
+
+    # Parent closure: a child can reach its own delta window while its
+    # parent predates the parent table's watermark (backdated imports,
+    # inclusion-rule flips). The ingest FKs reject a child whose parent row
+    # is absent, so every delta child pulls its parent chain into the
+    # envelope.
+    def local_ids(category):
+        return {strip_source(row["uid"], source) for row in envelope[category]}
+
+    session_contract = next(c for c in TABLE_CONTRACTS if c["category"] == "sessions")
+    sessions_columns = table_columns(conn, "task_sessions")
+    session_filter = (
+        CHILD_TASK_FILTERS["task_sessions"] % task_rule if task_rule else None
+    )
+    referenced_sessions = {
+        strip_source(row["session_uid"], source)
+        for category in ("turns", "messages", "commits", "git_snapshots")
+        for row in envelope[category]
+    }
+    missing_sessions = sorted(referenced_sessions - local_ids("sessions"))
+    if missing_sessions:
+        pulled = extract_rows_by_id(
+            conn, session_contract, sessions_columns, missing_sessions,
+            session_filter, source,
+        )
+        envelope["sessions"].extend(pulled)
+
+    tasks_contract = next(c for c in TABLE_CONTRACTS if c["category"] == "tasks")
+    tasks_columns = table_columns(conn, "tasks")
+    referenced_tasks = {
+        strip_source(row["task_uid"], source)
+        for row in envelope["sessions"]
+        + envelope["task_repositories"]
+    }
+    missing_tasks = sorted(referenced_tasks - local_ids("tasks"))
+    if missing_tasks:
+        pulled = extract_rows_by_id(
+            conn, tasks_contract, tasks_columns, missing_tasks, task_rule, source,
+        )
+        envelope["tasks"].extend(pulled)
+
     if include_inventory:
         envelope["inventory"] = extract_inventory(conn, source)
     return envelope
