@@ -14,11 +14,20 @@ import (
 
 // maxIngestBodyBytes bounds one ingest payload. A nightly delta of raw rows
 // without message content stays far below this; the bound only exists so a
-// runaway sender cannot exhaust memory.
-const maxIngestBodyBytes = 32 << 20
+// runaway sender cannot exhaust memory. A var only so tests can inject a
+// small cap; production keeps this value.
+var maxIngestBodyBytes int64 = 32 << 20
 
 // responseErrorKey is the JSON field every error response uses.
 const responseErrorKey = "error"
+
+// drainBody consumes up to one more cap's worth of the unread request body
+// before an early error response. A handler that returns with the body
+// unread makes the server close the connection mid-upload; the sender then
+// sees a connection reset instead of the status code.
+func drainBody(c *gin.Context) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(c.Request.Body, maxIngestBodyBytes))
+}
 
 // RegisterRoutes mounts the ingest endpoint. Callers register nothing when
 // the feature is disabled (no shared secret configured), so an unconfigured
@@ -39,6 +48,7 @@ type Handler struct {
 // Handle processes one ingest POST.
 func (h *Handler) Handle(c *gin.Context) {
 	if err := h.svc.Authorize(c.GetHeader(HeaderName)); err != nil {
+		drainBody(c)
 		c.JSON(http.StatusUnauthorized, gin.H{responseErrorKey: "invalid or missing statsync secret"})
 		return
 	}
@@ -48,7 +58,8 @@ func (h *Handler) Handle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{responseErrorKey: "failed to read body"})
 		return
 	}
-	if len(body) > maxIngestBodyBytes {
+	if len(body) > int(maxIngestBodyBytes) {
+		drainBody(c)
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{responseErrorKey: "payload too large"})
 		return
 	}

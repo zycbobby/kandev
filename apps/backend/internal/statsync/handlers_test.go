@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +53,49 @@ func TestIngestHandlerRejectsMissingAndWrongSecret(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("secret %q status = %d, want 401", secret, rec.Code)
 		}
+	}
+}
+
+// drainTestRequest posts a body the test keeps a reader handle on, so the
+// drained-after-error assertion reads the reader's remaining bytes.
+func drainTestRequest(t *testing.T, router *gin.Engine, body []byte, secret string) (*httptest.ResponseRecorder, *bytes.Reader) {
+	t.Helper()
+	reader := bytes.NewReader(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/statsync/ingest", reader)
+	if secret != "" {
+		req.Header.Set(HeaderName, secret)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec, reader
+}
+
+func TestIngestHandlerDrainsBodyBeforeUnauthorized(t *testing.T) {
+	// An early 401 that abandons the body makes the server close the
+	// connection mid-upload; the sender then sees a connection reset instead
+	// of the status code. The body must be consumed before responding.
+	router := newHandlerTestRouter(t)
+	rec, body := drainTestRequest(t, router, ingestBody(t, nil), "wrong-secret")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if body.Len() != 0 {
+		t.Fatalf("body not drained on the 401 path: %d bytes unread", body.Len())
+	}
+}
+
+func TestIngestHandlerDrainsOversizedBodyRemainder(t *testing.T) {
+	router := newHandlerTestRouter(t)
+	originalCap := maxIngestBodyBytes
+	maxIngestBodyBytes = 64
+	t.Cleanup(func() { maxIngestBodyBytes = originalCap })
+	// Smaller than two caps, so the bounded drain can reach EOF.
+	rec, body := drainTestRequest(t, router, []byte(strings.Repeat("x", 100)), "test-secret")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if body.Len() != 0 {
+		t.Fatalf("body remainder not drained on the 413 path: %d bytes unread", body.Len())
 	}
 }
 
