@@ -249,7 +249,43 @@ def completed_flag(conn, has_workflow_columns, row):
     return last is not None
 
 
-def extract_table(conn, contract, columns, watermark, overlap_seconds, source):
+# The task inclusion rule (non-ephemeral, non-automation origin) must reach
+# every child table: the mirror FKs reject a child whose parent task row was
+# filtered out of the payload, and a 500 on the first such row fails the
+# whole push.
+TASK_INCLUSION_COLUMNS = ("is_ephemeral", "origin")
+
+CHILD_TASK_FILTERS = {
+    "task_repositories": "task_id IN (SELECT id FROM tasks WHERE %s)",
+    "task_sessions": "task_id IN (SELECT id FROM tasks WHERE %s)",
+    "task_session_turns": (
+        "task_session_id IN (SELECT id FROM task_sessions"
+        " WHERE task_id IN (SELECT id FROM tasks WHERE %s))"
+    ),
+    "task_session_messages": (
+        "task_session_id IN (SELECT id FROM task_sessions"
+        " WHERE task_id IN (SELECT id FROM tasks WHERE %s))"
+    ),
+    "task_session_commits": (
+        "session_id IN (SELECT id FROM task_sessions"
+        " WHERE task_id IN (SELECT id FROM tasks WHERE %s))"
+    ),
+    "task_session_git_snapshots": (
+        "session_id IN (SELECT id FROM task_sessions"
+        " WHERE task_id IN (SELECT id FROM tasks WHERE %s))"
+    ),
+}
+
+
+def task_inclusion_rule(conn):
+    """The task WHERE rule, or None on a build predating those columns."""
+    columns = table_columns(conn, "tasks")
+    if any(name not in columns for name in TASK_INCLUSION_COLUMNS):
+        return None
+    return "is_ephemeral = 0 AND COALESCE(origin, '') != 'automation_run'"
+
+
+def extract_table(conn, contract, columns, watermark, overlap_seconds, source, task_rule=None):
     """Extract one table's delta rows as payload rows plus the new watermark."""
     table = contract["table"]
     available = [name for name in TABLE_COLUMNS[table] if name in columns]
@@ -266,12 +302,16 @@ def extract_table(conn, contract, columns, watermark, overlap_seconds, source):
         available.append(ts_column)
 
     select_list = ", ".join(available)
-    where = " WHERE is_ephemeral = 0 AND COALESCE(origin, '') != 'automation_run'" \
-        if table == "tasks" and "origin" in columns else ""
+    conditions = []
+    if table == "tasks" and task_rule:
+        conditions.append(task_rule)
+    elif task_rule and table in CHILD_TASK_FILTERS:
+        conditions.append(CHILD_TASK_FILTERS[table] % task_rule)
     args = []
     if watermark:
-        where = (" WHERE %s >= ?" % ts_column) if not where else where + " AND %s >= ?" % ts_column
+        conditions.append("%s >= ?" % ts_column)
         args.append(minus_seconds(watermark, overlap_seconds))
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     query = "SELECT %s FROM %s%s ORDER BY %s ASC" % (select_list, table, where, ts_column)
     rows = conn.execute(query, args).fetchall()
 
@@ -390,12 +430,13 @@ def extract_payload(conn, source, state, overlap_seconds, include_inventory):
         "source_instance": source,
         "mode": "reconcile" if include_inventory else "delta",
     }
+    task_rule = task_inclusion_rule(conn)
     for contract in TABLE_CONTRACTS:
         table = contract["table"]
         columns = table_columns(conn, table)
         rows, newest = extract_table(
             conn, contract, columns, state.get("watermarks", {}).get(table),
-            overlap_seconds, source,
+            overlap_seconds, source, task_rule,
         )
         envelope[contract["category"]] = rows
         state.setdefault("watermarks", {})[table] = newest

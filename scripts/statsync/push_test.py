@@ -472,11 +472,20 @@ class TestChunkEnvelope(PushTestBase):
 class TestChunkedPushOverHttp(PushTestBase):
     def seed_many_snapshots(self, db_path, count, pad_bytes=150):
         conn = sqlite3.connect(db_path)
-        conn.execute("INSERT INTO workspaces VALUES ('ws-remote')")
+        conn.executescript(
+            """
+            INSERT INTO workspaces VALUES ('ws-remote');
+            INSERT INTO tasks (id, workspace_id, title, state, origin, is_ephemeral, created_at, updated_at)
+                VALUES ('task-bulk', 'ws-remote', 'Bulk', 'DONE', 'manual', 0, '%s', '%s');
+            INSERT INTO task_sessions (id, task_id, started_at, completed_at, updated_at)
+                VALUES ('sess-bulk', 'task-bulk', '%s', '%s', '%s');
+            """
+            % ((T1,) * 5)
+        )
         for i in range(count):
             conn.execute(
                 "INSERT INTO task_session_git_snapshots (id, session_id, snapshot_type, files, created_at)"
-                " VALUES (?, NULL, 'pending', ?, ?)",
+                " VALUES (?, 'sess-bulk', 'pending', ?, ?)",
                 ("snap-%d" % i, '{"f%d.go":{"pad":"%s"}}' % (i, "x" * pad_bytes), T1),
             )
         conn.commit()
@@ -572,6 +581,83 @@ class TestTimestampNormalization(unittest.TestCase):
         # parse it on any supported Python, not just 3.11+.
         boundary = push.minus_seconds("2026-08-23 08:34:52.231835994+00:00", 60)
         self.assertTrue(boundary.startswith("2026-08-23 08:33:52"))
+
+
+class TestOrphanChildExtraction(PushTestBase):
+    def test_children_of_excluded_tasks_are_not_extracted(self):
+        # Children of ephemeral/automation tasks would have no parent row in
+        # the mirror tables; the ingest FKs reject the whole envelope.
+        db_path = self.make_db()
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            INSERT INTO workspaces VALUES ('ws-remote');
+            INSERT INTO tasks (id, workspace_id, title, state, origin, is_ephemeral, created_at, updated_at)
+                VALUES ('task-ok', 'ws-remote', 'Kept', 'DONE', 'manual', 0, '%s', '%s'),
+                       ('task-eph', 'ws-remote', 'Ephemeral', 'DONE', 'manual', 1, '%s', '%s'),
+                       ('task-auto', 'ws-remote', 'Automation', 'DONE', 'automation_run', 0, '%s', '%s');
+            INSERT INTO task_repositories VALUES
+                ('tr-ok', 'task-ok', 'repo-x', '%s', '%s'),
+                ('tr-eph', 'task-eph', 'repo-x', '%s', '%s');
+            INSERT INTO task_sessions (id, task_id, started_at, completed_at, updated_at) VALUES
+                ('sess-ok', 'task-ok', '%s', '%s', '%s'),
+                ('sess-eph', 'task-eph', '%s', '%s', '%s');
+            INSERT INTO task_session_turns (id, task_session_id, started_at, completed_at, updated_at) VALUES
+                ('turn-ok', 'sess-ok', '%s', '%s', '%s'),
+                ('turn-orph', 'sess-eph', '%s', '%s', '%s');
+            INSERT INTO task_session_messages (id, task_session_id, turn_id, author_type, type, created_at) VALUES
+                ('msg-ok', 'sess-ok', 'turn-ok', 'user', 'message', '%s'),
+                ('msg-orph', 'sess-eph', 'turn-orph', 'user', 'message', '%s');
+            INSERT INTO task_session_commits (id, session_id, commit_sha, committed_at) VALUES
+                ('commit-orph', 'sess-eph', 'deadbeef', '%s');
+            INSERT INTO task_session_git_snapshots (id, session_id, snapshot_type, files, created_at) VALUES
+                ('snap-orph', 'sess-eph', 'pending', '{}', '%s');
+            """
+            % ((T1,) * 26)
+        )
+        conn.commit()
+        conn.close()
+
+        stub = IngestStub(status=200)
+        self.addCleanup(stub.close)
+        exit_code = self.run_push(db_path, stub)
+        self.assertEqual(exit_code, 0)
+        body = stub.requests[0]["body"]
+        self.assertEqual([row["uid"] for row in body["tasks"]], ["remote-test:task-ok"])
+        self.assertEqual(
+            [row["uid"] for row in body["task_repositories"]], ["remote-test:tr-ok"]
+        )
+        self.assertEqual(
+            [row["uid"] for row in body["sessions"]], ["remote-test:sess-ok"]
+        )
+        self.assertEqual(
+            [row["uid"] for row in body["turns"]], ["remote-test:turn-ok"]
+        )
+        self.assertEqual(
+            [row["uid"] for row in body["messages"]], ["remote-test:msg-ok"]
+        )
+        self.assertEqual(body["commits"], [])
+        self.assertEqual(body["git_snapshots"], [])
+
+    def test_children_of_missing_parent_task_are_excluded(self):
+        db_path = self.make_db()
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            INSERT INTO workspaces VALUES ('ws-remote');
+            INSERT INTO task_sessions (id, task_id, started_at, completed_at, updated_at) VALUES
+                ('sess-orphan', 'task-gone', '%s', '%s', '%s');
+            """
+            % ((T1,) * 3)
+        )
+        conn.commit()
+        conn.close()
+
+        stub = IngestStub(status=200)
+        self.addCleanup(stub.close)
+        exit_code = self.run_push(db_path, stub)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stub.requests[0]["body"]["sessions"], [])
 
 
 class TestPreflight(PushTestBase):
