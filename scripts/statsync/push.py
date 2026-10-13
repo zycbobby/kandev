@@ -23,6 +23,7 @@ with an explicit error).
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 import urllib.error
@@ -174,23 +175,40 @@ def to_rfc3339(value):
     """Normalize one stored SQLite timestamp to the wire format."""
     if value is None:
         return None
-    text = str(value)
-    try:
-        parsed = datetime_fromisoformat(text)
-    except ValueError:
+    return normalize_rfc3339(str(value))
+
+
+# Stored timestamps vary by build: space or T separator between date and
+# time, fractional seconds up to 9 digits, offsets with or without a colon.
+# Normalization cannot go through datetime.fromisoformat, which rejects
+# 9-digit fractions before Python 3.11 and would leak the raw string to the
+# endpoint's RFC3339 validation.
+STORED_TIMESTAMP = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def normalize_rfc3339(text):
+    match = STORED_TIMESTAMP.match(text)
+    if match is None:
         return text
-    return parsed.isoformat()
+    date, clock, fraction, offset = match.groups()
+    fraction = (fraction or "")[:6]
+    if offset in (None, "Z"):
+        # Stored values are UTC wall clock; make that explicit for the wire.
+        offset = "+00:00"
+    elif len(offset) == 5:
+        offset = offset[:3] + ":" + offset[3:]
+    return "%sT%s%s%s" % (date, clock, "." + fraction if fraction else "", offset)
 
 
 def datetime_fromisoformat(text):
     # Local import keeps the top of the file honest about stdlib usage.
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    parsed = datetime.fromisoformat(text)
+    parsed = datetime.fromisoformat(normalize_rfc3339(text))
     if parsed.tzinfo is None:
         # Stored values are UTC wall clock; make that explicit for the wire.
-        from datetime import timezone
-
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
 

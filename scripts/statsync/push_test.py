@@ -542,6 +542,38 @@ class TestChunkedPushOverHttp(PushTestBase):
         self.assertEqual(inventory["commits"], ["remote-test:commit-1"])
 
 
+class TestTimestampNormalization(unittest.TestCase):
+    """Stored timestamps vary by build: space separator, fractions up to 9
+    digits. The wire format must be RFC3339 regardless of the local Python."""
+
+    def test_nanosecond_space_timestamp_becomes_rfc3339(self):
+        self.assertEqual(
+            push.to_rfc3339("2026-08-23 08:34:52.231835994+00:00"),
+            "2026-08-23T08:34:52.231835+00:00",
+        )
+
+    def test_second_precision_without_offset_gets_utc(self):
+        self.assertEqual(
+            push.to_rfc3339("2026-08-23 08:34:52"),
+            "2026-08-23T08:34:52+00:00",
+        )
+
+    def test_already_rfc3339_value_passes_through(self):
+        self.assertEqual(
+            push.to_rfc3339("2026-08-23T08:34:52.5+00:00"),
+            "2026-08-23T08:34:52.5+00:00",
+        )
+
+    def test_none_and_null_stay_none(self):
+        self.assertIsNone(push.to_rfc3339(None))
+
+    def test_watermark_minus_overlap_parses_nanosecond_stamps(self):
+        # The watermark stores the raw value, so the overlap boundary must
+        # parse it on any supported Python, not just 3.11+.
+        boundary = push.minus_seconds("2026-08-23 08:34:52.231835994+00:00", 60)
+        self.assertTrue(boundary.startswith("2026-08-23 08:33:52"))
+
+
 class TestPreflight(PushTestBase):
     def test_missing_database_fails_cleanly(self):
         stub = IngestStub(status=200)
