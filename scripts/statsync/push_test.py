@@ -72,11 +72,16 @@ T2 = "2026-10-12 10:00:00.000000+00:00"
 
 
 class IngestStub:
-    """In-process stub of the LOCAL ingest endpoint."""
+    """In-process stub of the LOCAL ingest endpoint.
 
-    def __init__(self, status=200):
+    `statuses` optionally gives the response code per request index; the last
+    entry repeats once the list is exhausted.
+    """
+
+    def __init__(self, status=200, statuses=None):
         self.requests = []
         self.status = status
+        self.statuses = statuses
         self._server = HTTPServer(("127.0.0.1", 0), self._make_handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -84,6 +89,11 @@ class IngestStub:
     @property
     def url(self):
         return "http://127.0.0.1:%d" % self._server.server_port
+
+    def _status_for(self, index):
+        if not self.statuses:
+            return self.status
+        return self.statuses[index] if index < len(self.statuses) else self.statuses[-1]
 
     def _make_handler(self):
         stub = self
@@ -95,10 +105,11 @@ class IngestStub:
                     {
                         "path": self.path,
                         "secret": self.headers.get("X-Statsync-Secret"),
+                        "length": length,
                         "body": json.loads(self.rfile.read(length)) if length else {},
                     }
                 )
-                self.send_response(stub.status)
+                self.send_response(stub._status_for(len(stub.requests) - 1))
                 self.end_headers()
                 self.wfile.write(b'{"upserts":1,"deleted":0}')
 
@@ -298,7 +309,11 @@ class TestReconcilePushCarriesInventory(PushTestBase):
 
         exit_code = self.run_push(db_path, stub, ["--reconcile-every", "1"])
         self.assertEqual(exit_code, 0)
-        body = stub.requests[0]["body"]
+        # Row chunks go out as deltas; the reconcile envelope carrying the
+        # inventory is the final POST.
+        row_body = stub.requests[0]["body"]
+        self.assertEqual(row_body["mode"], "delta")
+        body = stub.requests[-1]["body"]
         self.assertEqual(body["mode"], "reconcile")
         inventory = body["inventory"]
         self.assertIn("remote-test:task-1", inventory["tasks"])
@@ -317,7 +332,9 @@ class TestReconcilePushCarriesInventory(PushTestBase):
             state = self.read_state()
             self.assertEqual(state["push_count"], expected_count)
         modes = [request["body"]["mode"] for request in stub.requests]
-        self.assertEqual(modes, ["delta", "reconcile"])
+        # Push 1 is a plain delta; push 2 is rows-as-delta plus the final
+        # reconcile inventory envelope.
+        self.assertEqual(modes, ["delta", "delta", "reconcile"])
 
 
 class TestIncrementalExtraction(PushTestBase):
@@ -379,6 +396,150 @@ class TestIncrementalExtraction(PushTestBase):
         self.addCleanup(stub.close)
         self.run_push(db_path, stub)
         self.assertEqual(stub.requests[0]["body"]["tasks"], [])
+
+
+def synthetic_envelope(row_count, pad_bytes, source="remote-1", inventory=None):
+    """A delta envelope with heavy rows, built without touching a database."""
+    categories = [contract["category"] for contract in push.TABLE_CONTRACTS]
+    envelope = {
+        "schema_version": push.SCHEMA_VERSION,
+        "source_instance": source,
+        "mode": "delta",
+    }
+    for category in categories:
+        envelope[category] = [
+            {"uid": "%s:%s-%d" % (source, category, i), "pad": "x" * pad_bytes}
+            for i in range(row_count)
+        ]
+    if inventory is not None:
+        envelope["inventory"] = inventory
+    return envelope
+
+
+class TestChunkEnvelope(PushTestBase):
+    """Pure splitter tests: no HTTP, no database."""
+
+    def test_chunks_fit_budget_and_cover_every_row_exactly_once(self):
+        envelope = synthetic_envelope(row_count=40, pad_bytes=200)
+        budget = 3000
+        chunks = push.chunk_envelope(envelope, budget)
+        self.assertGreater(len(chunks), 1)
+        for category in envelope:
+            if category in ("schema_version", "source_instance", "mode"):
+                continue
+            shipped = [row["uid"] for chunk in chunks for row in chunk[category]]
+            self.assertEqual(shipped, [row["uid"] for row in envelope[category]])
+        for chunk in chunks:
+            self.assertEqual(chunk["schema_version"], push.SCHEMA_VERSION)
+            self.assertEqual(chunk["source_instance"], envelope["source_instance"])
+            self.assertEqual(chunk["mode"], "delta")
+            self.assertNotIn("inventory", chunk)
+            size = len(json.dumps(chunk))
+            if size > budget:
+                # Only a single unsplittable row may overflow the budget.
+                carried = sum(len(rows) for rows in chunk.values())
+                self.assertEqual(carried, 1, "multi-row chunk %d bytes > budget" % size)
+
+    def test_single_oversized_row_gets_its_own_chunk(self):
+        envelope = synthetic_envelope(row_count=1, pad_bytes=0)
+        envelope["git_snapshots"] = [{"uid": "remote-1:huge", "pad": "x" * 5000}]
+        chunks = push.chunk_envelope(envelope, 1000)
+        shipped = [row["uid"] for chunk in chunks for row in chunk["git_snapshots"]]
+        self.assertEqual(shipped, ["remote-1:huge"])
+
+    def test_inventory_rides_last_as_reconcile(self):
+        inventory = {
+            "repositories": [], "tasks": ["remote-1:task-0"], "task_repositories": [],
+            "sessions": [], "turns": [], "messages": [], "commits": [], "git_snapshots": [],
+        }
+        envelope = synthetic_envelope(row_count=4, pad_bytes=10, inventory=inventory)
+        chunks = push.chunk_envelope(envelope, 10 ** 9)
+        final = chunks[-1]
+        self.assertEqual(final["mode"], "reconcile")
+        self.assertEqual(final["inventory"], inventory)
+        self.assertEqual(sum(len(rows) for rows in final.values() if isinstance(rows, list)), 0)
+        for chunk in chunks[:-1]:
+            self.assertEqual(chunk["mode"], "delta")
+            self.assertNotIn("inventory", chunk)
+
+    def test_empty_delta_still_posts_one_chunk(self):
+        envelope = synthetic_envelope(row_count=0, pad_bytes=0)
+        chunks = push.chunk_envelope(envelope, 3000)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["mode"], "delta")
+
+
+class TestChunkedPushOverHttp(PushTestBase):
+    def seed_many_snapshots(self, db_path, count, pad_bytes=150):
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO workspaces VALUES ('ws-remote')")
+        for i in range(count):
+            conn.execute(
+                "INSERT INTO task_session_git_snapshots (id, session_id, snapshot_type, files, created_at)"
+                " VALUES (?, NULL, 'pending', ?, ?)",
+                ("snap-%d" % i, '{"f%d.go":{"pad":"%s"}}' % (i, "x" * pad_bytes), T1),
+            )
+        conn.commit()
+        conn.close()
+
+    def set_small_budget(self, budget):
+        original = push.MAX_POST_BYTES
+        push.MAX_POST_BYTES = budget
+        self.addCleanup(setattr, push, "MAX_POST_BYTES", original)
+
+    def test_large_delta_posts_multiple_chunks_and_advances_watermark(self):
+        db_path = self.make_db()
+        self.seed_many_snapshots(db_path, 40)
+        self.set_small_budget(2000)
+        stub = IngestStub(status=200)
+        self.addCleanup(stub.close)
+
+        exit_code = self.run_push(db_path, stub)
+        self.assertEqual(exit_code, 0)
+        self.assertGreater(len(stub.requests), 1)
+        for request in stub.requests:
+            self.assertLessEqual(request["length"], push.MAX_POST_BYTES)
+            self.assertEqual(request["body"]["mode"], "delta")
+        shipped = [
+            row["uid"]
+            for request in stub.requests
+            for row in request["body"]["git_snapshots"]
+        ]
+        self.assertEqual(len(shipped), 40)
+        self.assertEqual(len(set(shipped)), 40)
+        state = self.read_state()
+        self.assertEqual(state["push_count"], 1)
+        self.assertEqual(state["watermarks"]["task_session_git_snapshots"], T1)
+
+    def test_mid_chunk_failure_keeps_watermark_and_stops(self):
+        db_path = self.make_db()
+        self.seed_many_snapshots(db_path, 40)
+        self.set_small_budget(2000)
+        stub = IngestStub(statuses=[200, 500])
+        self.addCleanup(stub.close)
+
+        exit_code = self.run_push(db_path, stub)
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(stub.requests), 2, "must stop at the first failed chunk")
+        self.assertFalse(self.state_path.exists(), "a failed push must not create state")
+
+    def test_reconcile_run_posts_row_chunks_then_inventory_last(self):
+        db_path = self.make_db()
+        self.seed_standard_fixture(db_path)
+        self.set_small_budget(2000)
+        stub = IngestStub(status=200)
+        self.addCleanup(stub.close)
+
+        exit_code = self.run_push(db_path, stub, ["--reconcile-every", "1"])
+        self.assertEqual(exit_code, 0)
+        modes = [request["body"]["mode"] for request in stub.requests]
+        self.assertEqual(modes[-1], "reconcile")
+        self.assertEqual(modes[:-1], ["delta"] * (len(modes) - 1))
+        inventory = stub.requests[-1]["body"]["inventory"]
+        self.assertIn("remote-test:task-1", inventory["tasks"])
+        self.assertIn("remote-test:repo-1", inventory["repositories"])
+        self.assertIn("remote-test:sess-1", inventory["sessions"])
+        self.assertEqual(inventory["commits"], ["remote-test:commit-1"])
 
 
 class TestPreflight(PushTestBase):

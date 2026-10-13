@@ -35,6 +35,12 @@ DEFAULT_OVERLAP_SECONDS = 60
 DEFAULT_RECONCILE_EVERY = 7
 SEPARATOR = ":"
 
+# One POST's serialized budget. The ingest endpoint rejects bodies over
+# 32 MiB, so the delta is split into envelopes comfortably below that; the
+# ingest contract dedupes by uid, so several small delta POSTs are
+# equivalent to the single large one.
+MAX_POST_BYTES = 16 << 20
+
 # Per-table extraction contracts: table -> (timestamp column order, row
 # category, uid column). The watermark advances on the first available
 # timestamp column; commits and snapshots only carry their event time.
@@ -395,6 +401,54 @@ def extract_inventory(conn, source):
     return inventory
 
 
+def chunk_envelope(envelope, budget):
+    """Split one extracted envelope into POST-sized envelopes.
+
+    Row chunks all carry mode "delta": the ingest side dedupes by uid, so N
+    small delta POSTs are equivalent to the single large one. The reconcile
+    inventory must never be split (a partial inventory would delete rows the
+    sender kept), so it rides in its own final envelope, after every row
+    chunk — deletions then can never remove rows this push just re-sent.
+    """
+    def fresh_chunk():
+        chunk = {
+            "schema_version": envelope["schema_version"],
+            "source_instance": envelope["source_instance"],
+            "mode": "delta",
+        }
+        for contract in TABLE_CONTRACTS:
+            chunk[contract["category"]] = []
+        return chunk
+
+    skeleton_bytes = len(json.dumps(fresh_chunk()))
+    chunks = []
+    current = fresh_chunk()
+    used = skeleton_bytes
+    filled = False
+    for contract in TABLE_CONTRACTS:
+        for row in envelope.get(contract["category"]) or []:
+            cost = len(json.dumps(row)) + 2
+            if filled and used + cost > budget:
+                chunks.append(current)
+                current = fresh_chunk()
+                used = skeleton_bytes
+                filled = False
+            current[contract["category"]].append(row)
+            used += cost
+            filled = True
+    chunks.append(current)
+    if envelope.get("inventory") is not None:
+        chunks.append(
+            {
+                "schema_version": envelope["schema_version"],
+                "source_instance": envelope["source_instance"],
+                "mode": "reconcile",
+                "inventory": envelope["inventory"],
+            }
+        )
+    return chunks
+
+
 def load_state(path):
     try:
         return json.loads(path.read_text())
@@ -443,19 +497,33 @@ def main(argv=None):
     finally:
         conn.close()
 
-    status, body = push(args.url, args.secret, envelope)
-    if status is None or status < 200 or status >= 300:
-        print(
-            "push failed (%s): %s" % (status if status is not None else "no response", body.strip()),
-            file=sys.stderr,
-        )
-        return 1
+    chunks = chunk_envelope(envelope, MAX_POST_BYTES)
+    status, body = None, ""
+    for index, chunk in enumerate(chunks, 1):
+        status, body = push(args.url, args.secret, chunk)
+        if status is None or status < 200 or status >= 300:
+            print(
+                "push failed (%s) chunk %d/%d: %s"
+                % (
+                    status if status is not None else "no response",
+                    index,
+                    len(chunks),
+                    body.strip(),
+                ),
+                file=sys.stderr,
+            )
+            return 1
 
     state["push_count"] = push_count
     save_state(state_path, state)
     print(
-        "pushed %s (HTTP %d); watermark advanced to %s"
-        % ("reconcile" if include_inventory else "delta", status, state_path)
+        "pushed %s in %d post(s) (HTTP %d); watermark advanced to %s"
+        % (
+            "reconcile" if include_inventory else "delta",
+            len(chunks),
+            status,
+            state_path,
+        )
     )
     return 0
 
