@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/kandev/kandev/internal/db"
+	"github.com/kandev/kandev/internal/statsync"
 )
 
 // createTestDB sets up a SQLite database with all required schemas for analytics queries.
@@ -171,6 +172,16 @@ func createTestDBAt(t testing.TB, dbPath string) *sqlx.DB {
 		commitCaptureActivatedAtMetaKey, "2000-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("failed to seed commit_capture_activated_at: %v", err)
+	}
+	// The section queries read through the statsync compatibility views, so
+	// give every analytics test database the mirror schema and views a real
+	// boot would have. The mirror side stays empty unless a test pushes into
+	// it (see stats_mirror_merge_test.go).
+	if _, err := statsync.NewWithDB(sqlxDB, sqlxDB); err != nil {
+		t.Fatalf("failed to create statsync mirror schema: %v", err)
+	}
+	if err := statsync.EnsureViews(sqlxDB); err != nil {
+		t.Fatalf("failed to create statsync views: %v", err)
 	}
 	return sqlxDB
 }

@@ -315,6 +315,10 @@ func isPublicPath(method, path string) bool {
 		return method == http.MethodGet
 	case "/api/v1/auth/login", "/api/v1/auth/setup", "/api/v1/auth/invites/accept":
 		return method == http.MethodPost
+	case "/api/v1/statsync/ingest":
+		// X-Statsync-Secret, constant-time compared by the handler; the
+		// route only exists when the operator configured a secret.
+		return method == http.MethodPost
 	case "/api/v1/auth/invites/preview":
 		return method == http.MethodGet
 	case "/api/v1/auth/me":

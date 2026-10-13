@@ -10,6 +10,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/kandev/kandev/internal/analytics/models"
+	"github.com/kandev/kandev/internal/statsync"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
 	tasksqlite "github.com/kandev/kandev/internal/task/repository/sqlite"
 	"github.com/kandev/kandev/internal/testutil"
@@ -150,6 +151,12 @@ func TestStatsAggregateParity(t *testing.T) {
 		}
 		if _, err := tasksqlite.NewWithDB(dbConn, dbConn, nil); err != nil {
 			t.Fatalf("initialize PostgreSQL task schema: %v", err)
+		}
+		if _, err := statsync.NewWithDB(dbConn, dbConn); err != nil {
+			t.Fatalf("initialize PostgreSQL statsync mirror schema: %v", err)
+		}
+		if err := statsync.EnsureViews(dbConn); err != nil {
+			t.Fatalf("create PostgreSQL statsync views: %v", err)
 		}
 		repo, err := NewWithDB(dbConn, dbConn)
 		if err != nil {

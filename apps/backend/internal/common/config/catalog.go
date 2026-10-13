@@ -140,6 +140,8 @@ var startupCatalog = []CatalogEntry{
 	{Key: "launcher.healthTimeoutMs", EnvVars: []string{"KANDEV_HEALTH_TIMEOUT_MS"}, Owner: "launcher", Default: "45000"},
 	{Key: "launcher.noBrowser", EnvVars: []string{"KANDEV_NO_BROWSER"}, Owner: "launcher", Default: "false"},
 	{Key: "executors.sshReachabilityIntervalSeconds", EnvVars: []string{"KANDEV_EXECUTORS_SSHREACHABILITYINTERVALSECONDS"}, Owner: "executors/reachability", Default: "60"},
+	{Key: "statsync.ingestSecret", EnvVars: []string{"KANDEV_STATSYNC_INGEST_SECRET"}, Owner: "statsync", Default: "", Sensitive: true},
+	{Key: "statsync.workspaceMappings", EnvVars: []string{}, Owner: "statsync", Default: "{}", Description: "source instance to local workspace id map; unmapped sources fall back to the primary workspace"},
 }
 
 var startupExclusions = []CatalogExclusion{

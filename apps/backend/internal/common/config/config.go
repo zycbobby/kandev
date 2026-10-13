@@ -54,7 +54,18 @@ type Config struct {
 	Features               FeaturesConfig               `mapstructure:"features"`
 	GitHubCredentialBroker GitHubCredentialBrokerConfig `mapstructure:"githubCredentialBroker"`
 	Executors              ExecutorsConfig              `mapstructure:"executors"`
+	Statsync               StatsyncConfig               `mapstructure:"statsync"`
 	Source                 ConfigSource                 `mapstructure:"-" json:"-"`
+}
+
+// StatsyncConfig configures cross-instance statistics ingestion. The secret
+// empty disables the ingest route entirely.
+type StatsyncConfig struct {
+	IngestSecret string `mapstructure:"ingestSecret"`
+	// WorkspaceMappings maps a source instance identifier to the local
+	// workspace id its mirrored rows are filed under. Sources without an
+	// entry fall back to the instance's primary workspace.
+	WorkspaceMappings map[string]string `mapstructure:"workspaceMappings"`
 }
 
 // TasksConfig contains task lifecycle startup limits.

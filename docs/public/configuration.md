@@ -223,6 +223,16 @@ Grace controls eligible raw payload removal. Replay age and event count bound re
 Safety checks apply at every configured value. Protected data has no forced expiry.
 See [delivery retention operations](operations.md#backend-delivery-retention) for backups, rollback, logs, and physical reclamation.
 
+### Cross-instance statistics ingestion
+
+These values configure the local ingest endpoint that merges another instance's activity into `/stats`.
+Restart the backend after a change. See [Cross-Instance Stats Sync](stats-sync.md) for the full setup.
+
+| YAML key | Environment variable | Default | Behavior |
+| --- | --- | --- | --- |
+| `statsync.ingestSecret` | `KANDEV_STATSYNC_INGEST_SECRET` | empty | Shared secret for `POST /api/v1/statsync/ingest`. Empty disables the endpoint entirely; the route is not registered. |
+| `statsync.workspaceMappings` | none (YAML only) | empty map | Maps a source instance name to a local workspace id. Sources without an entry are filed under the primary workspace. |
+
 ### Capacity and managed-process startup settings
 
 | YAML key                                   | Environment variable                              | Type and default                  | Current behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |

@@ -38,6 +38,7 @@ import (
 	"github.com/kandev/kandev/internal/runtimeflags"
 	"github.com/kandev/kandev/internal/secrets"
 	"github.com/kandev/kandev/internal/sentry"
+	"github.com/kandev/kandev/internal/statsync"
 	systemsettings "github.com/kandev/kandev/internal/system/settings"
 	"github.com/kandev/kandev/internal/task/deliveryretention"
 	sqliterepo "github.com/kandev/kandev/internal/task/repository/sqlite"
@@ -78,6 +79,10 @@ type Repositories struct {
 	Auth           *authstore.Store
 	HostnameCache  *hostnames.Store
 	SystemSettings *systemsettings.Store
+	// Statsync owns the cross-instance statistics mirror schema. Always
+	// initialized: the tables are part of the database contract even when
+	// ingestion is disabled.
+	Statsync *statsync.Repository
 }
 
 type Services struct {
@@ -160,6 +165,9 @@ type Services struct {
 	// stalls-read). Nil while features.coordinator is disabled; the backing
 	// store is still always constructed (requiredstores catalog entry).
 	Coordinator *coordinator.Service
+	// Statsync is the cross-instance statistics ingest service. Nil while
+	// statsync.ingestSecret is unconfigured: no secret, no route.
+	Statsync *statsync.Service
 }
 
 type schedulerStopper interface {

@@ -213,6 +213,10 @@ func TestEnabledModeAllowlistMatrix(t *testing.T) {
 		{name: "auth me", method: http.MethodGet, path: "/api/v1/auth/me"},
 		{name: "automation webhook", method: http.MethodPost, path: "/api/v1/automations/webhook/abc"},
 		{name: "office channel inbound", method: http.MethodPost, path: "/api/v1/office/channels/ch1/inbound"},
+		// Self-authenticating with X-Statsync-Secret; the exact-method branch
+		// must not widen to other methods.
+		{name: "statsync ingest", method: http.MethodPost, path: "/api/v1/statsync/ingest"},
+		{name: "statsync ingest wrong method", method: http.MethodGet, path: "/api/v1/statsync/ingest", blocked: true},
 		{
 			// Deferred, not public: the middleware lets GET/POST
 			// /api/plugins/<id>/webhooks/<key> requests through structurally

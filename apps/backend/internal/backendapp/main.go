@@ -140,6 +140,7 @@ import (
 
 	// Secrets
 	"github.com/kandev/kandev/internal/secrets"
+	"github.com/kandev/kandev/internal/statsync"
 
 	// System pages (status / database / backups / logs / updates / about)
 	systemsvc "github.com/kandev/kandev/internal/system"
@@ -1585,6 +1586,14 @@ func startGatewayAndServe(
 		zap.String("health", "/health"),
 		zap.String("http", "/api/v1"),
 	)
+	// Statistics mirror views union core tables that store migrations may
+	// rebuild, so they are (re)created here — after every store schema has
+	// settled — rather than with the mirror tables.
+	if err := statsync.EnsureViews(dbPool.Writer()); err != nil {
+		log.Error("Failed to initialize statistics mirror views", zap.Error(err))
+		closeBoundListeners(server, listeners, log)
+		return false
+	}
 	// Record the version only after every required store, the immediate health
 	// probe, and the complete HTTP wiring have succeeded. A late startup
 	// failure must leave the previous version marker intact so the next boot

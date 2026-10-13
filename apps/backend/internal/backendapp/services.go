@@ -52,6 +52,7 @@ import (
 	"github.com/kandev/kandev/internal/repoclone"
 	"github.com/kandev/kandev/internal/secrets"
 	"github.com/kandev/kandev/internal/sentry"
+	"github.com/kandev/kandev/internal/statsync"
 	"github.com/kandev/kandev/internal/steptelemetry"
 	systemsettings "github.com/kandev/kandev/internal/system/settings"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
@@ -177,6 +178,7 @@ func assembleServices(
 		CanvasDistribution:       integrations.canvasDistributionSvc,
 		GitCredentials:           integrations.gitCredentialBroker,
 		Coordinator:              integrations.coordinatorSvc,
+		Statsync:                 integrations.statsyncSvc,
 		// Office is constructed later in initOfficeServices once all
 		// of its dependencies (config loader, task integrations, etc.) are available.
 		Office: nil,
@@ -424,6 +426,7 @@ type integrationWiring struct {
 	shareHTTP             *share.HTTPHandlers
 	automationComponents  *automation.Components
 	coordinatorSvc        *coordinator.Service
+	statsyncSvc           *statsync.Service
 }
 
 func initIntegrationWiring(
@@ -475,9 +478,14 @@ func initIntegrationWiring(
 	if err != nil {
 		return nil, err
 	}
+	statsyncSvc, err := initStatsyncWiring(cfg, dbPool, repos, taskSvc)
+	if err != nil {
+		return nil, err
+	}
 	wiring := &integrationWiring{
 		pluginsSvc: pluginsSvc, pluginsCleanup: pluginsCleanup, agentConversationsSvc: agentConversationsSvc,
-		canvasSvc: canvasSvc, canvasDistributionSvc: canvasDistributionSvc,
+		statsyncSvc: statsyncSvc,
+		canvasSvc:   canvasSvc, canvasDistributionSvc: canvasDistributionSvc,
 		gitCredentialBroker: gitCredentialBroker, shareHTTP: shareHTTP,
 		automationComponents: automationComponents,
 		coordinatorSvc:       coordinatorSvc,

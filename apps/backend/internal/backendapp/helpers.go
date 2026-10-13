@@ -89,6 +89,7 @@ import (
 	spriteshandlers "github.com/kandev/kandev/internal/sprites"
 	sshhandlers "github.com/kandev/kandev/internal/ssh"
 	"github.com/kandev/kandev/internal/startup"
+	"github.com/kandev/kandev/internal/statsync"
 	systemsvc "github.com/kandev/kandev/internal/system"
 	"github.com/kandev/kandev/internal/system/storage/tempartifacts"
 	taskdto "github.com/kandev/kandev/internal/task/dto"
@@ -1985,6 +1986,11 @@ func registerSecondaryRoutes(
 		}
 		automation.RegisterRoutes(p.router, p.gateway.Dispatcher, p.services.Automation.Service, p.log)
 		p.log.Debug("Registered Automation handlers (HTTP + WebSocket)")
+	}
+
+	if p.services.Statsync != nil {
+		statsync.RegisterRoutes(p.router, p.services.Statsync, p.log)
+		p.log.Debug("Registered statsync ingest handler (HTTP)")
 	}
 
 	if p.services.Plugins != nil {

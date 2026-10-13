@@ -19,6 +19,7 @@ import (
 	quickterminalrepository "github.com/kandev/kandev/internal/quickterminal/repository"
 	"github.com/kandev/kandev/internal/secrets"
 	"github.com/kandev/kandev/internal/startup"
+	"github.com/kandev/kandev/internal/statsync"
 	systemsettings "github.com/kandev/kandev/internal/system/settings"
 	"github.com/kandev/kandev/internal/task/repository"
 	"github.com/kandev/kandev/internal/telemetrycontract"
@@ -106,6 +107,13 @@ func provideRepositories(ctx context.Context, cfg *config.Config, log *logger.Lo
 		return nil, nil, nil, fmt.Errorf("analytics store: %w", err)
 	}
 	cleanups = append(cleanups, cleanup)
+	if err := checkStartupContext(ctx, "statsync repository"); err != nil {
+		return nil, nil, nil, err
+	}
+	statsyncRepo, err := statsync.NewWithDB(writer, reader)
+	if err := recordRequiredStore(ctx, tracker, "stats-sync", err); err != nil {
+		return nil, nil, nil, fmt.Errorf("statsync store: %w", err)
+	}
 	if err := checkStartupContext(ctx, "agent settings repository"); err != nil {
 		return nil, nil, nil, err
 	}
@@ -204,6 +212,7 @@ func provideRepositories(ctx context.Context, cfg *config.Config, log *logger.Lo
 		RequiredStores: tracker,
 		Task:           taskRepoImpl,
 		Analytics:      analyticsRepo,
+		Statsync:       statsyncRepo,
 		AgentSettings:  agentSettingsRepo,
 		User:           supportRepos.user,
 		UserAccounts:   supportRepos.userAccounts,

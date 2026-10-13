@@ -23,6 +23,23 @@ const (
 	andNotAutomationOriginT = ` AND COALESCE(t.origin, '') != '` + taskmodels.TaskOriginAutomationRun + `'`
 )
 
+// The statistics sections read through the v_stats_* compatibility views
+// (internal/statsync) rather than the core tables directly: each view unions
+// core rows with the mirrored rows pushed by other instances, emitting the
+// inclusion constants (is_ephemeral=0, origin='manual') and a unified
+// completed column, so a section's numbers count local and mirrored activity
+// under one rule. ListSessionCodeStats below deliberately stays on core
+// tables — it is the plugin-facing Host data API, not a /stats section.
+const (
+	statsTasksView     = "v_stats_tasks"
+	statsReposView     = "v_stats_repositories"
+	statsTaskReposView = "v_stats_task_repositories"
+	statsSessionsView  = "v_stats_sessions"
+	statsTurnsView     = "v_stats_turns"
+	statsMessagesView  = "v_stats_messages"
+	statsCommitsView   = "v_stats_commits"
+)
+
 // parseTimeString parses time strings in various SQLite formats
 func parseTimeString(s string) time.Time {
 	if s == "" {
@@ -104,13 +121,13 @@ func (r *Repository) GetTaskStats(
 		WITH eligible_tasks AS (
 			SELECT t.id, t.title, t.workspace_id, t.workflow_id, t.state,
 				t.created_at, t.updated_at
-			FROM tasks t
+			FROM `+statsTasksView+` t
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "t.created_at")+`
 			ORDER BY t.updated_at DESC
 			LIMIT ?
 		), scoped_sessions AS (
 			SELECT s.id, s.task_id, s.completed_at
-			FROM task_sessions s
+			FROM `+statsSessionsView+` s
 			JOIN eligible_tasks t ON t.id = s.task_id
 			WHERE `+rangeStartPredicate(drv, "s.started_at")+`
 		), session_stats AS (
@@ -125,7 +142,7 @@ func (r *Repository) GetTaskStats(
 				COALESCE(SUM(CASE WHEN turn.completed_at IS NOT NULL THEN %s ELSE 0 END), 0) AS active_duration_ms,
 				%s AS elapsed_span_ms
 			FROM scoped_sessions s
-			LEFT JOIN task_session_turns turn ON turn.task_session_id = s.id
+			LEFT JOIN `+statsTurnsView+` turn ON turn.task_session_id = s.id
 			GROUP BY s.task_id
 		), message_stats AS (
 			SELECT s.task_id,
@@ -133,7 +150,7 @@ func (r *Repository) GetTaskStats(
 				COUNT(CASE WHEN msg.author_type = 'user' THEN msg.id END) AS user_message_count,
 				COUNT(CASE WHEN msg.type LIKE 'tool_%%' THEN msg.id END) AS tool_call_count
 			FROM scoped_sessions s
-			LEFT JOIN task_session_messages msg ON msg.task_session_id = s.id
+			LEFT JOIN `+statsMessagesView+` msg ON msg.task_session_id = s.id
 			GROUP BY s.task_id
 		)
 		SELECT
@@ -247,27 +264,24 @@ func (r *Repository) GetGlobalStats(
 		task_agg AS (
 			SELECT
 				COUNT(*) AS total_tasks,
-				SUM(CASE WHEN t.archived_at IS NOT NULL
-				          OR ws.position = (SELECT MAX(ws2.position) FROM workflow_steps ws2 WHERE ws2.workflow_id = ws.workflow_id)
-				         THEN 1 ELSE 0 END) AS completed_tasks,
+				SUM(CASE WHEN t.completed THEN 1 ELSE 0 END) AS completed_tasks,
 				SUM(CASE WHEN t.state = 'IN_PROGRESS' AND t.archived_at IS NULL THEN 1 ELSE 0 END) AS in_progress_tasks
-			FROM tasks t
-			LEFT JOIN workflow_steps ws ON ws.id = t.workflow_step_id
+			FROM `+statsTasksView+` t
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "t.created_at")+`
 		),
 		session_agg AS (
 			SELECT COUNT(*) AS total_sessions
-			FROM task_sessions s
-			JOIN tasks t ON t.id = s.task_id
+			FROM `+statsSessionsView+` s
+			JOIN `+statsTasksView+` t ON t.id = s.task_id
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "s.started_at")+`
 		),
 		turn_agg AS (
 			SELECT
 				COUNT(*) AS total_turns,
 				COALESCE(SUM(CASE WHEN turn.completed_at IS NOT NULL THEN %s ELSE 0 END), 0) AS total_duration_ms
-			FROM task_session_turns turn
-			JOIN task_sessions s ON s.id = turn.task_session_id
-			JOIN tasks t ON t.id = s.task_id
+			FROM `+statsTurnsView+` turn
+			JOIN `+statsSessionsView+` s ON s.id = turn.task_session_id
+			JOIN `+statsTasksView+` t ON t.id = s.task_id
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "s.started_at")+`
 		),
 		clean_turn_agg AS (
@@ -277,10 +291,10 @@ func (r *Repository) GetGlobalStats(
 			FROM (
 				SELECT
 					%s AS dur_ms,
-					(SELECT COUNT(*) FROM task_session_messages m WHERE m.turn_id = turn.id) AS msg_count
-				FROM task_session_turns turn
-				JOIN task_sessions s ON s.id = turn.task_session_id
-				JOIN tasks t ON t.id = s.task_id
+					(SELECT COUNT(*) FROM `+statsMessagesView+` m WHERE m.turn_id = turn.id) AS msg_count
+				FROM `+statsTurnsView+` turn
+				JOIN `+statsSessionsView+` s ON s.id = turn.task_session_id
+				JOIN `+statsTasksView+` t ON t.id = s.task_id
 				WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "s.started_at")+`
 				  AND turn.completed_at IS NOT NULL
 			) clean
@@ -291,9 +305,9 @@ func (r *Repository) GetGlobalStats(
 				COUNT(*) AS total_messages,
 				SUM(CASE WHEN msg.author_type = 'user' THEN 1 ELSE 0 END) AS total_user_messages,
 				SUM(CASE WHEN msg.type LIKE 'tool_%%' THEN 1 ELSE 0 END) AS total_tool_calls
-			FROM task_session_messages msg
-			JOIN task_sessions s ON s.id = msg.task_session_id
-			JOIN tasks t ON t.id = s.task_id
+			FROM `+statsMessagesView+` msg
+			JOIN `+statsSessionsView+` s ON s.id = msg.task_session_id
+			JOIN `+statsTasksView+` t ON t.id = s.task_id
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "s.started_at")+`
 		)
 		SELECT
@@ -377,9 +391,9 @@ func (r *Repository) GetDailyActivity(
 		), turn_scope AS (
 			SELECT turn.id, turn.task_session_id, t.id AS task_id,
 				%s AS activity_date
-			FROM task_session_turns turn
-			JOIN task_sessions s ON s.id = turn.task_session_id
-			JOIN tasks t ON t.id = s.task_id
+			FROM `+statsTurnsView+` turn
+			JOIN `+statsSessionsView+` s ON s.id = turn.task_session_id
+			JOIN `+statsTasksView+` t ON t.id = s.task_id
 			JOIN dates d ON d.date = %s
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+`
 		), turn_activity AS (
@@ -394,7 +408,7 @@ func (r *Repository) GetDailyActivity(
 		), message_activity AS (
 			SELECT md.activity_date, COUNT(msg.id) AS message_count
 			FROM message_days md
-			JOIN task_session_messages msg ON msg.task_session_id = md.task_session_id
+			JOIN `+statsMessagesView+` msg ON msg.task_session_id = md.task_session_id
 			WHERE %s = md.activity_date
 			GROUP BY md.activity_date
 		)
@@ -461,15 +475,13 @@ func (r *Repository) GetCompletedTaskActivity(
 		FROM dates d
 		LEFT JOIN (
 			SELECT %s as activity_date, COUNT(DISTINCT t.id) as completed_tasks
-			FROM tasks t
-			LEFT JOIN workflow_steps ws ON ws.id = t.workflow_step_id
+			FROM `+statsTasksView+` t
 			LEFT JOIN (
 				SELECT task_id, MAX(completed_at) as completed_at
-				FROM task_sessions WHERE completed_at IS NOT NULL GROUP BY task_id
+				FROM `+statsSessionsView+` WHERE completed_at IS NOT NULL GROUP BY task_id
 			) ts ON ts.task_id = t.id
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+`
-			  AND (t.archived_at IS NOT NULL
-			       OR ws.position = (SELECT MAX(ws2.position) FROM workflow_steps ws2 WHERE ws2.workflow_id = ws.workflow_id))
+			  AND t.completed
 			  AND COALESCE(ts.completed_at, t.archived_at) IS NOT NULL
 			GROUP BY %s
 		) activity ON activity.activity_date = d.date
@@ -552,30 +564,27 @@ func buildRepositoryStatsQuery(drv string) string {
 	return fmt.Sprintf(`
 		WITH eligible_repositories AS (
 			SELECT id, name
-			FROM repositories
+			FROM `+statsReposView+`
 			WHERE workspace_id = ? AND deleted_at IS NULL
 		), task_repository_scope AS (
 			SELECT DISTINCT er.id AS repository_id,
-				t.id AS task_id, t.state, t.workflow_step_id, t.archived_at, t.created_at
+				t.id AS task_id, t.state, t.completed, t.archived_at, t.created_at
 			FROM eligible_repositories er
-			JOIN task_repositories tr ON tr.repository_id = er.id
-			JOIN tasks t ON t.id = tr.task_id
+			JOIN `+statsTaskReposView+` tr ON tr.repository_id = er.id
+			JOIN `+statsTasksView+` t ON t.id = tr.task_id
 			WHERE t.is_ephemeral = 0`+andNotAutomationOriginT+`
 		), task_stats AS (
 			SELECT scope.repository_id,
 				COUNT(*) AS total_tasks,
-				COUNT(CASE WHEN scope.archived_at IS NOT NULL
-					OR ws.position = (SELECT MAX(ws2.position) FROM workflow_steps ws2 WHERE ws2.workflow_id = ws.workflow_id)
-					THEN scope.task_id END) AS completed_tasks,
+				COUNT(CASE WHEN scope.completed THEN scope.task_id END) AS completed_tasks,
 				COUNT(CASE WHEN scope.state = 'IN_PROGRESS' AND scope.archived_at IS NULL THEN scope.task_id END) AS in_progress_tasks
 			FROM task_repository_scope scope
-			LEFT JOIN workflow_steps ws ON ws.id = scope.workflow_step_id
 			WHERE `+rangeStartPredicate(drv, "scope.created_at")+`
 			GROUP BY scope.repository_id
 		), session_scope AS (
 			SELECT DISTINCT scope.repository_id, s.id AS session_id
 			FROM task_repository_scope scope
-			JOIN task_sessions s ON s.task_id = scope.task_id
+			JOIN `+statsSessionsView+` s ON s.task_id = scope.task_id
 			WHERE `+rangeStartPredicate(drv, "s.started_at")+`
 		), session_stats AS (
 			SELECT repository_id, COUNT(*) AS session_count
@@ -586,7 +595,7 @@ func buildRepositoryStatsQuery(drv string) string {
 				COUNT(turn.id) AS turn_count,
 				COALESCE(SUM(CASE WHEN turn.completed_at IS NOT NULL THEN %s ELSE 0 END), 0) AS total_duration_ms
 			FROM session_scope ss
-			LEFT JOIN task_session_turns turn ON turn.task_session_id = ss.session_id
+			LEFT JOIN `+statsTurnsView+` turn ON turn.task_session_id = ss.session_id
 			GROUP BY ss.repository_id
 		), message_stats AS (
 			SELECT ss.repository_id,
@@ -594,7 +603,7 @@ func buildRepositoryStatsQuery(drv string) string {
 				COUNT(CASE WHEN msg.author_type = 'user' THEN msg.id END) AS user_message_count,
 				COUNT(CASE WHEN msg.type LIKE 'tool_%%' THEN msg.id END) AS tool_call_count
 			FROM session_scope ss
-			LEFT JOIN task_session_messages msg ON msg.task_session_id = ss.session_id
+			LEFT JOIN `+statsMessagesView+` msg ON msg.task_session_id = ss.session_id
 			GROUP BY ss.repository_id
 		), git_stats AS (
 			SELECT er.id AS repository_id,
@@ -603,9 +612,9 @@ func buildRepositoryStatsQuery(drv string) string {
 				COALESCE(SUM(c.insertions), 0) AS total_insertions,
 				COALESCE(SUM(c.deletions), 0) AS total_deletions
 			FROM eligible_repositories er
-			JOIN task_sessions s ON s.repository_id = er.id
-			JOIN task_session_commits c ON c.session_id = s.id
-			JOIN tasks t ON t.id = s.task_id
+			JOIN `+statsSessionsView+` s ON s.repository_id = er.id
+			JOIN `+statsCommitsView+` c ON c.session_id = s.id
+			JOIN `+statsTasksView+` t ON t.id = s.task_id
 			WHERE t.is_ephemeral = 0`+andNotAutomationOriginT+` AND s.repository_id != '' AND `+rangeStartPredicate(drv, "c.committed_at")+`
 			GROUP BY er.id
 		)
@@ -675,8 +684,8 @@ func (r *Repository) GetModelUsage(
 			SELECT
 				s.id,
 				COALESCE(%s, %s, %s, '') as model
-			FROM task_sessions s
-			JOIN tasks t ON t.id = s.task_id
+			FROM `+statsSessionsView+` s
+			JOIN `+statsTasksView+` t ON t.id = s.task_id
 			WHERE t.workspace_id = ? AND t.is_ephemeral = 0`+andNotAutomationOriginT+` AND `+rangeStartPredicate(drv, "s.started_at")+`
 		)
 		SELECT
@@ -740,9 +749,9 @@ func (r *Repository) GetGitStats(
 			COALESCE(SUM(c.files_changed), 0) as total_files_changed,
 			COALESCE(SUM(c.insertions), 0) as total_insertions,
 			COALESCE(SUM(c.deletions), 0) as total_deletions
-		FROM task_session_commits c
-		JOIN task_sessions s ON s.id = c.session_id
-		JOIN tasks t ON t.id = s.task_id
+		FROM ` + statsCommitsView + ` c
+		JOIN ` + statsSessionsView + ` s ON s.id = c.session_id
+		JOIN ` + statsTasksView + ` t ON t.id = s.task_id
 		WHERE t.workspace_id = ? AND t.is_ephemeral = 0` + andNotAutomationOriginT + ` AND ` + rangeStartPredicate(r.ro.DriverName(), "c.committed_at") + `
 	`
 

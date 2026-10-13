@@ -37,9 +37,11 @@
       "docs": [
         "configuration",
         "operations",
-        "cli"
+        "cli",
+        "stats-sync"
       ],
       "sources": [
+        "apps/backend/internal/statsync/service.go",
         "apps/backend/internal/common/config/config.go",
         "apps/backend/internal/agentctl/server/config/config.go",
         "apps/backend/internal/profiles/profiles.go"

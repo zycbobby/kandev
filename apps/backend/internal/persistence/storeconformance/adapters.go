@@ -40,6 +40,7 @@ import (
 	"github.com/kandev/kandev/internal/runtimeflags"
 	"github.com/kandev/kandev/internal/secrets"
 	"github.com/kandev/kandev/internal/sentry"
+	"github.com/kandev/kandev/internal/statsync"
 	"github.com/kandev/kandev/internal/system/settings"
 	storagepkg "github.com/kandev/kandev/internal/system/storage"
 	taskrepository "github.com/kandev/kandev/internal/task/repository"
@@ -88,6 +89,7 @@ var schemaInitializers = map[string]testconformance.Scenario{
 	"task":                  taskSchema,
 	"workflow":              workflowSchema,
 	"analytics":             analyticsSchema,
+	"stats-sync":            statsyncSchema,
 	"agent-settings":        agentSettingsSchema,
 	"user":                  userSchema,
 	"notification":          notificationSchema,
@@ -167,6 +169,30 @@ func analyticsSchema(s testconformance.ScenarioContext) error {
 	}
 	if _, _, err := repository.Provide(s.DB, s.DB); err != nil {
 		return fmt.Errorf("analytics schema: %w", err)
+	}
+	// The section queries read through the statsync compatibility views;
+	// a production boot creates them after every store schema, so does this
+	// initializer.
+	if _, err := statsync.NewWithDB(s.DB, s.DB); err != nil {
+		return fmt.Errorf("analytics statsync mirror: %w", err)
+	}
+	if err := statsync.EnsureViews(s.DB); err != nil {
+		return fmt.Errorf("analytics statsync views: %w", err)
+	}
+	return nil
+}
+
+// statsyncSchema initializes the statsync mirror schema after the task and
+// workflow stores: the v_stats_* views union against those core tables.
+func statsyncSchema(s testconformance.ScenarioContext) error {
+	if err := workflowSchema(s); err != nil {
+		return err
+	}
+	if _, err := statsync.NewWithDB(s.DB, s.DB); err != nil {
+		return fmt.Errorf("stats sync schema: %w", err)
+	}
+	if err := statsync.EnsureViews(s.DB); err != nil {
+		return fmt.Errorf("stats sync views: %w", err)
 	}
 	return nil
 }

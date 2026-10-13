@@ -9,6 +9,7 @@ import (
 
 	analyticsqlite "github.com/kandev/kandev/internal/analytics/repository/sqlite"
 	"github.com/kandev/kandev/internal/db"
+	"github.com/kandev/kandev/internal/statsync"
 	tasksqlite "github.com/kandev/kandev/internal/task/repository/sqlite"
 )
 
@@ -55,6 +56,14 @@ func newStatsReferenceFixture(
 	t.Cleanup(func() { _ = writer.Close() })
 	if _, err := tasksqlite.NewWithDB(writer, writer, nil); err != nil {
 		t.Fatalf("task repository schema: %v", err)
+	}
+	// The section queries read through the statsync compatibility views;
+	// a production boot always has them, so does this fixture.
+	if _, err := statsync.NewWithDB(writer, writer); err != nil {
+		t.Fatalf("statsync mirror schema: %v", err)
+	}
+	if err := statsync.EnsureViews(writer); err != nil {
+		t.Fatalf("statsync views: %v", err)
 	}
 	setReferenceBulkLoadMode(t, writer)
 	base := time.Now().UTC().Truncate(24 * time.Hour)

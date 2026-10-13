@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	analyticsrepository "github.com/kandev/kandev/internal/analytics/repository"
@@ -39,6 +40,7 @@ import (
 	"github.com/kandev/kandev/internal/runtimeflags"
 	"github.com/kandev/kandev/internal/secrets"
 	"github.com/kandev/kandev/internal/sentry"
+	"github.com/kandev/kandev/internal/statsync"
 	"github.com/kandev/kandev/internal/system/settings"
 	storagepkg "github.com/kandev/kandev/internal/system/storage"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
@@ -193,6 +195,7 @@ func buildOwnerBehaviors() map[string]ownerBehavior {
 	behaviors["office-config-sync"] = ownerBehavior{actions: []apiAction{officeConfigSyncAction()}}
 	behaviors["automation"] = ownerBehavior{actions: []apiAction{automationAction()}}
 	behaviors["coordinator"] = ownerBehavior{actions: []apiAction{coordinatorAction()}}
+	behaviors["stats-sync"] = ownerBehavior{actions: []apiAction{statsyncAction()}}
 
 	analytics := standardAction(reflectedSpec{
 		name: "analytics-task-view", factory: taskFactory,
@@ -3267,6 +3270,153 @@ func coordinatorAction() apiAction {
 		return transactionAPICheck(action, s, id)
 	}
 	return action
+}
+
+// statsyncBehaviorRecord exposes the mirror task fields the capability probes
+// read back through reflection (timestamps must be UTC time.Time values).
+type statsyncBehaviorRecord struct {
+	ID        string    `db:"id"`
+	Title     string    `db:"title"`
+	CreatedAt time.Time `db:"created_at"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+func statsyncFactory(s testconformance.ScenarioContext) (any, error) {
+	return statsync.NewWithDB(s.DB, s.DB)
+}
+
+// statsyncEnvelopeFor builds the deterministic delta payload the probes
+// re-apply everywhere: the ingest contract is idempotent by design, so
+// create/conflict/update all push envelopes and differ only in content.
+func statsyncEnvelopeFor(id string) *statsync.Envelope {
+	created := "2026-10-01T08:00:00Z"
+	updated := "2026-10-01T09:00:00Z"
+	return &statsync.Envelope{
+		SchemaVersion:  statsync.SchemaVersion,
+		SourceInstance: "conformance-source",
+		Mode:           statsync.ModeDelta,
+		Tasks: []statsync.TaskRow{{
+			UID:                 "conformance-source:" + id,
+			OrigWorkspaceID:     "remote-workspace",
+			Title:               "conformance-" + id,
+			CreatedAt:           created,
+			UpdatedAt:           updated,
+			ResolvedWorkspaceID: "conformance-workspace",
+		}},
+	}
+}
+
+func readStatsyncBehaviorRecord(s testconformance.ScenarioContext, id string) (any, error) {
+	var record statsyncBehaviorRecord
+	err := s.DB.GetContext(s.Context, &record, s.DB.Rebind(
+		`SELECT uid AS id, title, created_at, updated_at FROM statsync_tasks WHERE uid = ?`,
+	), "conformance-source:"+id)
+	if err != nil {
+		return nil, err
+	}
+	record.CreatedAt = record.CreatedAt.UTC()
+	record.UpdatedAt = record.UpdatedAt.UTC()
+	return &record, nil
+}
+
+// statsyncAction exercises the owning write boundary: ApplyDelta upserts,
+// re-pushes are idempotent, and an FK-violating payload rolls back whole.
+func statsyncAction() apiAction {
+	action := apiAction{name: "statsync_tasks", key: func(record any, fallback string) string {
+		if value, ok := record.(*statsyncBehaviorRecord); ok {
+			return strings.TrimPrefix(value.ID, "conformance-source:")
+		}
+		return fallback
+	}}
+	apply := func(s testconformance.ScenarioContext, env *statsync.Envelope) error {
+		store, err := statsyncFactory(s)
+		if err != nil {
+			return err
+		}
+		_, err = store.(*statsync.Repository).ApplyDelta(s.Context, env)
+		return err
+	}
+	action.create = func(s testconformance.ScenarioContext, id string) (any, error) {
+		if err := apply(s, statsyncEnvelopeFor(id)); err != nil {
+			return nil, err
+		}
+		return readStatsyncBehaviorRecord(s, id)
+	}
+	action.read = readStatsyncBehaviorRecord
+	action.update = func(s testconformance.ScenarioContext, id string, _ any) error {
+		env := statsyncEnvelopeFor(id)
+		env.Tasks[0].Title = "updated-" + id
+		env.Tasks[0].UpdatedAt = "2026-10-02T09:00:00Z"
+		return apply(s, env)
+	}
+	action.delete = func(s testconformance.ScenarioContext, id string) error {
+		store, err := statsyncFactory(s)
+		if err != nil {
+			return err
+		}
+		env := statsyncEnvelopeFor(id)
+		env.Mode = statsync.ModeReconcile
+		env.Inventory = &statsync.Inventory{}
+		_, err = store.(*statsync.Repository).ApplyReconcile(s.Context, env)
+		return err
+	}
+	// Re-pushing an identical delta is the contract, not a violation: the
+	// conflict probe asserts the idempotent outcome (same row, unchanged
+	// content) instead of a duplicate-create error.
+	action.conflict = func(s testconformance.ScenarioContext, id string, before any) error {
+		if err := apply(s, statsyncEnvelopeFor(id)); err != nil {
+			return err
+		}
+		after, err := readStatsyncBehaviorRecord(s, id)
+		if err != nil {
+			return err
+		}
+		beforeRecord, beforeOK := before.(*statsyncBehaviorRecord)
+		afterRecord, afterOK := after.(*statsyncBehaviorRecord)
+		if !beforeOK || !afterOK || beforeRecord == nil || afterRecord == nil {
+			return fmt.Errorf("records have unexpected types: before=%T after=%T", before, after)
+		}
+		if beforeRecord.CreatedAt != afterRecord.CreatedAt || beforeRecord.Title != afterRecord.Title {
+			return fmt.Errorf("re-push changed the mirror row: before=%+v after=%+v", beforeRecord, afterRecord)
+		}
+		return nil
+	}
+	action.transaction = func(s testconformance.ScenarioContext, id string) error {
+		return statsyncTransactionProbe(s, apply, id)
+	}
+	return action
+}
+
+// statsyncTransactionProbe proves the single-transaction ingest invariant: a
+// payload whose child row references a task that was never pushed must be
+// rejected whole, and the valid task row in front of it may not survive.
+func statsyncTransactionProbe(
+	s testconformance.ScenarioContext,
+	apply func(testconformance.ScenarioContext, *statsync.Envelope) error,
+	id string,
+) error {
+	env := statsyncEnvelopeFor(id + "-tx")
+	env.Tasks[0].UID = "conformance-source:" + id + "-tx"
+	env.Tasks = append(env.Tasks, statsync.TaskRow{
+		UID:                 "conformance-source:" + id + "-tx-orphan",
+		OrigWorkspaceID:     "remote-workspace",
+		Title:               "orphan-" + id,
+		CreatedAt:           "2026-10-01T08:00:00Z",
+		UpdatedAt:           "2026-10-01T09:00:00Z",
+		ResolvedWorkspaceID: "conformance-workspace",
+	})
+	env.TaskRepositories = []statsync.TaskRepositoryRow{{
+		UID:          "conformance-source:" + id + "-tx-tr",
+		TaskUID:      "conformance-source:" + id + "-tx-orphan-missing",
+		RepositoryID: "conformance-source:repo",
+	}}
+	if err := apply(s, env); err == nil {
+		return fmt.Errorf("FK-violating payload was accepted")
+	}
+	if _, err := readStatsyncBehaviorRecord(s, id+"-tx"); err == nil {
+		return fmt.Errorf("valid row survived a rejected payload; ingest is not atomic")
+	}
+	return nil
 }
 
 func reflectValue(record any) reflect.Value {
