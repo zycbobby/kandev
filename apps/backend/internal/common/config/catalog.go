@@ -115,6 +115,7 @@ var startupCatalog = []CatalogEntry{
 	{Key: "githubCredentialBroker.publicBaseUrl", EnvVars: []string{"KANDEV_GITHUB_CREDENTIAL_BROKER_PUBLIC_BASE_URL"}, Owner: "github credential broker", Default: ""},
 	{Key: "tasks.preparationTimeout", EnvVars: []string{"KANDEV_TASK_PREPARATION_TIMEOUT"}, Owner: "task lifecycle", Default: "10m"},
 	{Key: "tasks.stallDetectionThreshold", EnvVars: []string{"KANDEV_TASK_STALL_DETECTION_THRESHOLD"}, Owner: "task lifecycle", Default: "2h"},
+	{Key: "tasks.archiveReclaim.dirtyGrace", EnvVars: []string{"KANDEV_TASK_ARCHIVE_RECLAIM_DIRTY_GRACE"}, Owner: "task archive reclaim", Default: "72h", Description: "How long an archived task keeps a dirty worktree before the reclaim pass discards it. Zero restores retain-until-clean."},
 	{Key: "tasks.deliveryRetention.payloadGrace", EnvVars: []string{"KANDEV_TASK_DELIVERY_RETENTION_PAYLOAD_GRACE"}, Owner: "task delivery retention", Default: "1h"},
 	{Key: "tasks.deliveryRetention.replayAge", EnvVars: []string{"KANDEV_TASK_DELIVERY_RETENTION_REPLAY_AGE"}, Owner: "task delivery retention", Default: "24h"},
 	{Key: "tasks.deliveryRetention.replayEvents", EnvVars: []string{"KANDEV_TASK_DELIVERY_RETENTION_REPLAY_EVENTS"}, Owner: "task delivery retention", Default: "10000"},

@@ -568,6 +568,7 @@ type Service struct {
 	sessionRunningChecker     SessionRunningChecker
 	sessionExecutionRegistry  SessionExecutionRegistry
 	stallDetectionThreshold   time.Duration
+	archiveReclaimDirtyGrace  time.Duration
 	// stallNotifiedSessions dedupes task.stalled events per stall episode:
 	// task ID -> session IDs already reported. A session is reported at most
 	// once per episode; an episode ends when the session leaves the stalled
@@ -935,6 +936,14 @@ func (s *Service) SetStallDetectionThreshold(threshold time.Duration) {
 		return
 	}
 	s.stallDetectionThreshold = threshold
+}
+
+// SetArchiveReclaimDirtyGrace configures how long an archived task keeps a
+// dirty worktree before the reclaim pass discards it
+// (tasks.archiveReclaim.dirtyGrace, default 72h). Zero or negative disables
+// forcing and restores retain-until-clean.
+func (s *Service) SetArchiveReclaimDirtyGrace(grace time.Duration) {
+	s.archiveReclaimDirtyGrace = grace
 }
 
 // SetClarificationCanceller wires terminal clarification cleanup for session

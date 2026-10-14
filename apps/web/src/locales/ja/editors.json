@@ -94,5 +94,6 @@
   "failedToOpenFolder": "フォルダを開けませんでした",
   "openFolderOnHost": "Kandevが動作しているマシンでフォルダを開く",
   "chooseFolder": "フォルダを選択",
-  "openingFolder": "フォルダを開いています..."
+  "openingFolder": "フォルダを開いています...",
+  "previewSvg": "SVG をプレビュー"
 }

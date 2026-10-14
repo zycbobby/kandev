@@ -252,6 +252,22 @@ func (f *archiveReclaimWorktreeFake) CleanupArchivedWorktree(
 	return nil
 }
 
+func (f *archiveReclaimWorktreeFake) CleanupArchivedWorktreeDiscardingChanges(
+	_ context.Context, wt *worktree.Worktree, taskID, _, _ string,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleanups++
+	worktrees := f.worktrees[taskID]
+	for i, current := range worktrees {
+		if current != nil && current.ID == wt.ID {
+			f.worktrees[taskID] = append(worktrees[:i], worktrees[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
 func TestUnarchiveRefusesRunningArchiveReclaim(t *testing.T) {
 	ctx := context.Background()
 	svc, _, repo := createTestService(t)

@@ -21,15 +21,16 @@ import (
 )
 
 const (
-	taskResourceCleanupRetryDelay       = time.Minute
-	preparedCleanupTransitionRetryDelay = 50 * time.Millisecond
-	taskResourceCleanupMaxAttempts      = 8
-	archiveReclaimRecheckDelay          = 24 * time.Hour
-	archiveReclaimBackfillBatchSize     = 100
-	taskArchiveReclaimOutcomeDirty      = "dirty"
-	taskArchiveReclaimOutcomeInUse      = "in_use"
-	taskArchiveReclaimOutcomeReclaimed  = "reclaimed"
-	taskArchiveReclaimOutcomeStale      = "stale"
+	taskResourceCleanupRetryDelay         = time.Minute
+	preparedCleanupTransitionRetryDelay   = 50 * time.Millisecond
+	taskResourceCleanupMaxAttempts        = 8
+	archiveReclaimRecheckDelay            = 24 * time.Hour
+	archiveReclaimBackfillBatchSize       = 100
+	taskArchiveReclaimOutcomeDirty        = "dirty"
+	taskArchiveReclaimOutcomeInUse        = "in_use"
+	taskArchiveReclaimOutcomeReclaimed    = "reclaimed"
+	taskArchiveReclaimOutcomeStale        = "stale"
+	taskArchiveReclaimOutcomeForceDiscard = "force_discarded"
 )
 
 const taskResourceCleanupMutationOutcomeUnknown = "task mutation outcome requires reconciliation"
@@ -61,6 +62,7 @@ type taskArchiveReclaimJobCreator interface {
 
 type taskArchiveWorktreeReclaimer interface {
 	CleanupArchivedWorktree(ctx context.Context, wt *worktree.Worktree, taskID, worktreePath, repositoryPath string) error
+	CleanupArchivedWorktreeDiscardingChanges(ctx context.Context, wt *worktree.Worktree, taskID, worktreePath, repositoryPath string) error
 }
 
 type archiveReclaimSnapshot struct {
@@ -938,6 +940,9 @@ func (s *Service) processArchiveReclaimJob(
 		if outcome == taskArchiveReclaimOutcomeStale {
 			return s.completeArchiveReclaimJob(ctx, job, outcome)
 		}
+		if outcome == taskArchiveReclaimOutcomeDirty && s.archiveReclaimGraceElapsed(snapshot) {
+			return s.forceReclaimArchivedWorktree(ctx, job, snapshot)
+		}
 		return s.waitForCleanArchiveReclaim(ctx, job, outcome)
 	}
 	reclaimer, ok := s.worktreeCleanup.(taskArchiveWorktreeReclaimer)
@@ -1139,6 +1144,7 @@ func (s *Service) waitForCleanArchiveReclaim(
 		return s.recoverTaskResourceCleanupCompletion(ctx, job, err)
 	}
 	if updated {
+		recordArchiveReclaimOutcome(outcome)
 		s.logger.Info("archived worktree reclaim deferred",
 			zap.String("job_id", job.ID), zap.String("task_id", job.TaskID), zap.String("outcome", outcome))
 	}
@@ -1157,10 +1163,73 @@ func (s *Service) completeArchiveReclaimJob(
 		return s.recoverTaskResourceCleanupCompletion(ctx, job, err)
 	}
 	if updated {
+		recordArchiveReclaimOutcome(outcome)
 		s.logger.Info("archived worktree reclaim completed",
 			zap.String("job_id", job.ID), zap.String("task_id", job.TaskID), zap.String("outcome", outcome))
 	}
 	return nil
+}
+
+// archiveReclaimGraceElapsed reports whether a still-dirty archived worktree
+// has exhausted tasks.archiveReclaim.dirtyGrace. A non-positive grace period
+// disables forcing and restores retain-until-clean.
+func (s *Service) archiveReclaimGraceElapsed(snapshot archiveReclaimSnapshot) bool {
+	if s.archiveReclaimDirtyGrace <= 0 {
+		return false
+	}
+	return !time.Now().UTC().Before(snapshot.ArchivedAt.Add(s.archiveReclaimDirtyGrace))
+}
+
+// forceReclaimArchivedWorktree discards a checkout whose task has been
+// archived beyond the grace period. Every guard except cleanliness stays in
+// force: identity and ownership revalidation happen inside the audited
+// removal, a checkout referenced by an active task keeps waiting, and an
+// inspection failure above this point has already failed closed.
+func (s *Service) forceReclaimArchivedWorktree(
+	ctx context.Context,
+	job *models.TaskResourceCleanupJob,
+	snapshot archiveReclaimSnapshot,
+) error {
+	wt, err := s.loadArchiveReclaimWorktree(ctx, job, snapshot)
+	if err != nil {
+		return s.retryTaskResourceCleanupJob(ctx, job, err)
+	}
+	if wt == nil {
+		return s.completeArchiveReclaimJob(ctx, job, taskArchiveReclaimOutcomeStale)
+	}
+	inUse, err := s.archiveReclaimWorktreeInUse(ctx, snapshot.WorktreeID)
+	if err != nil {
+		return s.retryTaskResourceCleanupJob(ctx, job, err)
+	}
+	if inUse {
+		return s.waitForCleanArchiveReclaim(ctx, job, taskArchiveReclaimOutcomeInUse)
+	}
+	reclaimer, ok := s.worktreeCleanup.(taskArchiveWorktreeReclaimer)
+	if !ok {
+		return s.retryTaskResourceCleanupJob(ctx, job, errors.New("audited archived worktree reclaimer is unavailable"))
+	}
+	if err := reclaimer.CleanupArchivedWorktreeDiscardingChanges(
+		ctx, wt, job.TaskID, snapshot.WorktreePath, snapshot.RepositoryPath,
+	); err != nil {
+		if errors.Is(err, worktree.ErrArchivedWorktreeIdentityChanged) {
+			return s.completeArchiveReclaimJob(ctx, job, taskArchiveReclaimOutcomeStale)
+		}
+		if errors.Is(err, worktree.ErrDirtyWorktreeCleanup) {
+			return s.waitForCleanArchiveReclaim(ctx, job, taskArchiveReclaimOutcomeDirty)
+		}
+		return s.retryTaskResourceCleanupJob(ctx, job, fmt.Errorf("discard archived worktree: %w", err))
+	}
+	outcome, err := s.archiveReclaimWorktreeOutcomeAfterRemoval(ctx, job, snapshot)
+	if err != nil {
+		return s.retryTaskResourceCleanupJob(ctx, job, err)
+	}
+	if outcome == taskArchiveReclaimOutcomeInUse {
+		return s.waitForCleanArchiveReclaim(ctx, job, outcome)
+	}
+	if outcome == taskArchiveReclaimOutcomeStale {
+		return s.completeArchiveReclaimJob(ctx, job, outcome)
+	}
+	return s.completeArchiveReclaimJob(ctx, job, taskArchiveReclaimOutcomeForceDiscard)
 }
 
 func (s *Service) recoverTaskResourceCleanupCompletion(
@@ -1494,6 +1563,9 @@ func (s *Service) retryTaskResourceCleanupJob(ctx context.Context, job *models.T
 	}
 	transitionCtx, cancel := detachedCleanupTransitionContext(ctx)
 	defer cancel()
+	if state == models.TaskResourceCleanupStateFailed && job.IsArchiveReclaim() {
+		recordArchiveReclaimOutcome("failed")
+	}
 	_, err := s.resourceCleanups.CompleteClaimedTaskResourceCleanupJob(
 		transitionCtx, job.ID, job.Attempts, state, cleanupErr.Error(), nextAttempt,
 	)

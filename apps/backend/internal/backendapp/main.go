@@ -1494,6 +1494,7 @@ func startGatewayAndServe(
 
 	services.Task.StartAutoArchiveLoop(ctx)
 	services.Task.SetStallDetectionThreshold(cfg.Tasks.StallDetectionThreshold)
+	services.Task.SetArchiveReclaimDirtyGrace(cfg.Tasks.ArchiveReclaim.DirtyGrace)
 	services.Task.StartSessionReconciliationLoop(ctx)
 	services.Task.StartQuickChatExpirationLoop(ctx)
 	hostUtilityCtx, hostUtilityCancel := context.WithCancel(ctx)

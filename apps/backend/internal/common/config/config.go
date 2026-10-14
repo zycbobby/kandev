@@ -77,6 +77,14 @@ type TasksConfig struct {
 	// window is twice this value.
 	StallDetectionThreshold time.Duration           `mapstructure:"stallDetectionThreshold"`
 	DeliveryRetention       DeliveryRetentionConfig `mapstructure:"deliveryRetention"`
+	ArchiveReclaim          ArchiveReclaimConfig    `mapstructure:"archiveReclaim"`
+}
+
+// ArchiveReclaimConfig bounds how long an archived task's dirty worktree is
+// preserved before the reclaim pass discards it. Zero restores
+// retain-until-clean.
+type ArchiveReclaimConfig struct {
+	DirtyGrace time.Duration `mapstructure:"dirtyGrace"`
 }
 
 // DeliveryRetentionConfig bounds the backend's redundant durable-delivery evidence.
@@ -911,6 +919,9 @@ func loadWithPath(configPath, homeDir string) (*Config, error) {
 	}
 	sources := applyStartupDefaultsAndEnvironment(&cfg, yamlKeys, profileDefaults, envSnapshot)
 	if err := applyDeliveryRetentionEnvironment(&cfg, envSnapshot, sources); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+	if err := applyArchiveReclaimEnvironment(&cfg, envSnapshot, sources); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 	if err := applySurvivalRecoveryEnv(&cfg, envSnapshot, sources); err != nil {

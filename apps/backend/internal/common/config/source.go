@@ -304,6 +304,7 @@ func applyStartupDefaults(cfg *Config, yamlKeys map[string]bool, profileDefaults
 	}
 	setDefaultDuration("tasks.preparationTimeout", &cfg.Tasks.PreparationTimeout, 10*time.Minute)
 	setDefaultDuration("tasks.stallDetectionThreshold", &cfg.Tasks.StallDetectionThreshold, 2*time.Hour)
+	setDefaultDuration("tasks.archiveReclaim.dirtyGrace", &cfg.Tasks.ArchiveReclaim.DirtyGrace, 72*time.Hour)
 	setDefaultDuration("tasks.deliveryRetention.payloadGrace", &cfg.Tasks.DeliveryRetention.PayloadGrace, time.Hour)
 	setDefaultDuration("tasks.deliveryRetention.replayAge", &cfg.Tasks.DeliveryRetention.ReplayAge, 24*time.Hour)
 	setDefaultDuration("tasks.deliveryRetention.interval", &cfg.Tasks.DeliveryRetention.Interval, time.Minute)
@@ -405,6 +406,14 @@ func applyDeliveryRetentionEnvironment(cfg *Config, env map[string]string, sourc
 		return err
 	}
 	return applyStrictIntEnv("tasks.deliveryRetention.batchBytes", &values.BatchBytes, 1<<20, 4<<20, env, sources)
+}
+
+// applyArchiveReclaimEnvironment resolves the archived-worktree grace
+// environment alias. Zero disables forcing and restores retain-until-clean,
+// so unlike the retention bounds the minimum here is zero.
+func applyArchiveReclaimEnvironment(cfg *Config, env map[string]string, sources map[string]SettingSource) error {
+	return applyStrictDurationEnv("tasks.archiveReclaim.dirtyGrace",
+		&cfg.Tasks.ArchiveReclaim.DirtyGrace, 0, 30*24*time.Hour, env, sources)
 }
 
 // clampOfficeLaunchSafetyConfig clamps a below-minimum office.*

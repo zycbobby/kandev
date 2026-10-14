@@ -354,6 +354,10 @@ Archived Git worktrees use the task cleanup worker, not the optional storage sch
 worktree can be removed during archive. A worktree with tracked or untracked Git changes remains
 on disk and gets a durable recheck after about 24 hours. The worker removes it after Git reports it
 clean, even when scheduled storage cleanup is disabled. Git-ignored files are outside this check.
+If a worktree is still dirty three days (configurable) after its task was archived, the next
+recheck discards the local tracked and untracked changes and removes the worktree; a checkout
+still referenced by an active task is never removed this way, and setting
+`tasks.archiveReclaim.dirtyGrace` to `0` restores the older retain-until-clean behavior.
 Active archived worktree paths protect their task workspace from storage quarantine and purge,
 including **Force clear all**. An older Kandev version can move an active worktree into quarantine.
 If this happens, choose **Restore** to return the workspace to its original path.

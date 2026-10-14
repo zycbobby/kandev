@@ -163,6 +163,7 @@ The launcher starts `agentctl`, performs a one-time nonce handshake, and supplie
 | ------------------------------- | --------------------------------------- | ------- | ------------------------------------------------------------------------------- |
 | `tasks.preparationTimeout`      | `KANDEV_TASK_PREPARATION_TIMEOUT`       | `10m`   | Positive Go duration for repository setup and executor-profile prepare scripts. |
 | `tasks.stallDetectionThreshold` | `KANDEV_TASK_STALL_DETECTION_THRESHOLD` | `2h`    | Positive Go duration for the session reconciliation sweep's stall threshold.    |
+| `tasks.archiveReclaim.dirtyGrace` | `KANDEV_TASK_ARCHIVE_RECLAIM_DIRTY_GRACE` | `72h`   | How long an archived task keeps a dirty worktree before the reclaim pass discards it. `0` restores retain-until-clean. |
 
 `tasks.preparationTimeout` controls how long Kandev allows repository setup and
 executor-profile prepare scripts to run. The value uses Go duration syntax,

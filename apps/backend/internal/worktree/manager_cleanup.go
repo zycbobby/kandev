@@ -758,11 +758,33 @@ func (m *Manager) CleanupArchivedWorktree(
 	wt *Worktree,
 	taskID, worktreePath, repositoryPath string,
 ) error {
+	return m.cleanupArchivedWorktree(ctx, wt, taskID, worktreePath, repositoryPath, false)
+}
+
+// CleanupArchivedWorktreeDiscardingChanges reclaims one archived checkout
+// under the same owner and path identity checks as CleanupArchivedWorktree,
+// but discards tracked and untracked local changes instead of requiring a
+// clean checkout. The branch-preserving archive policy is unchanged.
+func (m *Manager) CleanupArchivedWorktreeDiscardingChanges(
+	ctx context.Context,
+	wt *Worktree,
+	taskID, worktreePath, repositoryPath string,
+) error {
+	return m.cleanupArchivedWorktree(ctx, wt, taskID, worktreePath, repositoryPath, true)
+}
+
+func (m *Manager) cleanupArchivedWorktree(
+	ctx context.Context,
+	wt *Worktree,
+	taskID, worktreePath, repositoryPath string,
+	discardChanges bool,
+) error {
 	if wt == nil {
 		return errors.New("archived worktree cleanup requires a worktree")
 	}
 	receipt, err := m.cleanupWorktreesWithReceipt(ctx, []*Worktree{wt}, false, WorktreeCleanupOptions{
-		RequireCleanCheckout:   true,
+		DiscardWorktreeChanges: discardChanges,
+		RequireCleanCheckout:   !discardChanges,
 		ExpectedTaskID:         taskID,
 		ExpectedWorktreePath:   worktreePath,
 		ExpectedRepositoryPath: repositoryPath,

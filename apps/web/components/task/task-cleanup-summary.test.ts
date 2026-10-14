@@ -112,6 +112,7 @@ describe("archive cleanup summaries", () => {
     const { effects, notes } = getArchiveCleanupSummary("worktree");
     expect(effects[0]).toMatch(/clean Git worktrees are removed/i);
     expect(effects[0]).toMatch(/Git changes stays until it is clean/i);
+    expect(effects[0]).toMatch(/after 3 days are discarded/i);
     expect(notes.join(" ")).toMatch(/unpublished local branches remain available/i);
     expect(notes.join(" ")).not.toMatch(/all branches/i);
   });
@@ -124,6 +125,7 @@ describe("archive cleanup summaries", () => {
     const { effects, notes } = getBulkArchiveCleanupSummary(["worktree", "worktree", "local"]);
     expect(effects[0]).toMatch(/2 Git worktree tasks/);
     expect(effects[0]).toMatch(/checkouts with Git changes stay until they are clean/i);
+    expect(effects[0]).toMatch(/after 3 days are discarded/i);
     expect(notes.join(" ")).toMatch(/unpublished local branches remain available/i);
     expect(effects).toContain(AGENT_STOP_EFFECT);
   });
