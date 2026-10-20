@@ -2,7 +2,7 @@
 created: 2026-10-14
 status: implemented
 requirements:
-  - REQ-TASKS-DIRTY-WORKTREE-ARCHIVE-003
+  - REQ-TASKS-DIRTY-WORKTREE-ARCHIVE-005
 system_design:
   - ../../specs/tasks/system-design/dirty-worktree-grace-reclaim.md
 legacy_specs: []
@@ -123,7 +123,7 @@ After:
 +----------------------------------------------------------+
 ```
 
-Covers AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.6. The structural requirement is
+Covers AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.6. The structural requirement is
 the stated retention, clean-removal, and grace-discard facts in one summary;
 exact wrapping and button placement are illustrative and follow the existing
 compositions.

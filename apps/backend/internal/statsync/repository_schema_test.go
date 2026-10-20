@@ -181,10 +181,11 @@ func TestViewsUnionMirrorRowsWithInclusionConstants(t *testing.T) {
 	if err := db.Get(&localCompleted, `SELECT completed FROM v_stats_tasks WHERE id = 'local-task-1'`); err != nil {
 		t.Fatalf("read local task through view: %v", err)
 	}
-	// Local task sits on the workflow's last step (position 1 of 2), so the
-	// view's core-arm last-step rule must also report it completed.
-	if localCompleted != 1 {
-		t.Fatalf("local task completed = %d, want 1 (last workflow step)", localCompleted)
+	// Local task sits on the workflow's last step but is neither archived nor
+	// in COMPLETED state, so the view's core arm must not report it completed:
+	// completions count from committed state, not workflow position.
+	if localCompleted != 0 {
+		t.Fatalf("local task completed = %d, want 0 (last workflow step is not committed state)", localCompleted)
 	}
 
 	var origin string

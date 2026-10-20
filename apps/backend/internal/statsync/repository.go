@@ -36,10 +36,18 @@ func NewWithDB(writer, reader *sqlx.DB) (*Repository, error) {
 // EnsureViews creates the v_stats_* compatibility views. Boot calls this
 // once every store's schema (including table-rebuild migrations) has been
 // applied: a view created earlier would reference a table a later rebuild
-// drops, breaking that rebuild. Idempotent on both engines.
+// drops, breaking that rebuild. Idempotent on both engines, and replaces a
+// previously installed body so a changed definition reaches existing
+// databases: SQLite lacks CREATE OR REPLACE VIEW, so its views are dropped
+// and recreated; the views are statsync-owned and rebuilt on every boot.
 func EnsureViews(writer *sqlx.DB) error {
 	driver := writer.DriverName()
 	for _, view := range mirrorViews {
+		if !dialect.IsPostgres(driver) {
+			if _, err := writer.Exec("DROP VIEW IF EXISTS " + view.name); err != nil {
+				return fmt.Errorf("drop %s: %w", view.name, err)
+			}
+		}
 		if _, err := writer.Exec(viewCreateStatement(driver, view)); err != nil {
 			return fmt.Errorf("create %s: %w", view.name, err)
 		}
@@ -157,10 +165,9 @@ var mirrorViews = []viewDefinition{
 SELECT t.id, t.workspace_id, t.workflow_id, t.workflow_step_id, t.title, t.state,
 	t.is_ephemeral, t.origin, t.archived_at, t.created_at, t.updated_at,
 	(t.archived_at IS NOT NULL
-	 OR ws.position = (SELECT MAX(ws2.position) FROM workflow_steps ws2 WHERE ws2.workflow_id = ws.workflow_id)
+	 OR t.state = 'COMPLETED'
 	) AS completed
 FROM tasks t
-LEFT JOIN workflow_steps ws ON ws.id = t.workflow_step_id
 UNION ALL
 SELECT st.uid, st.workspace_id, '', '', st.title, st.state,
 	0, 'manual', st.archived_at, st.created_at, st.updated_at,

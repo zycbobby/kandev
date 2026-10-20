@@ -108,7 +108,7 @@ describe("getCleanupSummary (single task)", () => {
 });
 
 describe("archive cleanup summaries", () => {
-  it("explains conditional worktree removal and branch retention", () => {
+  it("explains immediate worktree removal and branch retention", () => {
     const { effects, notes } = getArchiveCleanupSummary("worktree");
     expect(effects[0]).toMatch(/clean Git worktrees are removed/i);
     expect(effects[0]).toMatch(/Git changes stays until it is clean/i);

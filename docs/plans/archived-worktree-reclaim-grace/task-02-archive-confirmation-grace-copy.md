@@ -6,9 +6,9 @@ wave: 1
 depends_on: []
 plan: "plan.md"
 requirements:
-  - REQ-TASKS-DIRTY-WORKTREE-ARCHIVE-003
+  - REQ-TASKS-DIRTY-WORKTREE-ARCHIVE-005
 acceptance_criteria:
-  - AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.6
+  - AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.6
 system_design:
   - ../../specs/tasks/system-design/dirty-worktree-grace-reclaim.md
 ---

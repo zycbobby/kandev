@@ -26,7 +26,7 @@ rejected alternatives are recorded in
 
 ## Requirements
 
-### REQ-TASKS-DIRTY-WORKTREE-ARCHIVE-003: Grace-Period Forced Reclamation
+### REQ-TASKS-DIRTY-WORKTREE-ARCHIVE-005: Grace-Period Forced Reclamation
 
 **Intent:** A retained checkout shall be discarded once its task has been
 archived continuously beyond a bounded grace period, so archive reclamation
@@ -37,25 +37,25 @@ requirement owns what happens when it elapses.
 
 #### Acceptance criteria
 
-- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.1:** When a recheck finds an archived
+- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.1:** When a recheck finds an archived
   task's retained worktree still dirty at or after the archive grace period
   measured from the task's archive time, the system shall discard the local
   tracked and untracked changes and remove that worktree under the existing
   archive identity, ownership, and branch policy.
-- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.2:** The grace period shall be
+- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.2:** The grace period shall be
   anchored to the task's archive time, so an unarchive and re-archive cycle
   grants a fresh window; a grace period of zero shall restore
   retain-until-clean behavior.
-- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.3:** When a retained worktree is
+- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.3:** When a retained worktree is
   still referenced by an active task at or after the grace period, the system
   shall not force-remove it and shall keep rechecking.
-- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.4:** When the change inspection fails
+- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.4:** When the change inspection fails
   at or after the grace period, the system shall keep the worktree and retry;
   an unknown checkout state shall never be discarded.
-- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.5:** Each forced reclamation shall be
+- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.5:** Each forced reclamation shall be
   observable as a distinct forced-discard outcome in recheck reporting,
   without recording change contents.
-- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-003.6:** When archive confirmation is
+- **AC-TASKS-DIRTY-WORKTREE-ARCHIVE-005.6:** When archive confirmation is
   shown on desktop or phone, its worktree summary shall state, in addition to
   the retention and clean-removal facts required by
   AC-TASKS-DIRTY-WORKTREE-ARCHIVE-002.6, that local changes still present

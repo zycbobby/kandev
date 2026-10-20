@@ -18,6 +18,9 @@ func (m *Manager) AcknowledgeNativeResumeDelivery(ctx context.Context, sessionID
 	if !exists || execution == nil {
 		return fmt.Errorf("native resume execution is unavailable")
 	}
+	if execution.IsPassthrough {
+		return m.checkNativeResumeLegacyHistory(ctx, sessionID)
+	}
 	client, release := execution.AcquireAgentCtlClient()
 	defer release()
 	if client == nil {
@@ -41,7 +44,7 @@ func (m *Manager) AcknowledgeNativeResumeDelivery(ctx context.Context, sessionID
 		return err
 	}
 	// Dispatch reconciliation can change SQL state; pin one fresh inventory for validation and retirement selection.
-	rows, err := activeBackendSubmissions(ctx, m.streamManager.deliveryRepository(), sessionID)
+	rows, err := nativeResumeSQLRows(ctx, execution, status, submissions, m.streamManager.deliveryRepository())
 	if err != nil {
 		return err
 	}
@@ -78,7 +81,7 @@ func validateNativeResumeDeliveryOwner(execution *AgentExecution, status *agentc
 	if !execution.isSessionInitialized() || execution.ACPSessionID == "" {
 		return fmt.Errorf("native conversation has not resumed")
 	}
-	if status == nil || !status.Durable || status.Version != journal.CurrentVersion {
+	if status == nil || !status.Durable || !journal.SupportsDeliveryVersion(status.Version) {
 		return fmt.Errorf("native resume durable storage is unavailable")
 	}
 	if status.SessionID != execution.SessionID || status.IncarnationID != execution.DeliveryIncarnationID ||
@@ -106,13 +109,13 @@ func nativeResumeRetirementIDs(execution *AgentExecution, status *agentctl.Deliv
 				continue
 			}
 			sqlSubmission, found := backend[submission.ID]
-			if !found || sqlSubmission.State != models.DeliverySubmissionInterruptedUnknown {
+			if !found || (sqlSubmission.State != models.DeliverySubmissionInterruptedUnknown && !peerMatchesTerminalHistory(execution, status, submission, sqlSubmission)) {
 				if submission.State == journal.SubmissionFailed || submission.State == journal.SubmissionCancelled {
 					continue
 				}
 				return nil, fmt.Errorf("%w: native resume requires uncertain SQL history", ErrDurableAdoptionBlocked)
 			}
-			if !peerMatchesUnknownHistory(execution, status, submission, sqlSubmission) {
+			if !peerMatchesUnknownHistory(execution, status, submission, sqlSubmission) && !peerMatchesTerminalHistory(execution, status, submission, sqlSubmission) {
 				return nil, fmt.Errorf("%w: native resume submission identity changed", ErrDurableAdoptionBlocked)
 			}
 			ids = append(ids, submission.ID)

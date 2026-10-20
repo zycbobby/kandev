@@ -36,8 +36,8 @@ func TestStatsSectionsMergeMirroredRows(t *testing.T) {
 		if stats.TotalTasks != 3 {
 			t.Errorf("TotalTasks = %d, want 3 (local + 2 mirrored)", stats.TotalTasks)
 		}
-		if stats.CompletedTasks != 3 {
-			t.Errorf("CompletedTasks = %d, want 3 (last-step local + remote-completed + archived)", stats.CompletedTasks)
+		if stats.CompletedTasks != 2 {
+			t.Errorf("CompletedTasks = %d, want 2 (remote-completed + archived; the last-step local task is not committed state)", stats.CompletedTasks)
 		}
 		if stats.InProgressTasks != 1 {
 			t.Errorf("InProgressTasks = %d, want 1", stats.InProgressTasks)
@@ -101,8 +101,8 @@ func TestStatsSectionsMergeMirroredRows(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetCompletedTaskActivity: %v", err)
 		}
-		if got := activity[len(activity)-1].CompletedTasks; got != 3 {
-			t.Errorf("today's completed tasks = %d, want 3 (local + both mirrored completions)", got)
+		if got := activity[len(activity)-1].CompletedTasks; got != 2 {
+			t.Errorf("today's completed tasks = %d, want 2 (both mirrored completions)", got)
 		}
 	})
 
@@ -145,8 +145,8 @@ func TestStatsSectionsMergeMirroredRows(t *testing.T) {
 		if merged.RepositoryID != "repo-local" {
 			t.Errorf("merged repository id = %q, want the local repo id", merged.RepositoryID)
 		}
-		if merged.TotalTasks != 2 || merged.CompletedTasks != 2 || merged.InProgressTasks != 1 {
-			t.Errorf("merged tasks = %d/%d/%d, want 2/2/1 (total/completed/in-progress)",
+		if merged.TotalTasks != 2 || merged.CompletedTasks != 1 || merged.InProgressTasks != 1 {
+			t.Errorf("merged tasks = %d/%d/%d, want 2/1/1 (total/completed/in-progress)",
 				merged.TotalTasks, merged.CompletedTasks, merged.InProgressTasks)
 		}
 		// Turns: the local session contributes two (one still open) and the

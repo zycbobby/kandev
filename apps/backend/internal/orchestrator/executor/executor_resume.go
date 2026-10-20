@@ -80,6 +80,7 @@ type repoInfo struct {
 	PRBase                     *models.PRBase
 	QualifiedPRBase            *models.PRBase
 	Position                   int
+	WorkspaceRelativePath      string
 	WorktreeBranchPrefix       string
 	WorktreeBranchTemplate     string
 	PullBeforeWorktree         bool
@@ -186,6 +187,7 @@ func (e *Executor) resolveTaskRepoInfoForSession(
 		CheckoutBranch:          tr.CheckoutBranch,
 		PRNumber:                prNumberFromMetadata(tr.Metadata),
 		Position:                tr.Position,
+		WorkspaceRelativePath:   tr.WorkspaceRelativePath,
 	}
 	if binding, found, err := models.LoadRemoteContribution(tr.Metadata); err != nil {
 		return nil, fmt.Errorf("load remote contribution for task repository %q: %w", tr.ID, err)
@@ -1270,6 +1272,13 @@ func (e *Executor) ResumeSessionWithOptions(
 	startAgent bool,
 	options ResumeOptions,
 ) (*TaskExecution, error) {
+	if session != nil && e.executorAdmission != nil {
+		var err error
+		ctx, err = e.executorAdmission(ctx, session.ID, session.ExecutorID, session.ExecutorProfileID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if session != nil {
 		e.auditCeilingBypass(ctx, "ResumeSessionWithOptions", session.ID, false)
 	}
@@ -1299,13 +1308,14 @@ func (e *Executor) resumeSession(
 	completedResume := options.AllowCompletedSessionResume &&
 		resumeInitialState == models.TaskSessionStateCompleted
 	wasTerminalResume := isTerminalSessionState(resumeInitialState) || completedResume
-	// Terminal sessions cannot own a live agent. Remove any stale runtime row
-	// before selected-environment admission can claim the environment.
+	// A terminal session may retain an unconfirmed runtime. Stop it before
+	// selected-environment admission can claim the environment.
 	if wasTerminalResume {
 		if cleanupErr := e.agentManager.CleanupStaleExecutionBySessionID(ctx, session.ID); cleanupErr != nil {
 			e.logger.Warn("failed to force-cleanup stale execution before terminal-state resume",
 				zap.String("session_id", session.ID),
 				zap.Error(cleanupErr))
+			return nil, newResumeCleanupFailure(cleanupErr, session)
 		}
 	}
 	if err := e.admitWorktreeRecovery(ctx, task.ID); err != nil {
@@ -1420,13 +1430,8 @@ func (e *Executor) resumeSession(
 
 	resp, err := e.agentManager.LaunchAgent(launchCtx, req)
 	if err != nil && isAgentAlreadyRunningError(err) && options.RequiredNativeConversationID == "" {
-		// "already has an agent running" fires both for live executions (a concurrent
-		// resume raced us) and stale ones (agent never started or exited without
-		// cleanup). Probe liveness before deciding what to do — otherwise we'd kill a
-		// healthy agent mid-prompt. For terminal states the agent is dead by definition,
-		// so skip the probe and go straight to cleanup+retry — this avoids a silent
-		// regression to ErrExecutionAlreadyRunning if the preemptive cleanup above
-		// failed and agentctl still reports a stale "starting" status.
+		// A registered execution may be live or stale. Only clean up a live-state
+		// session after checking liveness; terminal sessions already passed cleanup.
 		if !wasTerminalResume && e.agentManager.IsAgentRunningForSession(ctx, session.ID) {
 			e.logger.Info("resume race: agent already running for session, returning ErrExecutionAlreadyRunning",
 				zap.String("task_id", task.ID),
@@ -1451,8 +1456,10 @@ func (e *Executor) resumeSession(
 			e.logger.Warn("failed to clean up stale execution",
 				zap.String("session_id", session.ID),
 				zap.Error(cleanupErr))
+			err = newResumeCleanupFailure(cleanupErr, nil)
+		} else {
+			resp, err = e.agentManager.LaunchAgent(launchCtx, req)
 		}
-		resp, err = e.agentManager.LaunchAgent(launchCtx, req)
 	}
 	if err != nil && isCancellableResumeContext(launchCtx) && launchCtx.Err() != nil {
 		// The cancellation owner reconciles the session state. Do not run the
@@ -1486,6 +1493,7 @@ func (e *Executor) resumeSession(
 				err = errors.Join(err, rollbackErr)
 			}
 		}
+		e.captureResumeCleanupFailureSnapshot(launchCtx, err, session.ID, resumeAttemptID, terminalRollbackState(resumeInitialState))
 		e.logger.Error("failed to relaunch agent for session",
 			zap.String("task_id", task.ID),
 			zap.String("session_id", session.ID),
@@ -2104,6 +2112,8 @@ func newResumeLaunchRequest(
 		executionProfileID = session.AgentProfileID
 	}
 	req := &LaunchAgentRequest{
+		WorkspaceLayout:              task.InitialWorkspaceLayout,
+		ResumePassthrough:            startAgent && session.IsPassthrough && !options.ForceContextContinuation,
 		TaskID:                       task.ID,
 		SessionSettingsPolicy:        options.SettingsPolicy,
 		RequiredNativeConversationID: options.RequiredNativeConversationID,
@@ -2127,6 +2137,7 @@ func newResumeLaunchRequest(
 		OriginalWorkspacePath:        session.WorkspacePath,
 		AllowBranchReplacement:       options.AllowBranchReplacement,
 		ForceContextContinuation:     options.ForceContextContinuation,
+		ReplaceNativeConversation:    options.RecoveryAction == RecoveryActionFreshStart,
 		RecoveryAction:               options.RecoveryAction,
 		SuppressBootStatusMessage:    options.SuppressInitialMessageBackfill,
 	}
@@ -2342,7 +2353,9 @@ func (e *Executor) applyResumeWorkspaceFolders(
 	for _, folder := range folders {
 		if folder != nil {
 			req.WorkspaceFolders = append(req.WorkspaceFolders, WorkspaceFolderSpec{
-				Name: folder.DisplayName, LocalPath: folder.LocalPath,
+				Name:                  folder.DisplayName,
+				LocalPath:             folder.LocalPath,
+				WorkspaceRelativePath: folder.WorkspaceRelativePath,
 			})
 		}
 	}
@@ -2668,6 +2681,8 @@ func (e *Executor) applyResumeRepoConfig(
 	applyResumeRepoBasics(req, repository, repositoryPath, shouldUseWorktree(req.ExecutorType))
 	for _, info := range allRepos {
 		if info != nil && info.RepositoryID == repositoryID {
+			req.TaskRepositoryID = info.TaskRepositoryID
+			req.WorkspaceRelativePath = info.WorkspaceRelativePath
 			req.ContributionDestination = info.ContributionDestination
 			break
 		}
@@ -2837,6 +2852,7 @@ func (e *Executor) applyResumeWorktreeConfig(
 	primaryTaskRepo, _ := e.repo.GetPrimaryTaskRepository(ctx, task.ID)
 	if primaryTaskRepo != nil && primaryTaskRepo.RepositoryID == repositoryID {
 		req.TaskRepositoryID = primaryTaskRepo.ID
+		req.WorkspaceRelativePath = primaryTaskRepo.WorkspaceRelativePath
 	}
 	if primaryTaskRepo != nil && primaryTaskRepo.CheckoutBranch != "" {
 		req.CheckoutBranch = primaryTaskRepo.CheckoutBranch
