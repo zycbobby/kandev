@@ -86,9 +86,9 @@ func (m *Manager) configureTracker(tracker *WorkspaceTracker, repositoryName str
 	tracker.SetRecoveryArtifactExclusions(m.currentWorkspaceFileExclusions())
 	if !tracker.IsSubmodule() {
 		tracker.SetBaseBranch(lookupBaseBranch(m.getBaseBranches(), repositoryName))
+		tracker.SetCreationBase(lookupCreationBase(m.getCreationBases(), repositoryName))
 	}
 	tracker.SetComparisonTarget(m.comparisonTargetFor(repositoryName))
-	tracker.SetCreationBase(lookupCreationBase(m.getCreationBases(), repositoryName))
 }
 
 func (m *Manager) buildRepositoryScopeTrackers(

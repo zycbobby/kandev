@@ -88,14 +88,16 @@ func (m *Manager) UpdateCreationBases(ctx context.Context, bases map[string]mode
 
 	// Stamp synchronously so the field is visible to the next poll; the git
 	// refreshes run detached for the same reason as UpdateBaseBranches.
+	// Submodule trackers stay pinned to their gitlink anchors, mirroring
+	// SetBaseBranchIfNotSubmodule.
 	if root != nil {
-		root.SetCreationBase(lookupCreationBase(current, root.RepositoryName()))
+		root.SetCreationBaseIfNotSubmodule(lookupCreationBase(current, root.RepositoryName()))
 	}
 	for _, t := range trackers {
-		t.SetCreationBase(lookupCreationBase(current, t.RepositoryName()))
+		t.SetCreationBaseIfNotSubmodule(lookupCreationBase(current, t.RepositoryName()))
 	}
 	for subpath, t := range bySubpath {
-		t.SetCreationBase(lookupCreationBase(current, subpath))
+		t.SetCreationBaseIfNotSubmodule(lookupCreationBase(current, subpath))
 	}
 	go m.refreshTrackersDetached(root, trackers, bySubpath)
 }

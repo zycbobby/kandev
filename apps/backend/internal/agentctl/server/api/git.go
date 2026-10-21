@@ -861,6 +861,44 @@ func comparisonUnavailableLogResult(code string) *process.GitLogResult {
 	}
 }
 
+// creationBaseFor resolves the repo's creation-base anchor when one is
+// recorded and no explicit comparison target outranks it. handled=false
+// means the ordinary target-branch/since defaults apply.
+func (s *Server) creationBaseFor(ctx context.Context, repo string) (base, errorCode string, handled bool, err error) {
+	tracker, trackerErr := s.procMgr.GetWorkspaceTrackerFor(repo)
+	if trackerErr != nil {
+		return "", "", false, trackerErr
+	}
+	if _, present := tracker.CreationBaseResolution(); !present {
+		return "", "", false, nil
+	}
+	if tracker.ComparisonResolution().Explicit {
+		return "", "", false, nil
+	}
+	sha, code := tracker.ResolveCreationBaseAnchor(ctx)
+	return sha, code, true, nil
+}
+
+// creationBaseUnavailableLogResult mirrors comparisonUnavailableLogResult
+// for the creation-base layer's bounded failure code.
+func creationBaseUnavailableLogResult(code string) *process.GitLogResult {
+	return &process.GitLogResult{
+		Success:   false,
+		Commits:   []*process.GitCommitInfo{},
+		Error:     "creation base unavailable",
+		ErrorCode: code,
+	}
+}
+
+func creationBaseUnavailableDiffResult(code string) *process.CumulativeDiffResult {
+	return &process.CumulativeDiffResult{
+		Success:   false,
+		Files:     map[string]interface{}{},
+		Error:     "creation base unavailable",
+		ErrorCode: code,
+	}
+}
+
 func comparisonUnavailableDiffResult(code string) *process.CumulativeDiffResult {
 	return &process.CumulativeDiffResult{
 		Success:   false,
@@ -895,6 +933,18 @@ func (s *Server) runGitLogForRepo(
 			return comparisonUnavailableLogResult("comparison_merge_base_unavailable"), nil
 		}
 		return gitOp.GetLog(ctx, mergeBase, limit)
+	}
+
+	// Creation base: the backend filters explicit-target rows out of the
+	// creation-base map, so a present base replaces the target-branch/since
+	// defaults for this repository with the worktree's own fork-point anchor.
+	if base, code, handled, baseErr := s.creationBaseFor(ctx, repo); baseErr != nil {
+		return nil, baseErr
+	} else if handled {
+		if code != "" {
+			return creationBaseUnavailableLogResult(code), nil
+		}
+		return gitOp.GetLog(ctx, base, limit)
 	}
 
 	baseCommit := req.Since
@@ -1185,6 +1235,20 @@ func (s *Server) runGitCumulativeDiffForRepoResolved(
 		result, err := gitOp.GetCumulativeDiff(ctx, mergeBase)
 		return result, http.StatusOK, err
 	}
+
+	// Creation base: same insertion as the commits panel — a present base
+	// (explicit-target rows are filtered out by the backend) replaces the
+	// target-branch/stored-base defaults with the fork-point anchor.
+	if base, code, handled, baseErr := s.creationBaseFor(ctx, repo); baseErr != nil {
+		return nil, http.StatusBadRequest, baseErr
+	} else if handled {
+		if code != "" {
+			return creationBaseUnavailableDiffResult(code), http.StatusOK, nil
+		}
+		result, err := gitOp.GetCumulativeDiff(ctx, base)
+		return result, http.StatusOK, err
+	}
+
 	if targetBranch != "" {
 		switch mb, err := s.computeMergeBase(ctx, gitOp, targetBranch); {
 		case err != nil:
@@ -1403,6 +1467,11 @@ func (s *Server) resolvePerRepoBaseAndScope(ctx context.Context, repo string) (s
 	isSubmodule := tracker.IsSubmodule()
 	base, baseBranch := tracker.ResolveBaseAnchor(ctx)
 	if base == "" || baseBranch == "" {
+		return base, isSubmodule
+	}
+	if _, hasCreationBase := tracker.CreationBaseResolution(); hasCreationBase {
+		// The creation-base anchor is already fail-closed: it must never be
+		// re-anchored to an integration default.
 		return base, isSubmodule
 	}
 	if isSubmodule {

@@ -470,6 +470,8 @@ func (wt *WorkspaceTracker) computeGitStatus(ctx context.Context) (types.GitStat
 		update.ComparisonTarget = comparison.Display
 		update.ComparisonStatus = comparison.Status
 		update.ComparisonErrorCode = comparison.ErrorCode
+	} else if base, present := wt.CreationBaseResolution(); present {
+		update.CreationBase = base.Ref
 	}
 
 	// Bare trackers (multi-repo task roots) sit on a directory that isn't
@@ -668,8 +670,13 @@ func (wt *WorkspaceTracker) computeBaseCommit(ctx context.Context, baseBranch st
 // ResolveBaseCommit returns the comparison anchor configured for this
 // repository. It shares the exact stored-base and fallback resolution used by
 // git status so API consumers such as commits and cumulative diff cannot drift
-// from the Changes panel's ahead/behind and branch-diff totals.
+// from the Changes panel's ahead/behind and branch-diff totals. A recorded
+// creation base (when no explicit comparison target outranks it) resolves
+// through ResolveCreationBaseAnchor instead of the origin-first branch path.
 func (wt *WorkspaceTracker) ResolveBaseCommit(ctx context.Context) string {
+	if sha, handled := wt.resolveCreationBaseCommit(ctx); handled {
+		return sha
+	}
 	baseBranch := wt.resolveBaseBranch(ctx)
 	if baseBranch == "" {
 		return ""
@@ -677,11 +684,34 @@ func (wt *WorkspaceTracker) ResolveBaseCommit(ctx context.Context) string {
 	return wt.computeBaseCommit(ctx, baseBranch)
 }
 
+// resolveCreationBaseCommit handles the creation-base layer of the anchor
+// resolution. handled=false means no creation base is recorded or an explicit
+// comparison target outranks it; the caller falls back to the branch-only
+// path. An unresolvable anchor yields "" (comparison-derived surfaces go
+// unavailable; the file-status surface is unaffected).
+func (wt *WorkspaceTracker) resolveCreationBaseCommit(ctx context.Context) (string, bool) {
+	if wt.ComparisonResolution().Explicit {
+		return "", false
+	}
+	if _, present := wt.CreationBaseResolution(); !present {
+		return "", false
+	}
+	sha, _ := wt.ResolveCreationBaseAnchor(ctx)
+	return sha, true
+}
+
 // ResolveBaseAnchor returns both the comparison anchor SHA and the base branch
 // ref it was computed against. Multi-repo commits/diff use the ref to detect a
 // stale local-only base (merged/deleted stacked parent) the same way the
 // single-repo path uses target_branch. Both are "" when no base resolves.
+// With a creation base the ref is the recorded mother branch name and the
+// anchor is fail-closed: callers must not re-anchor it (no
+// CorrectStaleComparisonBase), which they detect via CreationBaseResolution.
 func (wt *WorkspaceTracker) ResolveBaseAnchor(ctx context.Context) (sha, baseBranch string) {
+	if sha, handled := wt.resolveCreationBaseCommit(ctx); handled {
+		base, _ := wt.CreationBaseResolution()
+		return sha, base.Ref
+	}
 	baseBranch = wt.resolveBaseBranch(ctx)
 	if baseBranch == "" {
 		return "", ""
@@ -708,7 +738,15 @@ func (wt *WorkspaceTracker) getAheadBehindCounts(ctx context.Context, update *ty
 	// otherwise origin/main / origin/master). Using the remote tracking
 	// branch (origin/<feature-branch>) gives wrong counts after rebase
 	// because rebased commits have new SHAs.
-	compareRef := wt.resolveAheadBehindRef(ctx)
+	compareRef, creationBaseCode := wt.resolveAheadBehindCompareRef(ctx)
+	if creationBaseCode != "" {
+		// A recorded creation base that cannot resolve an anchor makes the
+		// comparison-derived counts explicitly unavailable; the file-status
+		// surface continues with its ordinary observation.
+		update.CreationBaseErrorCode = creationBaseCode
+		markGitStatusDetailsUnavailable(update)
+		return
+	}
 	// Inline regex allowlist so the sanitiser barrier sits in the same
 	// function as the `git rev-list` invocation below.
 	rest, hasOriginPrefix := strings.CutPrefix(compareRef, "origin/")
@@ -970,6 +1008,22 @@ func (wt *WorkspaceTracker) resolveBaseBranchWithReason(ctx context.Context) bas
 		}
 	}
 	return baseBranchResolution{stored: stored, reason: baseBranchUnresolved}
+}
+
+// resolveAheadBehindCompareRef resolves the ref the ahead/behind counts
+// compare against, including the creation-base layer: an explicit target
+// keeps its materialized ref, a recorded creation base contributes its
+// resolved anchor SHA (commit-ishes are valid rev-list arguments), and
+// everything else falls through to the branch-only resolution. The error
+// code is non-empty only when a recorded creation base fails closed.
+func (wt *WorkspaceTracker) resolveAheadBehindCompareRef(ctx context.Context) (ref, errorCode string) {
+	if !wt.ComparisonResolution().Explicit {
+		if _, present := wt.CreationBaseResolution(); present {
+			anchor, code := wt.ResolveCreationBaseAnchor(ctx)
+			return anchor, code
+		}
+	}
+	return wt.resolveAheadBehindRef(ctx), ""
 }
 
 // resolveAheadBehindRef is the ahead/behind variant of resolveBaseBranch.

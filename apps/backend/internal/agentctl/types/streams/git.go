@@ -97,6 +97,14 @@ type GitStatusUpdate struct {
 	// and provider errors never enter the workspace stream.
 	ComparisonErrorCode string `json:"comparison_error_code,omitempty"`
 
+	// CreationBase names the mother branch recorded when this worktree branch
+	// was cut, when the creation-base comparison default is active.
+	CreationBase string `json:"creation_base,omitempty"`
+	// CreationBaseErrorCode is a bounded machine-readable failure code for the
+	// creation-base default (the recorded fork point can no longer resolve).
+	// The file-status surface itself stays ready when this is set.
+	CreationBaseErrorCode string `json:"creation_base_error_code,omitempty"`
+
 	// Files contains detailed information about each changed file.
 	Files map[string]FileInfo `json:"files,omitempty"`
 
