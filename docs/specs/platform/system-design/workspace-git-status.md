@@ -4,7 +4,7 @@ system: platform
 requirements:
   - REQ-PLATFORM-WORKSPACE-GIT-STATUS-001
 created: 2026-07-19
-updated: 2026-10-03
+updated: 2026-10-21
 owners:
   - kandev
 ---

@@ -111,6 +111,27 @@ default branch**. To retry the same PR base, select **Retry launch**. To clear t
 a task base branch or remove the owning pull-request association. Kandev does not guess incomplete
 fork identity or apply it to another repository.
 
+### Compare against the worktree creation base
+
+When the Worktree executor cuts a fresh task branch, Kandev records the creation base: the local
+branch the branch was cut from and the commit it pointed at. The Changes panel, commits, cumulative
+diff, ahead/behind counts, native review, and task summaries compare against that recorded branch,
+resolved locally without rewriting it to `origin`. When the local base branch runs ahead of its
+remote counterpart, the panel therefore shows only this worktree's own work instead of mixing in
+the base branch's unpushed commits.
+
+The comparison only fails forward. If the recorded branch no longer resolves, or its history was
+rewritten, Kandev compares against the recorded fork-point commit. If that commit can no longer be
+resolved, comparison data reports unavailable with the reason `creation_base_ref_unavailable`; it
+never silently falls back to `origin/main`, `origin/master`, or a local integration branch.
+
+The creation base is a comparison default, not a configuration change. It does not replace
+`origin`, change the checked-out branch, alter upstream tracking, or change push routing. A linked
+fork pull-request target still wins over it, and selecting a branch in **Compare against** marks
+the repository as user-selected: the creation base stops applying and the ordinary comparison
+semantics take over. Tasks created before this behavior existed keep their previous comparison
+default.
+
 These UI operations enter through Kandev's `/ws` endpoint. With authentication disabled, anyone who can reach an unprotected backend receives the synthetic administrator identity and can invoke destructive Git actions with the executor's permissions. Experimental authentication adds user and workspace authorization, but it does not restrict the executor's filesystem or credentials. Keep Kandev on loopback or behind an authenticated, origin-protected TLS proxy; see [WebSocket API](websocket-api.md).
 
 Credentials are resolved where `agentctl` runs. A host SSH agent, credential helper, `gh` login, or `az` login is not automatically available inside every Docker, SSH, or remote executor. Give the executor only the repository access it needs and test with a disposable branch. See [Executors](executors.md) for executor-specific credential handling.

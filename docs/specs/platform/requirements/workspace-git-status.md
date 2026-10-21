@@ -2,7 +2,7 @@
 status: active
 system: platform
 created: 2026-07-19
-updated: 2026-10-08
+updated: 2026-10-21
 owners:
   - kandev
 ---
@@ -120,3 +120,4 @@ Display continuity has its own [requirement](git-refresh-continuity.md),
 [repair plan](../../../plans/git-refresh-continuity/plan.md).
 Staged-rename selection follows the path-details design and
 [rename Discard package](../../../plans/git-discard-staged-renames/plan.md).
+See the [worktree comparison base requirement](worktree-comparison-base.md).

@@ -52,6 +52,18 @@ flowchart TD
     G --> H["Zustand Store update"]
 ```
 
+## Comparison base resolution
+
+Comparison-derived surfaces (status, commits, cumulative diff, ahead/behind, native review) resolve
+their base in this order: an explicit repository-qualified comparison target, a manual **Compare
+against** selection, the recorded worktree creation base, then the origin-first default. The
+creation base is recorded when the Worktree executor cuts a new branch: the base ref verbatim and
+the fork-point commit. Resolution is local (`merge-base(HEAD, ref)`), falls back to the recorded
+fork point when the ref is gone or its history was rewritten, and reports the bounded code
+`creation_base_ref_unavailable` instead of re-anchoring to an integration branch. Legacy tasks
+without a record keep the origin-first default. See
+[ADR-2026-10-21-worktree-creation-base-comparison](decisions/2026-10-21-worktree-creation-base-comparison.md).
+
 ## agentctl API
 
 ### Endpoints
@@ -63,6 +75,7 @@ flowchart TD
 | POST | `/api/v1/git/rebase` | Rebase onto base branch |
 | POST | `/api/v1/git/merge` | Merge base branch in |
 | POST | `/api/v1/git/abort` | Abort merge/rebase |
+| POST | `/api/v1/workspace/creation-bases` | Replace the per-repo creation-base map |
 
 ### Request/Response Format
 
