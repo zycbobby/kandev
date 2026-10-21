@@ -104,30 +104,30 @@ stateDiagram-v2
 
 ### 7. 前端展示与 i18n
 
-- [ ] 7.1 web 状态类型与头部展示：跟随 `ComparisonStatus`/`ComparisonDisplay` 的既有字段路径（`grep -rn "comparisonStatus\|comparison_status" apps/web/src apps/web/hooks apps/web/lib` 定位类型与消费点）把创建基 display/错误码加进 web 类型；`apps/web/components/task/changes-panel-header-actions.tsx:220-287` 的 `baseBranchDisplay`/`ComparisonTargetDisplay` 渲染区显示生效比较基（母 ref 名）；unavailable 时显示既有 unavailable 指示模式（照 comparison target 失败态）。
-- [ ] 7.2 i18n：新增 copy 进 7 语言目录（`apps/web/src/locales/`），繁体用 `pnpm run i18n:zh-hant`；无 em dash；`t()` 包裹。
+- [x] 7.1 web 状态类型与头部展示：跟随 `ComparisonStatus`/`ComparisonDisplay` 的既有字段路径（`grep -rn "comparisonStatus\|comparison_status" apps/web/src apps/web/hooks apps/web/lib` 定位类型与消费点）把创建基 display/错误码加进 web 类型；`apps/web/components/task/changes-panel-header-actions.tsx:220-287` 的 `baseBranchDisplay`/`ComparisonTargetDisplay` 渲染区显示生效比较基（母 ref 名）；unavailable 时显示既有 unavailable 指示模式（照 comparison target 失败态）。
+- [x] 7.2 i18n：新增 copy 进 7 语言目录（`apps/web/src/locales/`），繁体用 `pnpm run i18n:zh-hant`；无 em dash；`t()` 包裹。
   - 测试：组件测试（创建基 display 渲染、unavailable 态）；`pnpm run i18n:check` + `pnpm run i18n:ratchet` 绿。
   - 准出：`cd apps/web && pnpm run typecheck && pnpm run lint && pnpm run i18n:check` 绿。
 
 ### 8. E2E（desktop + mobile parity）
 
-- [ ] 8.1 新建 `apps/web/e2e/tests/git/worktree-creation-base-comparison.spec.ts` + `mobile-worktree-creation-base-comparison.spec.ts` + 共享 helpers（fixture：bare origin + clone + push 基线 + local main 领先 3 提交不 push；参照 `fork-pr-comparison-target-helpers.ts` 的仓库准备模式与 `local-base-operations-helpers.ts` 的本地分支操作模式）。断言 E2E 测试图三断言 + 存量对照（路径 2）+ 手动覆盖（路径 3，picker 换基后回落）。
+- [x] 8.1 新建 `apps/web/e2e/tests/git/worktree-creation-base-comparison.spec.ts` + `mobile-worktree-creation-base-comparison.spec.ts` + 共享 helpers（fixture：bare origin + clone + push 基线 + local main 领先 3 提交不 push；参照 `fork-pr-comparison-target-helpers.ts` 的仓库准备模式与 `local-base-operations-helpers.ts` 的本地分支操作模式）。断言 E2E 测试图三断言 + 存量对照（路径 2）+ 手动覆盖（路径 3，picker 换基后回落）。
   - 准出：两支 spec 在 chromium 与 mobile-chrome 项目下通过。
 
 ### 9. durable spec、ADR、公开文档
 
-- [ ] 9.1 ADR：`docs/decisions/` 新增（英文，走 `/record` 约定）：反转 worktree 任务工作区比较默认基为创建基；引用被反转的 origin-first 设计（`git.go:831-845` 注释）与 fork-pr-comparison-targets 的 invariants 保留。
-- [ ] 9.2 durable spec：`docs/specs/platform/requirements/workspace-git-status.md` 增创建基 ACs（对齐 spec delta 的 6 Requirement）；`docs/specs/platform/system-design/workspace-git-status.md` 增设计段（载体、优先级、回退算法、错误码）。校验：`uv run --no-project --python 3.12 python scripts/list-docs.py validate` 与 `uv run --no-project --python 3.12 python scripts/lint-spec-files.py --all`。
-- [ ] 9.3 文档：`docs/git-operations.md`、`docs/public/git-operations.md`（比较基语义与「更改面板默认对本 worktree 工作」）、`docs/public/coordination.md`（子任务基线叙述补创建基口径）；走 `/docs-maintainer` 评估清单。
+- [x] 9.1 ADR：`docs/decisions/` 新增（英文，走 `/record` 约定）：反转 worktree 任务工作区比较默认基为创建基；引用被反转的 origin-first 设计（`git.go:831-845` 注释）与 fork-pr-comparison-targets 的 invariants 保留。
+- [x] 9.2 durable spec：`docs/specs/platform/requirements/workspace-git-status.md` 增创建基 ACs（对齐 spec delta 的 6 Requirement）；`docs/specs/platform/system-design/workspace-git-status.md` 增设计段（载体、优先级、回退算法、错误码）。校验：`uv run --no-project --python 3.12 python scripts/list-docs.py validate` 与 `uv run --no-project --python 3.12 python scripts/lint-spec-files.py --all`。
+- [x] 9.3 文档：`docs/git-operations.md`、`docs/public/git-operations.md`（比较基语义与「更改面板默认对本 worktree 工作」）、`docs/public/coordination.md`（子任务基线叙述补创建基口径）；走 `/docs-maintainer` 评估清单。
 
 ## 验证清单
 
-- [ ] `make -C apps/backend test` 全绿；`bash scripts/lint-go-changed <changed-go-files>` 无新违规。
-- [ ] `cd apps && pnpm --filter @kandev/web typecheck && pnpm --filter @kandev/web lint`；`cd apps/web && pnpm run i18n:check && pnpm run i18n:ratchet`。
-- [ ] e2e 两支 spec（chromium + mobile-chrome）通过；`node scripts/validate-public-docs.mjs` 通过（若 9.3 改动公开文档）。
-- [ ] `openspec validate anchor-worktree-comparison-base --strict --no-interactive` 通过。
-- [ ] durable spec 校验（9.2 两条命令）通过。
-- [ ] 自查 spec delta 的 6 个 Requirement / 13 个 Scenario 逐条映射到测试（Go 矩阵或 e2e），无缺口。
+- [x] `make -C apps/backend test` 全绿；`bash scripts/lint-go-changed <changed-go-files>` 无新违规。
+- [x] `cd apps && pnpm --filter @kandev/web typecheck && pnpm --filter @kandev/web lint`；`cd apps/web && pnpm run i18n:check && pnpm run i18n:ratchet`。
+- [x] e2e 两支 spec（chromium + mobile-chrome）通过；`node scripts/validate-public-docs.mjs` 通过（若 9.3 改动公开文档）。
+- [x] `openspec validate anchor-worktree-comparison-base --strict --no-interactive` 通过。
+- [x] durable spec 校验（9.2 两条命令）通过。
+- [x] 自查 spec delta 的 6 个 Requirement / 13 个 Scenario 逐条映射到测试（Go 矩阵或 e2e），无缺口。
 
 ## 状态恢复要求（apply 阶段）
 
