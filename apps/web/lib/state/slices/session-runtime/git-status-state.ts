@@ -130,7 +130,9 @@ function hasComparisonSummaryChanged(existing: GitStatusEntry, incoming: GitStat
   return (
     existing.comparison_target !== incoming.comparison_target ||
     existing.comparison_status !== incoming.comparison_status ||
-    existing.comparison_error_code !== incoming.comparison_error_code
+    existing.comparison_error_code !== incoming.comparison_error_code ||
+    existing.creation_base !== incoming.creation_base ||
+    existing.creation_base_error_code !== incoming.creation_base_error_code
   );
 }
 

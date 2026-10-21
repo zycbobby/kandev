@@ -105,3 +105,20 @@ export function deriveComparisonValues(statuses: GitStatusEntry[]) {
     comparisonErrorCode: unavailableStatus?.comparison_error_code ?? null,
   };
 }
+
+export function deriveCreationBaseValues(statuses: GitStatusEntry[]) {
+  const creationBases = Array.from(
+    new Set(
+      statuses
+        .map((status) => status.creation_base?.trim())
+        .filter((base): base is string => Boolean(base)),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+  const unavailableStatus = statuses.find(
+    (status) => Boolean(status.creation_base) && status.creation_base_error_code,
+  );
+  return {
+    creationBases,
+    creationBaseErrorCode: unavailableStatus?.creation_base_error_code ?? null,
+  };
+}

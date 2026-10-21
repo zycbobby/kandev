@@ -2851,5 +2851,7 @@
   "allPRsClosedNotice_one": "全部 {{count}} 个 PR 已关闭但未合并。您可以归档此任务。",
   "allPRsClosedNotice_other": "全部 {{count}} 个 PR 已关闭但未合并。您可以归档此任务。",
   "turnOffTranscriptAutoScroll": "关闭对话记录自动滚动",
-  "turnOnTranscriptAutoScroll": "开启对话记录自动滚动"
+  "turnOnTranscriptAutoScroll": "开启对话记录自动滚动",
+  "creationBaseLabel": "工作区基准分支",
+  "creationBaseUnavailable": "工作区基准不可用"
 }

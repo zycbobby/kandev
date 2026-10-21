@@ -25,6 +25,11 @@ export type GitStatusData = {
   comparison_target?: string;
   comparison_status?: string;
   comparison_error_code?: string;
+  /** Mother branch recorded when this worktree branch was cut, when the
+   *  creation-base comparison default is active. */
+  creation_base?: string;
+  /** Bounded failure code when the recorded creation base cannot resolve. */
+  creation_base_error_code?: string;
   remote_head_commit?: string;
   modified: string[];
   added: string[];

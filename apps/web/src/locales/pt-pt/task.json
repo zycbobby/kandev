@@ -2851,5 +2851,7 @@
   "allPRsClosedNotice_one": "O {{count}} PR foi fechado sem integração. Pode arquivar esta tarefa.",
   "allPRsClosedNotice_other": "Todos os {{count}} PRs foram fechados sem integração. Pode arquivar esta tarefa.",
   "turnOffTranscriptAutoScroll": "Desativar o deslocamento automático da transcrição",
-  "turnOnTranscriptAutoScroll": "Ativar o deslocamento automático da transcrição"
+  "turnOnTranscriptAutoScroll": "Ativar o deslocamento automático da transcrição",
+  "creationBaseLabel": "Ramo base da árvore de trabalho",
+  "creationBaseUnavailable": "Base da árvore de trabalho indisponível"
 }

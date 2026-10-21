@@ -114,6 +114,8 @@ export type GitStatusEntry = {
   comparison_target?: string;
   comparison_status?: string;
   comparison_error_code?: string;
+  creation_base?: string;
+  creation_base_error_code?: string;
   remote_ahead?: number;
   remote_behind?: number;
   remote_head_commit?: string;

@@ -198,6 +198,8 @@ export const MobileChangesPanel = memo(function MobileChangesPanel({
           taskId={data.activeTaskId}
           credentialDisplay={data.gitCredentialDisplay}
           comparisonTargets={data.git.comparisonTargets}
+          creationBases={data.git.creationBases}
+          creationBaseErrorCode={data.git.creationBaseErrorCode}
           {...buildContributionHeaderProps(data)}
         />
         <ChangesPanelBody {...bodyProps} comparisonRequestToken={comparisonRequestToken} />

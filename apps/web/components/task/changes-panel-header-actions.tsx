@@ -39,6 +39,7 @@ import { useTouchDrawer } from "@/hooks/use-compact-task-chrome";
 import { useTranslation } from "react-i18next";
 import { PerRepoPullMenu } from "./changes-panel-per-repo-menu";
 import { ComparisonTargetDisplay } from "./changes-panel-comparison-target";
+import { CreationBaseDisplay } from "./changes-panel-creation-base";
 import type { BranchRow, PerRepoStatus } from "./changes-panel-branch-rows";
 import {
   ChangesPanelRefreshIndicator,
@@ -224,6 +225,8 @@ export function BranchHoverCard({
   isRenaming,
   credentialDisplay,
   comparisonTargets,
+  creationBases,
+  creationBaseErrorCode,
 }: {
   displayBranch: string;
   baseBranchDisplay: string;
@@ -233,6 +236,8 @@ export function BranchHoverCard({
   isRenaming: boolean;
   credentialDisplay: GitCredentialDisplay | null;
   comparisonTargets: string[];
+  creationBases: string[];
+  creationBaseErrorCode: string | null;
 }) {
   const { t } = useTranslation();
   const usesTouchDrawer = useTouchDrawer();
@@ -285,6 +290,7 @@ export function BranchHoverCard({
         </div>
       )}
       <ComparisonTargetDisplay targets={comparisonTargets} />
+      <CreationBaseDisplay bases={creationBases} errorCode={creationBaseErrorCode} />
     </div>
   );
   if (usesTouchDrawer) {

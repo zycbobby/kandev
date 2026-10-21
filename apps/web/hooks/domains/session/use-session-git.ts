@@ -30,7 +30,11 @@ import {
   runRepositoryScopeWaves,
 } from "./use-session-git-repository-order";
 import { useMultiRepoSummary } from "./use-session-git-summary";
-import { deriveComparisonValues, deriveSessionGitValues } from "./use-session-git-derived";
+import {
+  deriveComparisonValues,
+  deriveCreationBaseValues,
+  deriveSessionGitValues,
+} from "./use-session-git-derived";
 import { useScopedStageOperations } from "./use-scoped-stage-operations";
 import { normalizeGitStatusFiles } from "@/lib/state/slices/session-runtime/git-status-normalizer";
 import { splitFilesByChangeLayer } from "./git-change-facets";
@@ -122,6 +126,8 @@ export type SessionGit = {
   comparisonTargets: string[];
   comparisonUnavailable: boolean;
   comparisonErrorCode: string | null;
+  creationBases: string[];
+  creationBaseErrorCode: string | null;
 
   // Operation state
   isLoading: boolean;
@@ -826,6 +832,7 @@ function deriveSessionGitPresentation(
       repositoryDetailsReady: areRepositoryDetailsReady(statusByRepo),
     }),
     ...deriveComparisonValues(comparisonStatuses(statusByRepo, gitStatus)),
+    ...deriveCreationBaseValues(comparisonStatuses(statusByRepo, gitStatus)),
   };
 }
 

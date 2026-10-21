@@ -62,6 +62,8 @@ type ChangesPanelHeaderProps = {
   onRenameBranch?: (newName: string, repo: string) => Promise<RenameBranchResult>;
   credentialDisplay: GitCredentialDisplay | null;
   comparisonTargets: string[];
+  creationBases: string[];
+  creationBaseErrorCode: string | null;
   repoDisplayName?: (repositoryName: string) => string | undefined;
   /** Active task id; piped into the base-branch picker so it can resolve
    *  the right task_repositories row to PATCH. Null while task data is
@@ -90,6 +92,8 @@ function ChangesPanelHeaderRight({
     loadingOperation,
     credentialDisplay,
     comparisonTargets,
+    creationBases,
+    creationBaseErrorCode,
     relation,
     contributionHistoryTarget,
     resolution,
@@ -119,6 +123,8 @@ function ChangesPanelHeaderRight({
           isRenaming={loadingOperation === "rename_branch"}
           credentialDisplay={credentialDisplay}
           comparisonTargets={comparisonTargets}
+          creationBases={creationBases}
+          creationBaseErrorCode={creationBaseErrorCode}
         />
       )}
       <RemoteContributionHeaderActions

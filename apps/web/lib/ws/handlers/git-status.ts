@@ -81,6 +81,8 @@ function buildGitStatusEntry(event: GitStatusUpdateEvent): GitStatusEntry {
     comparison_target: event.status.comparison_target,
     comparison_status: event.status.comparison_status,
     comparison_error_code: event.status.comparison_error_code,
+    creation_base: event.status.creation_base,
+    creation_base_error_code: event.status.creation_base_error_code,
     remote_ahead: event.status.remote_ahead,
     remote_behind: event.status.remote_behind,
     remote_head_commit: event.status.remote_head_commit,
