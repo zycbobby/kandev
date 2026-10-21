@@ -87,8 +87,8 @@ stateDiagram-v2
 
 ### 5. agentctl 比较解析（核心）
 
-- [ ] 5.1 新建 `internal/agentctl/server/process/creation_base.go`：`WorkspaceTracker.SetCreationBase(*models.CreationBase)`（mutex 下替换，`ComparisonResolution` 快照风格）+ `CreationBaseResolution()` 快照 + `ResolveCreationBaseAnchor(ctx) (sha string, err code)` 按 design D5 算法：`merge-base(HEAD, Ref)` 原样解析；Ref 不可解析或 merge-base 严格落后 ForkSHA（`IsAncestor(mb, Fork) && mb != Fork`）→ `ForkSHA`；最终 anchor 不可解析 → 有界错误码 `creation_base_ref_unavailable`；不调用 `CorrectStaleComparisonBase`。常量 `creationBaseErrorRefUnavailable`。
-- [ ] 5.2 三个插入点（都插在显式 comparison target 之后、branch-only 之前）：
+- [x] 5.1 新建 `internal/agentctl/server/process/creation_base.go`：`WorkspaceTracker.SetCreationBase(*models.CreationBase)`（mutex 下替换，`ComparisonResolution` 快照风格）+ `CreationBaseResolution()` 快照 + `ResolveCreationBaseAnchor(ctx) (sha string, err code)` 按 design D5 算法：`merge-base(HEAD, Ref)` 原样解析；Ref 不可解析或 merge-base 严格落后 ForkSHA（`IsAncestor(mb, Fork) && mb != Fork`）→ `ForkSHA`；最终 anchor 不可解析 → 有界错误码 `creation_base_ref_unavailable`；不调用 `CorrectStaleComparisonBase`。常量 `creationBaseErrorRefUnavailable`。
+- [x] 5.2 三个插入点（都插在显式 comparison target 之后、branch-only 之前）：
   - `workspace_git_status.go` base 解析（:468/:703 优先级层之下）：创建基存在 → `computeBaseCommit`/`ResolveBaseAnchor` 用 `ResolveCreationBaseAnchor`；状态载荷增创建基 display（母 ref 名）与错误码字段（镜像 ComparisonStatus/ComparisonErrorCode 的 DTO 路径到 `types.GitStatusUpdate`）。
   - `git.go:875-950` `runGitLogForRepo`：`comparison.Explicit` 分支后查 tracker 创建基 → 命中则 baseCommit = anchor（跳过 req.TargetBranch 路径与 stale 重锚）。
   - `git.go` `runGitCumulativeDiffForRepoResolved`（~:1151）：同上插入（实施前先读该函数，同构则镜像插入）。
@@ -127,7 +127,7 @@ stateDiagram-v2
 - [x] e2e 两支 spec（chromium + mobile-chrome）通过；`node scripts/validate-public-docs.mjs` 通过（若 9.3 改动公开文档）。
 - [x] `openspec validate anchor-worktree-comparison-base --strict --no-interactive` 通过。
 - [x] durable spec 校验（9.2 两条命令）通过。
-- [x] 自查 spec delta 的 6 个 Requirement / 13 个 Scenario 逐条映射到测试（Go 矩阵或 e2e），无缺口。
+- [x] 自查 spec delta 的 6 个 Requirement / 11 个 Scenario 逐条映射到测试（Go 矩阵或 e2e），无缺口。
 
 ## 状态恢复要求（apply 阶段）
 
