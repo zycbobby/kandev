@@ -400,6 +400,10 @@ type TaskRepoRepository interface {
 	// branch and clears provider-owned target metadata in one write. A manual
 	// selection also records that launch-time PR refresh must preserve it.
 	UpdateTaskRepositoryBaseBranchAndClearComparisonTarget(ctx context.Context, id, baseBranch string, manualSelection bool) (*models.TaskRepository, bool, error)
+	// UpdateTaskRepositoryCreationBase atomically records the comparison
+	// anchor captured when the attachment's worktree branch was cut. It never
+	// changes the checkout or base branch and preserves unrelated metadata.
+	UpdateTaskRepositoryCreationBase(ctx context.Context, id string, base *models.CreationBase) error
 	DeleteTaskRepository(ctx context.Context, id string) error
 	DeleteTaskRepositoriesByTask(ctx context.Context, taskID string) error
 	GetPrimaryTaskRepository(ctx context.Context, taskID string) (*models.TaskRepository, error)
