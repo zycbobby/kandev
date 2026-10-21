@@ -97,8 +97,8 @@ stateDiagram-v2
 
 ### 6. lifecycle 接线（seed / readiness / live push）
 
-- [ ] 6.1 新建 `internal/agent/runtime/lifecycle/manager_creation_base.go`（镜像 `manager_comparison_targets.go`）：`CreationBaseProvider` 类型 + `SetCreationBaseProvider` + `seedExecutionCreationBases` + `pushTaskCreationBases` + `PushCreationBasesForTask`；`executor_backend.go:214` 旁 `MetadataKeyCreationBases = "creation_bases"`；`manager_launch.go:1390-1396` 旁 collect + seed。
-- [ ] 6.2 backendapp 装配：provider 注入（task service 的 `TaskCreationBases`）+ `SetCreationBasePusher`（照 comparisonTargetPusher 接线点）。
+- [x] 6.1 新建 `internal/agent/runtime/lifecycle/manager_creation_base.go`（镜像 `manager_comparison_targets.go`）：`CreationBaseProvider` 类型 + `SetCreationBaseProvider` + `seedExecutionCreationBases` + `pushTaskCreationBases` + `PushCreationBasesForTask`；`executor_backend.go:214` 旁 `MetadataKeyCreationBases = "creation_bases"`；`manager_launch.go:1390-1396` 旁 collect + seed。
+- [x] 6.2 backendapp 装配：provider 注入（task service 的 `TaskCreationBases`）+ `SetCreationBasePusher`（照 comparisonTargetPusher 接线点）。
   - 测试：lifecycle 测试（seed 进 metadata、readiness 推送、live 更新走 `SetCreationBases`、空 map 不推送——照 `pushTaskBaseBranches` 的空保护注释）。
   - 准出：`go test ./internal/agent/runtime/lifecycle/ -run CreationBase -v` 绿。
 
