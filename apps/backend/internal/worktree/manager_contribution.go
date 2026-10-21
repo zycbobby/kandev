@@ -139,28 +139,28 @@ func (m *Manager) validateContributionAncestor(ctx context.Context, repoPath, ex
 
 func (m *Manager) addContributionWorktree(
 	ctx context.Context, req CreateRequest, worktreePath, startPoint, remoteName string,
-) (string, string, error) {
+) (string, string, branchCreationBase, error) {
 	branchName := req.CheckoutBranch
 	exists, err := m.branchExists(ctx, req.RepositoryPath, "refs/heads/"+branchName)
 	if err != nil {
-		return "", "", err
+		return "", "", branchCreationBase{}, err
 	}
 	if exists {
 		branchName = branchName + "-" + SmallSuffix(3)
 	}
-	id, err := m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
+	id, creation, err := m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
 	if err != nil && errors.Is(err, ErrBranchCheckedOut) {
 		branchName = req.CheckoutBranch + "-" + SmallSuffix(3)
-		id, err = m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
+		id, creation, err = m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
 	}
 	if err != nil {
-		return "", "", err
+		return "", "", branchCreationBase{}, err
 	}
 	if err := m.setUpstreamIfExistsRemote(ctx, worktreePath, branchName, remoteName, req.CheckoutBranch); err != nil {
 		_ = m.removeWorktreeDir(ctx, worktreePath, req.RepositoryPath)
-		return "", "", err
+		return "", "", branchCreationBase{}, err
 	}
-	return id, branchName, nil
+	return id, branchName, creation, nil
 }
 
 func (m *Manager) setUpstreamIfExistsRemote(ctx context.Context, worktreePath, localBranch, remoteName, remoteBranch string) error {

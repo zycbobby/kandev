@@ -2173,6 +2173,12 @@ func (s *Service) SetTaskRepositoryBaseBranchUpdater(updater executor.TaskReposi
 	s.executor.SetTaskRepositoryBaseBranchUpdater(updater)
 }
 
+// SetTaskRepositoryCreationBaseRecorder wires worktree creation-base
+// persistence into the executor.
+func (s *Service) SetTaskRepositoryCreationBaseRecorder(recorder executor.TaskRepositoryCreationBaseRecorder) {
+	s.executor.SetTaskRepositoryCreationBaseRecorder(recorder)
+}
+
 // SetPRBaseResolver wires best-effort pull-request base resolution at launch.
 func (s *Service) SetPRBaseResolver(resolver executor.PRBaseResolver) {
 	s.executor.SetPRBaseResolver(resolver)

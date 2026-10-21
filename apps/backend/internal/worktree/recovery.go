@@ -265,7 +265,7 @@ func (m *Manager) ensureRecoveryReplacementWorktree(ctx context.Context, reposit
 	if exists {
 		_, err = m.gitAddWorktreeExisting(ctx, repositoryPath, branch, replacementPath)
 	} else {
-		_, err = m.gitAddWorktree(ctx, repositoryPath, branch, replacementPath, baseRef)
+		_, _, err = m.gitAddWorktree(ctx, repositoryPath, branch, replacementPath, baseRef)
 	}
 	return err
 }

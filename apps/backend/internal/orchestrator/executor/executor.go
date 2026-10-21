@@ -876,7 +876,12 @@ type RepoWorktreeResult struct {
 	RequestedBaseBranch       string
 	BaseBranch                string
 	BaseBranchFallbackWarning string
-	ErrorMessage              string
+	// CreationBaseRef and CreationForkSHA carry the fork point captured when
+	// the worktree branch was newly cut; empty on reuse results. The executor
+	// persists them as the task repository's comparison default.
+	CreationBaseRef string
+	CreationForkSHA string
+	ErrorMessage    string
 }
 
 // TaskExecution tracks an active task execution
@@ -1265,10 +1270,11 @@ type Executor struct {
 	officeSessionLocks sync.Map // map[string]*sync.Mutex
 
 	// Optional cloner for provider-backed repos without a local path.
-	repoCloner                      RepoCloner
-	repoUpdater                     RepoUpdater
-	taskRepositoryBaseBranchUpdater TaskRepositoryBaseBranchUpdater
-	prBaseResolver                  PRBaseResolver
+	repoCloner                         RepoCloner
+	repoUpdater                        RepoUpdater
+	taskRepositoryBaseBranchUpdater    TaskRepositoryBaseBranchUpdater
+	taskRepositoryCreationBaseRecorder TaskRepositoryCreationBaseRecorder
+	prBaseResolver                     PRBaseResolver
 }
 
 // taskEnvLock returns the per-task mutex for env persistence, creating one on
@@ -1425,6 +1431,14 @@ type RepoUpdater interface {
 // tests remain independent of the task service.
 type TaskRepositoryBaseBranchUpdater interface {
 	UpdateTaskRepositoryBaseBranch(ctx context.Context, taskID, taskRepositoryID, baseBranch string) error
+}
+
+// TaskRepositoryCreationBaseRecorder persists the worktree creation base
+// captured at materialization on the exact task_repositories row. It is
+// optional so lifecycle and executor unit tests remain independent of the
+// task service.
+type TaskRepositoryCreationBaseRecorder interface {
+	UpdateTaskRepositoryCreationBase(ctx context.Context, taskRepositoryID string, base *models.CreationBase) error
 }
 
 // PRBaseResolver returns the current repository-qualified base for one PR.
@@ -1623,6 +1637,12 @@ func (e *Executor) SetOnTaskReviewStateReconcile(fn TaskReviewStateReconcileFunc
 func (e *Executor) SetRepoCloner(cloner RepoCloner, updater RepoUpdater) {
 	e.repoCloner = cloner
 	e.repoUpdater = updater
+}
+
+// SetTaskRepositoryCreationBaseRecorder wires the seam that persists the
+// worktree creation base captured at materialization.
+func (e *Executor) SetTaskRepositoryCreationBaseRecorder(recorder TaskRepositoryCreationBaseRecorder) {
+	e.taskRepositoryCreationBaseRecorder = recorder
 }
 
 // SetTaskRepositoryBaseBranchUpdater wires the task-service seam used by

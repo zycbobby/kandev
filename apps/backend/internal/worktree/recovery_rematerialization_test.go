@@ -143,7 +143,7 @@ func TestManager_RecoverWorktreeResumesAfterReplacementWorktreeWasCreated(t *tes
 	operationID := "33333333-3333-3333-3333-333333333333"
 	replacementPath := worktreePath + ".recovered-" + operationID[:8]
 	replacementBranch := original.Branch + "-recovered-" + operationID[:8]
-	if _, err := mgr.gitAddWorktree(ctx, repoPath, replacementBranch, replacementPath, original.Branch); err != nil {
+	if _, _, err := mgr.gitAddWorktree(ctx, repoPath, replacementBranch, replacementPath, original.Branch); err != nil {
 		t.Fatalf("create replacement before crash: %v", err)
 	}
 	removeRecoveryAdminDirectory(t, worktreePath)

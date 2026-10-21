@@ -424,6 +424,8 @@ func (a *lifecycleAdapter) LaunchAgent(ctx context.Context, req *executor.Launch
 				RequestedBaseBranch:       w.RequestedBaseBranch,
 				BaseBranch:                w.BaseBranch,
 				BaseBranchFallbackWarning: w.BaseBranchFallbackWarning,
+				CreationBaseRef:           w.CreationBaseRef,
+				CreationForkSHA:           w.CreationForkSHA,
 				ErrorMessage:              w.ErrorMessage,
 			})
 		}

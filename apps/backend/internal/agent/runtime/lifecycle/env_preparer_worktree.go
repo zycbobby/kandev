@@ -525,6 +525,8 @@ func (p *WorktreePreparer) prepareMultiRepo(
 			RequestedBaseBranch:       spec.BaseBranch,
 			BaseBranch:                wt.BaseBranch,
 			BaseBranchFallbackWarning: wt.BaseBranchFallbackWarning,
+			CreationBaseRef:           wt.CreationBaseRef,
+			CreationForkSHA:           wt.CreationForkSHA,
 		})
 	}
 

@@ -278,7 +278,12 @@ type RepoWorktreeResult struct {
 	RequestedBaseBranch       string `json:"requested_base_branch,omitempty"`
 	BaseBranch                string `json:"base_branch,omitempty"`
 	BaseBranchFallbackWarning string `json:"base_branch_fallback_warning,omitempty"`
-	ErrorMessage              string `json:"error_message,omitempty"`
+	// CreationBaseRef and CreationForkSHA carry the fork point captured when
+	// the worktree branch was newly cut; empty on reuse and recreate results.
+	// The executor persists them as the task repository's comparison default.
+	CreationBaseRef string `json:"-"`
+	CreationForkSHA string `json:"-"`
+	ErrorMessage    string `json:"error_message,omitempty"`
 }
 
 // EnvPrepareResult contains the result of environment preparation.

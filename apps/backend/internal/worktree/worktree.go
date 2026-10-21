@@ -162,6 +162,17 @@ type Worktree struct {
 	// (e.g. missing patterns, traversal-rejected paths). Like CopiedFiles,
 	// this is in-memory only and read by the env preparer.
 	CopyFilesWarnings []string `json:"-"`
+
+	// CreationBaseRef and CreationForkSHA capture the fork point this
+	// worktree's branch was cut from: the ref exactly as resolved at
+	// materialization time (a local base as its plain name, a remote-only
+	// base as "origin/<name>") and the commit it pointed at then. Populated
+	// only on the in-memory record returned by Create when a new branch was
+	// created; reuse and recreate paths leave them empty because the fork
+	// point is not re-observed there. The env preparer persists them as the
+	// task repository's comparison default. Not worktree-store state.
+	CreationBaseRef string `json:"-"`
+	CreationForkSHA string `json:"-"`
 }
 
 // CreateRequest contains the parameters for creating a new worktree.

@@ -353,6 +353,9 @@ func provideOrchestrator(
 	// after a successful launch. Keep this seam on the task service so the
 	// lifecycle and worktree packages remain task-agnostic.
 	orchestratorSvc.SetTaskRepositoryBaseBranchUpdater(&repoLocalPathUpdater{svc: taskSvc})
+	// The worktree creation base is a plain persistence action on the exact
+	// task repository row, so it goes straight to the repository seam.
+	orchestratorSvc.SetTaskRepositoryCreationBaseRecorder(&taskCreationBaseRecorder{repo: taskRepo})
 
 	return orchestratorSvc, msgCreator, nil
 }
@@ -1321,6 +1324,16 @@ func (u *repoLocalPathUpdater) UpdateTaskRepositoryBaseBranch(ctx context.Contex
 		BaseBranch:       baseBranch,
 	})
 	return err
+}
+
+// taskCreationBaseRecorder adapts the sqlite task repository to the
+// executor's creation-base recorder seam.
+type taskCreationBaseRecorder struct {
+	repo *sqliterepo.Repository
+}
+
+func (r *taskCreationBaseRecorder) UpdateTaskRepositoryCreationBase(ctx context.Context, taskRepositoryID string, base *taskmodels.CreationBase) error {
+	return r.repo.UpdateTaskRepositoryCreationBase(ctx, taskRepositoryID, base)
 }
 
 // repositoryResolverAdapter resolves GitHub repos by cloning + finding/creating DB records.

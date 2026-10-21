@@ -63,10 +63,10 @@ stateDiagram-v2
 
 ### 2. 物化捕获（worktree manager → executor 持久化）
 
-- [ ] 2.1 `internal/worktree/manager_lifecycle.go`：`newBranchAddSnapshot` 增 `baseRef string`；`createNewBranchRef` 把传入 `baseRef` 与已解析 `oid` 一并填入 snapshot 并随 `Worktree` 返回（`Worktree` 增 `CreationBaseRef` / `CreationForkSHA` 字段，`worktree.go`；仅 `createNewBranchRef` 新建分支路径填充，`tryReuseExisting` 复用路径不填）。
+- [x] 2.1 `internal/worktree/manager_lifecycle.go`：`newBranchAddSnapshot` 增 `baseRef string`；`createNewBranchRef` 把传入 `baseRef` 与已解析 `oid` 一并填入 snapshot 并随 `Worktree` 返回（`Worktree` 增 `CreationBaseRef` / `CreationForkSHA` 字段，`worktree.go`；仅 `createNewBranchRef` 新建分支路径填充，`tryReuseExisting` 复用路径不填）。
   - 测试：worktree manager 测试（现有 fixture）断言新建分支的 Worktree 带母 ref + tip OID、复用路径不带。
   - 准出：`go test ./internal/worktree/ -run CreationBase -v` 绿。
-- [ ] 2.2 `internal/agent/runtime/lifecycle/env_preparer.go:267` `RepoWorktreeResult` 增 `CreationBaseRef` / `CreationForkSHA`；`env_preparer_worktree.go:514` 从 Worktree 填充；`internal/orchestrator/executor/executor_execute.go`（`buildTaskEnvironmentRepos:3942` 持久化点旁）对每个带创建基的 result 调 `UpdateTaskRepositoryCreationBase`（失败记 warn 不阻断物化——记录是增强不是前置条件）。
+- [x] 2.2 `internal/agent/runtime/lifecycle/env_preparer.go:267` `RepoWorktreeResult` 增 `CreationBaseRef` / `CreationForkSHA`；`env_preparer_worktree.go:514` 从 Worktree 填充；`internal/orchestrator/executor/executor_execute.go`（`buildTaskEnvironmentRepos:3942` 持久化点旁）对每个带创建基的 result 调 `UpdateTaskRepositoryCreationBase`（失败记 warn 不阻断物化——记录是增强不是前置条件）。
   - 测试：executor 集成测试断言物化后 `task_repositories.metadata.creation_base` 落盘且 ref = base ref 原样、sha = 切出点。
   - 准出：`go test ./internal/orchestrator/executor/ -run CreationBase -v` 绿。
 

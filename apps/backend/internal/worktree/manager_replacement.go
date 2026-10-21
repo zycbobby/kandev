@@ -37,11 +37,13 @@ func (m *Manager) replaceUnrecoverableWorktree(
 	if err != nil {
 		return nil, err
 	}
-	if _, err := m.gitAddWorktree(ctx, replacementReq.RepositoryPath, branchName, worktreePath, baseRef); err != nil {
+	_, creation, err := m.gitAddWorktree(ctx, replacementReq.RepositoryPath, branchName, worktreePath, baseRef)
+	if err != nil {
 		return nil, fmt.Errorf("create replacement worktree for %q: %w", branchErr.BranchName(), err)
 	}
 
 	replacement := replacementRecord(existing, replacementReq, branchName, worktreePath, fallbackWarning, fallbackDetail)
+	creation.applyToWorktree(&replacement)
 	if err := m.persistReplacementWorktree(ctx, &replacement); err != nil {
 		if cleanupErr := m.cleanupFailedReplacement(ctx, &replacement); cleanupErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("cleanup replacement after persistence failure: %w", cleanupErr))

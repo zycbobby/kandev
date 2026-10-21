@@ -423,7 +423,7 @@ func TestManager_RecoverWorktreeCompletesAfterDurableRowWasAlreadyRetargeted(t *
 	}
 	replacementPath := original.Path + ".recovered-" + operationID[:8]
 	replacementBranch := original.Branch + "-recovered-" + operationID[:8]
-	if _, err := mgr.gitAddWorktree(context.Background(), repoPath, replacementBranch, replacementPath, original.Branch); err != nil {
+	if _, _, err := mgr.gitAddWorktree(context.Background(), repoPath, replacementBranch, replacementPath, original.Branch); err != nil {
 		t.Fatalf("create replacement: %v", err)
 	}
 	current := *original

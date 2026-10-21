@@ -931,12 +931,13 @@ func (m *Manager) createInTaskDir(ctx context.Context, req CreateRequest, baseRe
 		}
 	}
 
-	worktreeID, branchName, err := m.addWorktreeForBranch(ctx, checkoutMode, worktreePath, branchName, startPoint, baseRef)
+	worktreeID, branchName, creation, err := m.addWorktreeForBranch(ctx, checkoutMode, worktreePath, branchName, startPoint, baseRef)
 	if err != nil {
 		return nil, err
 	}
 
 	wt := m.buildWorktreeRecord(worktreeID, req, worktreePath, branchName)
+	creation.applyToWorktree(wt)
 	wt.BranchOwner = createdBranchOwner(checkoutMode.CheckoutBranch, branchName)
 	if fetchResult != nil {
 		wt.FetchWarning = fetchResult.Warning
@@ -1005,11 +1006,12 @@ func (m *Manager) createContributionInTaskDir(
 	if err != nil {
 		return nil, err
 	}
-	worktreeID, branchName, err := m.addContributionWorktree(ctx, req, worktreePath, contributionRef, remoteName)
+	worktreeID, branchName, creation, err := m.addContributionWorktree(ctx, req, worktreePath, contributionRef, remoteName)
 	if err != nil {
 		return nil, err
 	}
 	wt := m.buildWorktreeRecord(worktreeID, req, worktreePath, branchName)
+	creation.applyToWorktree(wt)
 	wt.BranchOwner = BranchOwnerExternal
 	if err := m.persistAndCacheWorktree(ctx, wt, req, worktreePath); err != nil {
 		return nil, err
@@ -1169,10 +1171,12 @@ func (m *Manager) validateTaskDir(taskDir string) error {
 // and falling back to a suffixed branch if the checkout branch is already in use.
 // When a checkout branch is specified, it sets the upstream tracking branch to
 // origin/<checkout-branch> when that ref points to the worktree's start point.
-func (m *Manager) addWorktreeForBranch(ctx context.Context, req CreateRequest, worktreePath, fallbackBranch, startPoint, baseRef string) (string, string, error) {
+// The returned creation base records where a newly created branch was cut from;
+// paths that check out an existing branch return the zero value.
+func (m *Manager) addWorktreeForBranch(ctx context.Context, req CreateRequest, worktreePath, fallbackBranch, startPoint, baseRef string) (string, string, branchCreationBase, error) {
 	if req.CheckoutBranch == "" {
-		id, err := m.gitAddWorktree(ctx, req.RepositoryPath, fallbackBranch, worktreePath, baseRef)
-		return id, fallbackBranch, err
+		id, creation, err := m.gitAddWorktree(ctx, req.RepositoryPath, fallbackBranch, worktreePath, baseRef)
+		return id, fallbackBranch, creation, err
 	}
 
 	// A pull request head is an immutable remote ref for this launch. Never
@@ -1182,24 +1186,25 @@ func (m *Manager) addWorktreeForBranch(ctx context.Context, req CreateRequest, w
 		branchName := req.CheckoutBranch
 		exists, probeErr := m.branchExists(ctx, req.RepositoryPath, branchName)
 		if probeErr != nil {
-			return "", "", fmt.Errorf("verify PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, probeErr)
+			return "", "", branchCreationBase{}, fmt.Errorf("verify PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, probeErr)
 		}
 		if exists {
 			return m.addPRWorktreeWithUniqueBranch(ctx, req, worktreePath, startPoint)
 		}
-		id, addErr := m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
+		id, creation, addErr := m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
 		if addErr == nil {
 			m.setUpstreamIfMatchesStartPoint(ctx, worktreePath, branchName, req.CheckoutBranch, startPoint)
-			return id, branchName, nil
+			return id, branchName, creation, nil
 		}
 		if !errors.Is(addErr, ErrBranchExists) {
-			return "", "", fmt.Errorf("materialize PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, addErr)
+			return "", "", branchCreationBase{}, fmt.Errorf("materialize PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, addErr)
 		}
 		return m.addPRWorktreeWithUniqueBranch(ctx, req, worktreePath, startPoint)
 	}
 
 	// Try checking out the PR branch directly (common case: single task per PR).
 	var id string
+	var creation branchCreationBase
 	var err error
 	if req.RemoteSyncHandled && startPoint != req.CheckoutBranch {
 		id, err = m.gitAddWorktreeExistingAtRef(ctx, req.RepositoryPath, req.CheckoutBranch, worktreePath, startPoint)
@@ -1208,20 +1213,20 @@ func (m *Manager) addWorktreeForBranch(ctx context.Context, req CreateRequest, w
 	}
 	if err == nil {
 		m.setUpstreamIfExists(ctx, worktreePath, req.CheckoutBranch, req.CheckoutBranch)
-		return id, req.CheckoutBranch, nil
+		return id, req.CheckoutBranch, creation, nil
 	}
 	if !errors.Is(err, ErrBranchCheckedOut) {
-		return "", "", err
+		return "", "", branchCreationBase{}, err
 	}
 
 	// Branch is in use by another worktree — create a unique fallback branch
 	// using the original branch name with a random suffix.
 	suffixed := req.CheckoutBranch + "-" + SmallSuffix(3)
-	id, err = m.gitAddWorktree(ctx, req.RepositoryPath, suffixed, worktreePath, startPoint)
+	id, creation, err = m.gitAddWorktree(ctx, req.RepositoryPath, suffixed, worktreePath, startPoint)
 	if err == nil {
 		m.setUpstreamIfExists(ctx, worktreePath, suffixed, req.CheckoutBranch)
 	}
-	return id, suffixed, err
+	return id, suffixed, creation, err
 }
 
 const prCheckoutBranchAttempts = 20
@@ -1242,25 +1247,25 @@ func prCheckoutBranchCandidates(checkoutBranch, taskID string) []string {
 	return candidates
 }
 
-func (m *Manager) addPRWorktreeWithUniqueBranch(ctx context.Context, req CreateRequest, worktreePath, startPoint string) (string, string, error) {
+func (m *Manager) addPRWorktreeWithUniqueBranch(ctx context.Context, req CreateRequest, worktreePath, startPoint string) (string, string, branchCreationBase, error) {
 	for _, branchName := range prCheckoutBranchCandidates(req.CheckoutBranch, req.TaskID) {
 		exists, probeErr := m.branchExists(ctx, req.RepositoryPath, branchName)
 		if probeErr != nil {
-			return "", "", fmt.Errorf("verify PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, probeErr)
+			return "", "", branchCreationBase{}, fmt.Errorf("verify PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, probeErr)
 		}
 		if exists {
 			continue
 		}
-		id, addErr := m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
+		id, creation, addErr := m.gitAddWorktree(ctx, req.RepositoryPath, branchName, worktreePath, startPoint)
 		if addErr == nil {
 			m.setUpstreamIfMatchesStartPoint(ctx, worktreePath, branchName, req.CheckoutBranch, startPoint)
-			return id, branchName, nil
+			return id, branchName, creation, nil
 		}
 		if !errors.Is(addErr, ErrBranchExists) {
-			return "", "", fmt.Errorf("materialize PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, addErr)
+			return "", "", branchCreationBase{}, fmt.Errorf("materialize PR checkout branch %q: %w: %w", branchName, ErrWorkspaceCheckoutFailed, addErr)
 		}
 	}
-	return "", "", fmt.Errorf(
+	return "", "", branchCreationBase{}, fmt.Errorf(
 		"materialize PR checkout branch %q after %d candidates: %w: %w",
 		req.CheckoutBranch,
 		prCheckoutBranchAttempts,
@@ -1776,6 +1781,28 @@ func (m *Manager) buildWorktreeNames(req CreateRequest) (dirName, branchName str
 type newBranchAddSnapshot struct {
 	branchRef string
 	branchOID string
+	// baseRef is the ref the new branch was cut from, recorded exactly as
+	// resolved so the fork point can be replayed later as a comparison base.
+	baseRef string
+}
+
+// branchCreationBase is the fork-point payload derived from a completed
+// new-branch add. It is empty whenever no new branch was created.
+type branchCreationBase struct {
+	ref     string
+	forkSHA string
+}
+
+func (s newBranchAddSnapshot) creationBase() branchCreationBase {
+	return branchCreationBase{ref: s.baseRef, forkSHA: s.branchOID}
+}
+
+func (b branchCreationBase) applyToWorktree(wt *Worktree) {
+	if b.ref == "" || b.forkSHA == "" {
+		return
+	}
+	wt.CreationBaseRef = b.ref
+	wt.CreationForkSHA = b.forkSHA
 }
 
 func (m *Manager) createNewBranchRef(
@@ -1803,6 +1830,7 @@ func (m *Manager) createNewBranchRef(
 		return newBranchAddSnapshot{}, ClassifyGitError(string(createOutput), createErr)
 	}
 	ownership.branchOID = oid
+	ownership.baseRef = baseRef
 	return ownership, nil
 }
 
@@ -1899,24 +1927,25 @@ func (m *Manager) rollbackFailedNewBranchAdd(
 	}
 }
 
-// gitAddWorktree runs "git worktree add" and returns the new worktree UUID.
-// If the repository uses git-crypt, it creates the worktree without checkout,
-// then unlocks git-crypt and performs the checkout separately.
-func (m *Manager) gitAddWorktree(ctx context.Context, repoPath, branchName, worktreePath, baseRef string) (string, error) {
+// gitAddWorktree runs "git worktree add" and returns the new worktree UUID
+// plus the branch creation base (the ref the new branch was cut from and its
+// commit). If the repository uses git-crypt, it creates the worktree without
+// checkout, then unlocks git-crypt and performs the checkout separately.
+func (m *Manager) gitAddWorktree(ctx context.Context, repoPath, branchName, worktreePath, baseRef string) (string, branchCreationBase, error) {
 	release, err := acquireWorktreeTargetPath(ctx, worktreePath)
 	if err != nil {
-		return "", fmt.Errorf("acquire worktree target path: %w", err)
+		return "", branchCreationBase{}, fmt.Errorf("acquire worktree target path: %w", err)
 	}
 	defer release()
 	return m.gitAddWorktreeLocked(ctx, repoPath, branchName, worktreePath, baseRef)
 }
 
-func (m *Manager) gitAddWorktreeLocked(ctx context.Context, repoPath, branchName, worktreePath, baseRef string) (string, error) {
+func (m *Manager) gitAddWorktreeLocked(ctx context.Context, repoPath, branchName, worktreePath, baseRef string) (string, branchCreationBase, error) {
 	worktreeID := uuid.New().String()
 	usesGitCrypt := m.usesGitCryptContext(ctx, repoPath)
 	addSnapshot, err := m.createNewBranchRef(ctx, repoPath, branchName, baseRef)
 	if err != nil {
-		return "", err
+		return "", branchCreationBase{}, err
 	}
 
 	args := []string{"worktree", "add"}
@@ -1940,26 +1969,26 @@ func (m *Manager) gitAddWorktreeLocked(ctx context.Context, repoPath, branchName
 		m.logger.Error("git worktree add failed",
 			zap.String("output", outStr),
 			zap.Error(err))
-		return "", ClassifyGitError(outStr, err)
+		return "", branchCreationBase{}, ClassifyGitError(outStr, err)
 	}
 
 	// If we used --no-checkout, we need to unlock git-crypt and checkout
 	if err := m.finishWorktreeCheckout(ctx, repoPath, worktreePath, usesGitCrypt); err != nil {
 		m.rollbackFailedNewBranchAdd(ctx, repoPath, branchName, worktreePath, addSnapshot)
-		return "", err
+		return "", branchCreationBase{}, err
 	}
 
-	return worktreeID, nil
+	return worktreeID, addSnapshot.creationBase(), nil
 }
 
 // gitAddWorktreeWithGitCrypt creates a worktree using --no-checkout and then
 // unlocks git-crypt. This is used as a fallback when we detect a git-crypt
 // smudge filter error.
-func (m *Manager) gitAddWorktreeWithGitCryptLocked(ctx context.Context, repoPath, branchName, worktreePath, baseRef string) (string, error) {
+func (m *Manager) gitAddWorktreeWithGitCryptLocked(ctx context.Context, repoPath, branchName, worktreePath, baseRef string) (string, branchCreationBase, error) {
 	worktreeID := uuid.New().String()
 	addSnapshot, err := m.createNewBranchRef(ctx, repoPath, branchName, baseRef)
 	if err != nil {
-		return "", err
+		return "", branchCreationBase{}, err
 	}
 
 	cmd := newGitCommand(ctx,
@@ -1974,16 +2003,16 @@ func (m *Manager) gitAddWorktreeWithGitCryptLocked(ctx context.Context, repoPath
 		m.logger.Error("git worktree add (--no-checkout) failed",
 			zap.String("output", string(output)),
 			zap.Error(err))
-		return "", ClassifyGitError(string(output), err)
+		return "", branchCreationBase{}, ClassifyGitError(string(output), err)
 	}
 
 	// Unlock git-crypt and checkout
 	if err := m.unlockGitCryptAndCheckout(ctx, worktreePath); err != nil {
 		m.rollbackFailedNewBranchAdd(ctx, repoPath, branchName, worktreePath, addSnapshot)
-		return "", err
+		return "", branchCreationBase{}, err
 	}
 
-	return worktreeID, nil
+	return worktreeID, addSnapshot.creationBase(), nil
 }
 
 // gitAddWorktreeForRecreate runs "git worktree add" against an existing branch

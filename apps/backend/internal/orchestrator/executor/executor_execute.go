@@ -3703,6 +3703,7 @@ func (e *Executor) persistTaskEnvironment(
 				}
 				bindSessionToTaskEnvironment(session, existingEnv)
 				e.selfHealTaskRepositoryBaseBranches(ctx, taskID, req, resp)
+				e.persistWorktreeCreationBases(ctx, resp)
 				return nil
 			}
 		}
@@ -3766,6 +3767,7 @@ func (e *Executor) persistTaskEnvironment(
 		}
 		bindSessionToTaskEnvironment(session, existingEnv)
 		e.selfHealTaskRepositoryBaseBranches(ctx, taskID, req, resp)
+		e.persistWorktreeCreationBases(ctx, resp)
 		return nil
 	}
 
@@ -3797,6 +3799,7 @@ func (e *Executor) persistTaskEnvironment(
 	}
 	bindSessionToTaskEnvironment(session, env)
 	e.selfHealTaskRepositoryBaseBranches(ctx, taskID, req, resp)
+	e.persistWorktreeCreationBases(ctx, resp)
 	return nil
 }
 
@@ -3833,6 +3836,33 @@ func (e *Executor) selfHealTaskRepositoryBaseBranches(
 		return
 	}
 	e.persistRecoveredBaseBranch(ctx, taskID, req.TaskRepositoryID, resp.RequestedBaseBranch, resp.BaseBranch, resp.BaseBranchFallbackWarning)
+}
+
+// persistWorktreeCreationBases records the fork point each newly
+// materialized worktree branch was cut from, so later comparison surfaces
+// can default to the worktree's own work. Best-effort by design: the record
+// is an enhancement, not a precondition of materialization, so a failure is
+// logged without aborting the launch.
+func (e *Executor) persistWorktreeCreationBases(ctx context.Context, resp *LaunchAgentResponse) {
+	if e.taskRepositoryCreationBaseRecorder == nil || resp == nil {
+		return
+	}
+	for _, result := range resp.Worktrees {
+		if result.TaskRepositoryID == "" || result.CreationBaseRef == "" || result.CreationForkSHA == "" {
+			continue
+		}
+		base := &models.CreationBase{
+			Version: models.CreationBaseVersion,
+			Ref:     result.CreationBaseRef,
+			ForkSHA: result.CreationForkSHA,
+		}
+		if err := e.taskRepositoryCreationBaseRecorder.UpdateTaskRepositoryCreationBase(ctx, result.TaskRepositoryID, base); err != nil {
+			e.logger.Warn("failed to persist worktree creation base",
+				zap.String("task_repository_id", result.TaskRepositoryID),
+				zap.String("creation_base_ref", result.CreationBaseRef),
+				zap.Error(err))
+		}
+	}
 }
 
 func (e *Executor) persistRecoveredBaseBranch(
