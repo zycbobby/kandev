@@ -85,7 +85,11 @@ type WorkspaceTracker struct {
 	comparisonTargetStatus    string
 	comparisonTargetErrorCode string
 	comparisonGeneration      uint64
-	gitEnvironmentGeneration  atomic.Uint64
+	// creationBase is the fork point this worktree branch was cut from, when
+	// the backend recorded one. It outranks the origin-first default but not
+	// an explicit comparisonTarget; nil means no default is installed.
+	creationBase             *models.CreationBase
+	gitEnvironmentGeneration atomic.Uint64
 	// comparisonAnchor is set for an initialized submodule. Unlike a branch
 	// name, it must remain pinned to the gitlink commit recorded by the parent
 	// comparison tree, even when the submodule's own default branch moves.

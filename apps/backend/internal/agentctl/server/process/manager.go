@@ -222,6 +222,11 @@ type Manager struct {
 	// from branch-only overrides. Updating one target must not race tracker
 	// creation or rewrite siblings' authoritative state.
 	comparisonTargetsMu sync.RWMutex
+
+	// creationBasesMu guards mutations to cfg.CreationBases so the
+	// UpdateCreationBases writer serializes with the readers that look up
+	// per-repo creation bases when stamping or spawning trackers.
+	creationBasesMu sync.RWMutex
 	// trackerGitEnv is the process manager's detached snapshot of the instance
 	// environment used by workspace trackers. Each tracker receives its own
 	// copy so tracker-local changes cannot affect another tracker.

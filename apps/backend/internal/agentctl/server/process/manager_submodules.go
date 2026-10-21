@@ -88,6 +88,7 @@ func (m *Manager) configureTracker(tracker *WorkspaceTracker, repositoryName str
 		tracker.SetBaseBranch(lookupBaseBranch(m.getBaseBranches(), repositoryName))
 	}
 	tracker.SetComparisonTarget(m.comparisonTargetFor(repositoryName))
+	tracker.SetCreationBase(lookupCreationBase(m.getCreationBases(), repositoryName))
 }
 
 func (m *Manager) buildRepositoryScopeTrackers(

@@ -21,8 +21,14 @@ func (c *Client) SetComparisonTargets(ctx context.Context, targets map[string]mo
 	if err != nil {
 		return err
 	}
+	return c.postWorkspaceControlJSON(ctx, "comparison-targets", "set comparison targets", body)
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/workspace/comparison-targets", bytes.NewReader(body))
+// postWorkspaceControlJSON posts one internal workspace-control payload to
+// this instance's agentctl server and treats any non-2xx response as an
+// error. label names the operation in the returned error.
+func (c *Client) postWorkspaceControlJSON(ctx context.Context, endpoint, label string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/workspace/"+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -36,7 +42,7 @@ func (c *Client) SetComparisonTargets(ctx context.Context, targets map[string]mo
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := readResponseBody(resp)
-		return fmt.Errorf("set comparison targets failed with status %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("%s failed with status %d: %s", label, resp.StatusCode, string(respBody))
 	}
 	return nil
 }

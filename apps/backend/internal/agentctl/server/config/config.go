@@ -374,6 +374,14 @@ type InstanceConfig struct {
 	// tracker polling so an unavailable target cannot fall back to origin.
 	ComparisonTargets map[string]models.ComparisonTarget
 
+	// CreationBases maps repository subpaths to the fork point recorded when
+	// each worktree branch was cut. A subpath with a creation base resolves
+	// its comparison surfaces against the recorded local ref (falling back to
+	// the fork SHA) instead of the origin-first default. Rows whose explicit
+	// comparison target or manual selection outranks the default are not
+	// present in this map.
+	CreationBases map[string]models.CreationBase
+
 	// RemoteContributions maps workspace repository subpaths to the
 	// server-authored contribution binding used for source-routed writes.
 	RemoteContributions      map[string]models.RemoteContribution
@@ -755,6 +763,9 @@ func applyOverrides(cfg *InstanceConfig, overrides *InstanceOverrides) {
 	if len(overrides.ComparisonTargets) > 0 {
 		cfg.ComparisonTargets = cloneComparisonTargets(overrides.ComparisonTargets)
 	}
+	if len(overrides.CreationBases) > 0 {
+		cfg.CreationBases = cloneCreationBases(overrides.CreationBases)
+	}
 	if len(overrides.RemoteContributions) > 0 {
 		cfg.RemoteContributions = cloneRemoteContributions(overrides.RemoteContributions)
 	}
@@ -817,6 +828,7 @@ type InstanceOverrides struct {
 	ProviderGatewayAuth        *acpprovider.GatewayAuth
 	BaseBranches               map[string]string
 	ComparisonTargets          map[string]models.ComparisonTarget
+	CreationBases              map[string]models.CreationBase
 	RemoteContributions        map[string]models.RemoteContribution
 	ContributionDestinations   map[string]models.ContributionDestination
 	WorkspaceSourceRoots       []string
@@ -831,6 +843,17 @@ func cloneComparisonTargets(values map[string]models.ComparisonTarget) map[strin
 		return nil
 	}
 	cloned := make(map[string]models.ComparisonTarget, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneCreationBases(values map[string]models.CreationBase) map[string]models.CreationBase {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]models.CreationBase, len(values))
 	for key, value := range values {
 		cloned[key] = value
 	}

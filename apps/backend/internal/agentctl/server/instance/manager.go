@@ -382,6 +382,7 @@ func (m *Manager) buildInstanceOverrides(id string, req *CreateRequest, agentCmd
 		ProviderGatewayAuth:        req.ProviderGatewayAuth,
 		BaseBranches:               req.BaseBranches,
 		ComparisonTargets:          req.ComparisonTargets,
+		CreationBases:              req.CreationBases,
 		RemoteContributions:        req.RemoteContributions,
 		ContributionDestinations:   req.ContributionDestinations,
 		WorkspaceSourceRoots:       req.WorkspaceSourceRoots,

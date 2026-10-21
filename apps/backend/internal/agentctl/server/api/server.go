@@ -169,6 +169,9 @@ func (s *Server) setupRoutes() {
 		// Provider-qualified comparison targets are authenticated internal state;
 		// the backend uses this route after association, retarget, and resume.
 		api.POST("/workspace/comparison-targets", s.handleSetComparisonTargets)
+		// Worktree creation bases are authenticated internal state; the backend
+		// uses this route after materialization and base-branch selections.
+		api.POST("/workspace/creation-bases", s.handleSetCreationBases)
 
 		// Workspace file operations (simple HTTP)
 		api.GET("/workspace/tree", s.handleFileTree)
