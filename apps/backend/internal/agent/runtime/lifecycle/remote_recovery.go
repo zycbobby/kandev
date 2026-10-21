@@ -628,6 +628,7 @@ func (m *Manager) finishTrackedRemoteExecution(
 	if client, releaseClient := execution.AcquireAgentCtlClient(); client != nil {
 		m.pushTaskBaseBranches(ctx, execution.TaskID, execution.ID, client)
 		m.pushTaskComparisonTargets(ctx, execution.TaskID, execution.ID, client)
+		m.pushTaskCreationBases(ctx, execution.TaskID, execution.ID, client)
 		releaseClient()
 	}
 	m.completeRemoteRecovery(entry)

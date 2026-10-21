@@ -118,6 +118,42 @@ func comparisonTargetsFromMetadata(metadata map[string]interface{}) (map[string]
 	return validateComparisonTargets(decoded)
 }
 
+func creationBasesFromMetadata(metadata map[string]interface{}) (map[string]models.CreationBase, error) {
+	if metadata == nil {
+		return nil, nil
+	}
+	raw, ok := metadata[MetadataKeyCreationBases]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	if typed, ok := raw.(map[string]models.CreationBase); ok {
+		return validateCreationBases(typed)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode creation bases: %w", err)
+	}
+	var decoded map[string]models.CreationBase
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil, fmt.Errorf("decode creation bases: %w", err)
+	}
+	return validateCreationBases(decoded)
+}
+
+func validateCreationBases(values map[string]models.CreationBase) (map[string]models.CreationBase, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	validated := make(map[string]models.CreationBase, len(values))
+	for key, base := range values {
+		if err := base.Validate(); err != nil {
+			return nil, fmt.Errorf("validate creation base %q: %w", key, err)
+		}
+		validated[key] = base
+	}
+	return validated, nil
+}
+
 func validateComparisonTargets(values map[string]models.ComparisonTarget) (map[string]models.ComparisonTarget, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -215,6 +251,7 @@ const (
 	MetadataKeyRemoteContributions      = "remote_contributions"
 	MetadataKeyContributionDestinations = "contribution_destinations"
 	MetadataKeyComparisonTargets        = "comparison_targets"
+	MetadataKeyCreationBases            = "creation_bases"
 	MetadataKeyExecutorType             = "executor_type"
 	MetadataKeyIsRemote                 = "is_remote"
 	MetadataKeyRemoteAuthHome           = "remote_auth_target_home"
@@ -697,7 +734,10 @@ type ExecutorCreateRequest struct {
 	RemoteContributions      map[string]models.RemoteContribution
 	ContributionDestinations map[string]models.ContributionDestination
 	ComparisonTargets        map[string]models.ComparisonTarget
-	McpServers               []McpServerConfig
+	// CreationBases carries the worktree fork points recorded at
+	// materialization, keyed by the same workspace subpath convention.
+	CreationBases map[string]models.CreationBase
+	McpServers    []McpServerConfig
 	// ProviderGatewayAuth authenticates the ACP agent against an
 	// OpenAI-compatible gateway right after initialize. Resolved from the
 	// launching profile's OpenAI-compatible provider fields.

@@ -685,6 +685,7 @@ func (m *Manager) waitForAgentctlReady(execution *AgentExecution) {
 	}
 	m.pushTaskBaseBranches(ctx, execution.TaskID, execution.ID, client)
 	m.pushTaskComparisonTargets(ctx, execution.TaskID, execution.ID, client)
+	m.pushTaskCreationBases(ctx, execution.TaskID, execution.ID, client)
 	releaseClient()
 	execution.MarkAgentctlReady()
 

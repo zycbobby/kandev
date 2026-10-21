@@ -684,6 +684,7 @@ func startAgentInfrastructure(
 		repos.Secrets,
 		services.Task.TaskBaseBranches,
 		services.Task.TaskComparisonTargets,
+		services.Task.TaskCreationBases,
 		services.ManagedRuntimeSelections,
 		mcpScopeResolver.Scope,
 		mcpScopeResolver.ScopePrincipal,
@@ -723,6 +724,7 @@ func startAgentInfrastructure(
 	services.Task.SetWorkspaceSourceProviderRefresher(newTaskMCPProviderRefresher(repos.Task, lifecycleMgr, log))
 	services.Task.SetAgentBaseBranchPusher(lifecycleMgr)
 	services.Task.SetAgentComparisonTargetPusher(lifecycleMgr)
+	services.Task.SetAgentCreationBasePusher(lifecycleMgr)
 	services.Task.SetExecutorCapabilityProber(lifecycleMgr)
 	services.Task.SetRepositoryCheckoutCredentialPolicy(func(ctx context.Context, workspaceID string) (bool, error) {
 		if services.GitHub == nil {

@@ -105,6 +105,7 @@ type CreateInstanceRequest struct {
 	RemoteContributions      map[string]models.RemoteContribution      `json:"remote_contributions,omitempty"`
 	ContributionDestinations map[string]models.ContributionDestination `json:"contribution_destinations,omitempty"`
 	ComparisonTargets        map[string]models.ComparisonTarget        `json:"comparison_targets,omitempty"`
+	CreationBases            map[string]models.CreationBase            `json:"creation_bases,omitempty"`
 	// WorkspaceSourceRoots are canonical host roots explicitly attached to the
 	// workspace. Agentctl permits file operations through links only beneath
 	// these roots.

@@ -1395,6 +1395,13 @@ func (m *Manager) launchBuildExecutorRequest(ctx context.Context, executionID st
 	if len(comparisonTargets) > 0 {
 		metadata[MetadataKeyComparisonTargets] = comparisonTargets
 	}
+	creationBases, err := m.collectLaunchCreationBases(ctx, reqWithWorktree)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(creationBases) > 0 {
+		metadata[MetadataKeyCreationBases] = creationBases
+	}
 	contributionDestinations, err := collectContributionDestinations(reqWithWorktree)
 	if err != nil {
 		return nil, nil, nil, err
@@ -1485,6 +1492,7 @@ func (m *Manager) launchBuildExecutorRequest(ctx context.Context, executionID st
 		RemoteContributions:            remoteContributions,
 		ContributionDestinations:       contributionDestinations,
 		ComparisonTargets:              comparisonTargets,
+		CreationBases:                  creationBases,
 		ProviderGatewayAuth:            providerGatewayAuth,
 	}
 	if reqWithWorktree.ExecutorType == string(models.ExecutorTypePluginRemote) {
@@ -2188,6 +2196,12 @@ func (m *Manager) launchInternal(ctx context.Context, req *LaunchRequest) (*Agen
 			maps.Copy(metadata, reqWithWorktree.Metadata)
 			metadata[MetadataKeyWorktreePath] = prepResult.WorktreePath
 			reqWithWorktree.Metadata = metadata
+		}
+		// Freshly observed fork points seed the instance before the executor
+		// persists them; the durable projection alone cannot serve the first
+		// session of a materialization.
+		if err := stashPreparedCreationBases(&reqWithWorktree, prepResult); err != nil {
+			return nil, err
 		}
 	}
 

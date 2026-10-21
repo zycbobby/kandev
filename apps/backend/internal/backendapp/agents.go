@@ -34,6 +34,7 @@ func provideLifecycleManager(
 	rawSecretStore secrets.SecretStore,
 	baseBranchProvider lifecycle.BaseBranchProvider,
 	comparisonTargetProvider lifecycle.ComparisonTargetProvider,
+	creationBaseProvider lifecycle.CreationBaseProvider,
 	managedRuntimeSelections managedruntime.SelectionReader,
 	mcpIdentityScoper lifecycle.MCPIdentityScoper,
 	mcpPrincipalScoper lifecycle.MCPPrincipalScoper,
@@ -192,6 +193,10 @@ func provideLifecycleManager(
 	// Wire the comparison-target provider before Start so recovered executions
 	// hydrate the exact provider-qualified ref before their first status poll.
 	lifecycleMgr.SetComparisonTargetProvider(comparisonTargetProvider)
+	// Wire the creation-base provider before Start so recovered executions
+	// hydrate their fork-point comparison default before their first status
+	// poll, and fresh materializations merge it with the observed fork points.
+	lifecycleMgr.SetCreationBaseProvider(creationBaseProvider)
 	// Recovered executions can dispatch MCP calls as soon as Start resumes
 	// their streams. Install both trusted scopes before Start, not after route
 	// registration, so the first recovered call has the same authority boundary

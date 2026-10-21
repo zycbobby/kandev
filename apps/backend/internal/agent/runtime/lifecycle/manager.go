@@ -259,6 +259,10 @@ type Manager struct {
 	// every workspace creation path can seed agentctl from durable state.
 	comparisonTargetProvider ComparisonTargetProvider
 
+	// creationBaseProvider hydrates task-repository creation bases so every
+	// workspace creation path can seed agentctl from durable state.
+	creationBaseProvider CreationBaseProvider
+
 	// secretStore encrypts/decrypts runtime auth tokens (e.g., agentctl handshake tokens).
 	// Used to persist tokens across backend restarts for remote executor recovery.
 	secretStore secrets.SecretStore

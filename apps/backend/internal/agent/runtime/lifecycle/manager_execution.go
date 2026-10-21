@@ -1123,6 +1123,10 @@ func (m *Manager) prepareExecutionCreateRequest(
 			return nil, err
 		}
 	}
+	creationBases, err := creationBasesFromMetadata(metadata)
+	if err != nil {
+		return nil, err
+	}
 	autoApprove := false
 	var autoApproveOverride *bool
 	if profileInfo != nil {
@@ -1190,6 +1194,7 @@ func (m *Manager) prepareExecutionCreateRequest(
 			ManagedRuntimeSource:           managedRuntimeOptions.ManagedRuntimeSource,
 			NativeRuntimeVersion:           managedRuntimeOptions.NativeRuntimeVersion,
 			ComparisonTargets:              comparisonTargets,
+			CreationBases:                  creationBases,
 		},
 		profileInfo: profileInfo,
 	}

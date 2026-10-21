@@ -533,6 +533,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			if client, releaseClient := execution.AcquireAgentCtlClient(); client != nil {
 				m.pushTaskBaseBranches(recoveryCtx, execution.TaskID, execution.ID, client)
 				m.pushTaskComparisonTargets(recoveryCtx, execution.TaskID, execution.ID, client)
+				m.pushTaskCreationBases(recoveryCtx, execution.TaskID, execution.ID, client)
 				releaseClient()
 			}
 
