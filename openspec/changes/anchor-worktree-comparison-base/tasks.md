@@ -72,8 +72,8 @@ stateDiagram-v2
 
 ### 3. task service 投影与 live 更新
 
-- [ ] 3.1 新建 `internal/task/service/service_creation_base_projection.go`（镜像 `service_comparison_target_projection.go`）：`collectTaskCreationBases(ctx, taskID) (map[string]models.CreationBase, error)`——键与 comparison targets 相同的 repo subpath 约定；**逐行跳过**带 `comparison_target` 或 `manual_base_branch_override` 的行（D3 优先级裁决点）；`TaskCreationBases` 导出 + `PushCreationBasesForTask` 接口字段（`service.go:248` 旁）。
-- [ ] 3.2 `service_branch_update.go:153-179` `applyBaseBranchSideEffects` 末尾追加创建基推送（`s.creationBasePusher.PushCreationBasesForTask`，best-effort warn，照既有两推送）。
+- [x] 3.1 新建 `internal/task/service/service_creation_base_projection.go`（镜像 `service_comparison_target_projection.go`）：`collectTaskCreationBases(ctx, taskID) (map[string]models.CreationBase, error)`——键与 comparison targets 相同的 repo subpath 约定；**逐行跳过**带 `comparison_target` 或 `manual_base_branch_override` 的行（D3 优先级裁决点）；`TaskCreationBases` 导出 + `PushCreationBasesForTask` 接口字段（`service.go:248` 旁）。
+- [x] 3.2 `service_branch_update.go:153-179` `applyBaseBranchSideEffects` 末尾追加创建基推送（`s.creationBasePusher.PushCreationBasesForTask`，best-effort warn，照既有两推送）。
   - 测试：service 测试——手动选择后 collect 跳过该行；带 comparison_target 的行跳过；普通行进入 map。
   - 准出：`go test ./internal/task/service/ -run CreationBase -v` 绿。
 

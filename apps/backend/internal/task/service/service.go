@@ -248,6 +248,15 @@ type AgentComparisonTargetPusher interface {
 	PushComparisonTargetsForTask(ctx context.Context, taskID string, targets map[string]models.ComparisonTarget)
 }
 
+// AgentCreationBasePusher pushes the effective creation-base map to every
+// running agentctl execution for a task. Implementations must replace the
+// complete projection, including an empty map, so a row that gained an
+// explicit comparison target or a manual base-branch selection cannot keep a
+// stale creation base cached in a live workspace.
+type AgentCreationBasePusher interface {
+	PushCreationBasesForTask(ctx context.Context, taskID string, bases map[string]models.CreationBase)
+}
+
 type BranchMaterializer interface {
 	// MaterializeBranch creates the worktree for a freshly inserted
 	// task_repositories row. Best-effort: when no active session exists yet
@@ -592,6 +601,7 @@ type Service struct {
 	workspaceSecretDeleter         WorkspaceSecretDeleter
 	baseBranchPusher               AgentBaseBranchPusher
 	comparisonTargetPusher         AgentComparisonTargetPusher
+	creationBasePusher             AgentCreationBasePusher
 	backgroundWorkActionDispatcher BackgroundWorkActionDispatcher
 	runtimeOverridesMu             sync.Mutex
 
@@ -910,6 +920,13 @@ func (s *Service) SetAgentBaseBranchPusher(p AgentBaseBranchPusher) {
 // metadata remains authoritative and is hydrated at the next launch.
 func (s *Service) SetAgentComparisonTargetPusher(p AgentComparisonTargetPusher) {
 	s.comparisonTargetPusher = p
+}
+
+// SetAgentCreationBasePusher wires the live-update push for creation bases.
+// Optional: when unset, the persisted attachment metadata remains
+// authoritative and is hydrated at the next launch.
+func (s *Service) SetAgentCreationBasePusher(p AgentCreationBasePusher) {
+	s.creationBasePusher = p
 }
 
 // SetProviderDefaultBranchProber wires the synchronous default-branch probe

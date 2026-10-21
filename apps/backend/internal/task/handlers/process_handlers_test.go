@@ -273,6 +273,13 @@ func (m *mockRepository) UpdateTaskRepositoryBaseBranchAndClearComparisonTarget(
 ) (*models.TaskRepository, bool, error) {
 	return nil, false, nil
 }
+func (m *mockRepository) UpdateTaskRepositoryCreationBase(
+	context.Context,
+	string,
+	*models.CreationBase,
+) error {
+	return nil
+}
 func (m *mockRepository) DeleteTaskRepository(ctx context.Context, id string) error {
 	return nil
 }

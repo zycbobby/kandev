@@ -129,32 +129,85 @@ func (s *Service) applyComparisonTargetSideEffects(ctx context.Context, taskID, 
 }
 
 func (s *Service) collectTaskComparisonTargets(ctx context.Context, taskID string) (map[string]models.ComparisonTarget, error) {
-	taskRepos, err := s.taskRepos.ListTaskRepositories(ctx, taskID)
+	return collectTrackerProjection(ctx, s.taskRepos, s.workspaceSourceExecutorType, taskID, "comparison-target", s.loadComparisonTargetInput)
+}
+
+// collectTrackerProjection builds one agentctl tracker-key map from a per-row
+// projection loader. The loader returns the row's repository entity, its
+// projected value, and whether the row contributes an entry; rows that do not
+// contribute may still return a repository so the positional branch-identity
+// plans — and therefore every row's tracker key — stay aligned across the
+// base-branch, comparison-target, and creation-base projections.
+func collectTrackerProjection[T any](
+	ctx context.Context,
+	lister interface {
+		ListTaskRepositories(ctx context.Context, taskID string) ([]*models.TaskRepository, error)
+	},
+	resolveExecutorType func(ctx context.Context, taskID string) (string, error),
+	taskID, label string,
+	loadRow func(ctx context.Context, taskRepo *models.TaskRepository) (*models.Repository, T, bool, error),
+) (map[string]T, error) {
+	taskRepos, err := lister.ListTaskRepositories(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("list task repositories for comparison-target map: %w", err)
+		return nil, fmt.Errorf("list task repositories for %s map: %w", label, err)
 	}
-	executorType, err := s.workspaceSourceExecutorType(ctx, taskID)
+	executorType, err := resolveExecutorType(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve executor type for comparison-target map: %w", err)
+		return nil, fmt.Errorf("resolve executor type for %s map: %w", label, err)
 	}
+	repos, values, hasValue, err := loadTrackerProjectionRows(ctx, taskRepos, loadRow)
+	if err != nil {
+		return nil, err
+	}
+	inputs := trackerProjectionInputs(repos, taskRepos)
+	plans := worktree.BuildBranchIdentityPlans(inputs)
+	result := make(map[string]T, len(taskRepos)+1)
+	for i, value := range values {
+		if !hasValue[i] || repos[i] == nil {
+			continue
+		}
+		key, err := taskRepositoryWorkspaceTrackerKey(executorType, i, repos[i], taskRepos[i], plans[i].PathSlug)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s workspace for repository %q: %w", label, repos[i].Name, err)
+		}
+		result[key] = value
+	}
+	if len(taskRepos) == 1 && hasValue[0] && executorType != string(models.ExecutorTypePluginRemote) {
+		result[""] = values[0]
+	}
+	return result, nil
+}
+
+// loadTrackerProjectionRows runs the per-row loader positionally, keeping the
+// repository entities aligned with the task-repository rows.
+func loadTrackerProjectionRows[T any](
+	ctx context.Context,
+	taskRepos []*models.TaskRepository,
+	loadRow func(ctx context.Context, taskRepo *models.TaskRepository) (*models.Repository, T, bool, error),
+) ([]*models.Repository, []T, []bool, error) {
 	repos := make([]*models.Repository, len(taskRepos))
-	targets := make([]models.ComparisonTarget, len(taskRepos))
-	hasTarget := make([]bool, len(taskRepos))
+	values := make([]T, len(taskRepos))
+	hasValue := make([]bool, len(taskRepos))
 	for i, taskRepo := range taskRepos {
 		if taskRepo == nil {
 			continue
 		}
-		repo, target, ok, err := s.loadComparisonTargetInput(ctx, taskRepo)
+		repo, value, ok, err := loadRow(ctx, taskRepo)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		if ok {
-			targets[i] = target
-			hasTarget[i] = true
+			values[i] = value
+			hasValue[i] = true
 		}
 		repos[i] = repo
 	}
+	return repos, values, hasValue, nil
+}
 
+// trackerProjectionInputs builds the branch-identity inputs for every row so
+// each projection's tracker keys agree with the worktree layout.
+func trackerProjectionInputs(repos []*models.Repository, taskRepos []*models.TaskRepository) []worktree.BranchIdentityInput {
 	inputs := make([]worktree.BranchIdentityInput, len(taskRepos))
 	for i, taskRepo := range taskRepos {
 		defaultBranch := ""
@@ -170,22 +223,7 @@ func (s *Service) collectTaskComparisonTargets(ctx context.Context, taskID strin
 			Position:       taskRepo.Position,
 		}
 	}
-	plans := worktree.BuildBranchIdentityPlans(inputs)
-	result := make(map[string]models.ComparisonTarget, len(taskRepos)+1)
-	for i, target := range targets {
-		if !hasTarget[i] || repos[i] == nil {
-			continue
-		}
-		key, err := taskRepositoryWorkspaceTrackerKey(executorType, i, repos[i], taskRepos[i], plans[i].PathSlug)
-		if err != nil {
-			return nil, fmt.Errorf("resolve comparison-target workspace for repository %q: %w", repos[i].Name, err)
-		}
-		result[key] = target
-	}
-	if len(taskRepos) == 1 && hasTarget[0] && executorType != string(models.ExecutorTypePluginRemote) {
-		result[""] = targets[0]
-	}
-	return result, nil
+	return inputs
 }
 
 func (s *Service) loadComparisonTargetInput(

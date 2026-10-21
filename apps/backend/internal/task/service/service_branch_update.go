@@ -176,6 +176,11 @@ func (s *Service) applyBaseBranchSideEffects(ctx context.Context, taskID, reposi
 		}
 	}
 	s.pushTaskComparisonTargets(ctx, taskID)
+	// The creation-base projection tracks the same rows: after a manual
+	// selection the row carries the override marker, so this push replaces
+	// the agentctl map without it and the tracker falls back to the newly
+	// selected base branch's ordinary resolution.
+	s.pushTaskCreationBases(ctx, taskID)
 }
 
 // isSafeBaseBranchRef delegates to the shared
