@@ -79,9 +79,9 @@ stateDiagram-v2
 
 ### 4. agentctl 传输管道（config / instance / 控制路由）
 
-- [ ] 4.1 `internal/agentctl/server/config/config.go`：`InstanceConfig` 增 `CreationBases map[string]models.CreationBase`（镜像 `ComparisonTargets:372-375` 与 `cloneComparisonTargets:829` 的 clone）；`internal/agentctl/server/instance/instance.go:229` 旁增 `creation_bases` 请求字段；`instance/manager.go:305,384` 传递。
-- [ ] 4.2 `internal/agentctl/server/process/manager.go`：增 `UpdateCreationBases(ctx, map[string]models.CreationBase)`（照 `UpdateBaseBranches:1272` —— 替换 map、stamp 全部 tracker（root/repos/subpath，照 `lookupBaseBranch` 加 `lookupCreationBase`）、后台 refresh）；tracker spawn 点 `manager_submodules.go:88` 旁 stamp。
-- [ ] 4.3 控制路由：`api/server.go:171` 旁注册 `POST /workspace/creation-bases`，新建 `api/workspace_creation_bases.go`（镜像 `workspace_comparison_targets.go`，校验 + 调 `UpdateCreationBases`）；lifecycle 的 agentctl client（`internal/agent/runtime/agentctl/`）增 `SetCreationBases` 方法（镜像 `SetComparisonTargets`）。
+- [x] 4.1 `internal/agentctl/server/config/config.go`：`InstanceConfig` 增 `CreationBases map[string]models.CreationBase`（镜像 `ComparisonTargets:372-375` 与 `cloneComparisonTargets:829` 的 clone）；`internal/agentctl/server/instance/instance.go:229` 旁增 `creation_bases` 请求字段；`instance/manager.go:305,384` 传递。
+- [x] 4.2 `internal/agentctl/server/process/manager.go`：增 `UpdateCreationBases(ctx, map[string]models.CreationBase)`（照 `UpdateBaseBranches:1272` —— 替换 map、stamp 全部 tracker（root/repos/subpath，照 `lookupBaseBranch` 加 `lookupCreationBase`）、后台 refresh）；tracker spawn 点 `manager_submodules.go:88` 旁 stamp。
+- [x] 4.3 控制路由：`api/server.go:171` 旁注册 `POST /workspace/creation-bases`，新建 `api/workspace_creation_bases.go`（镜像 `workspace_comparison_targets.go`，校验 + 调 `UpdateCreationBases`）；lifecycle 的 agentctl client（`internal/agent/runtime/agentctl/`）增 `SetCreationBases` 方法（镜像 `SetComparisonTargets`）。
   - 测试：api 路由测试（合法/非法 payload、鉴权照既有内部控制路由模式）；process manager 测试（map 替换、tracker stamp、subpath 键）。
   - 准出：`go test ./internal/agentctl/server/api/ ./internal/agentctl/server/process/ -run CreationBase -v` 绿。
 
