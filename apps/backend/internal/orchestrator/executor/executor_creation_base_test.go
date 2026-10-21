@@ -49,7 +49,7 @@ func TestPersistWorktreeCreationBases(t *testing.T) {
 	recorder := newFakeCreationBaseRecorder()
 	exec.SetTaskRepositoryCreationBaseRecorder(recorder)
 
-	exec.persistWorktreeCreationBases(context.Background(), &LaunchAgentResponse{
+	exec.persistWorktreeCreationBases(context.Background(), nil, &LaunchAgentResponse{
 		Worktrees: []RepoWorktreeResult{
 			{
 				TaskRepositoryID: "tr-creation-1",
@@ -88,7 +88,7 @@ func TestPersistWorktreeCreationBases_FailureIsNonFatal(t *testing.T) {
 	recorder.failIDs["tr-creation-fail"] = struct{}{}
 	exec.SetTaskRepositoryCreationBaseRecorder(recorder)
 
-	exec.persistWorktreeCreationBases(context.Background(), &LaunchAgentResponse{
+	exec.persistWorktreeCreationBases(context.Background(), nil, &LaunchAgentResponse{
 		Worktrees: []RepoWorktreeResult{
 			{
 				TaskRepositoryID: "tr-creation-fail",
@@ -119,12 +119,43 @@ func TestPersistWorktreeCreationBases_NilDependenciesIsNoop(t *testing.T) {
 	repo := newMockRepository()
 	exec := newTestExecutor(t, &mockAgentManager{}, repo)
 
-	exec.persistWorktreeCreationBases(context.Background(), &LaunchAgentResponse{
+	exec.persistWorktreeCreationBases(context.Background(), nil, &LaunchAgentResponse{
 		Worktrees: []RepoWorktreeResult{{
 			TaskRepositoryID: "tr-creation-1",
 			CreationBaseRef:  "main",
 			CreationForkSHA:  strings.Repeat("a", 40),
 		}},
 	})
-	exec.persistWorktreeCreationBases(context.Background(), nil)
+	exec.persistWorktreeCreationBases(context.Background(), nil, nil)
+}
+
+// TestPersistWorktreeCreationBases_SingleRepoLegacyFields covers the
+// single-repository launch shape: the fork point travels on the response's
+// legacy fields and is attributed to the request's task repository.
+func TestPersistWorktreeCreationBases_SingleRepoLegacyFields(t *testing.T) {
+	repo := newMockRepository()
+	exec := newTestExecutor(t, &mockAgentManager{}, repo)
+	recorder := newFakeCreationBaseRecorder()
+	exec.SetTaskRepositoryCreationBaseRecorder(recorder)
+
+	exec.persistWorktreeCreationBases(context.Background(), &LaunchAgentRequest{
+		TaskRepositoryID: "tr-single",
+		RepositoryID:     "repo-1",
+	}, &LaunchAgentResponse{
+		CreationBaseRef: "main",
+		CreationForkSHA: strings.Repeat("a", 40),
+	})
+
+	base, ok := recorder.get("tr-single")
+	if !ok {
+		t.Fatal("single-repo fork point was not recorded")
+	}
+	want := models.CreationBase{
+		Version: models.CreationBaseVersion,
+		Ref:     "main",
+		ForkSHA: strings.Repeat("a", 40),
+	}
+	if !base.Equal(want) {
+		t.Fatalf("recorded creation base = %#v, want %#v", base, want)
+	}
 }

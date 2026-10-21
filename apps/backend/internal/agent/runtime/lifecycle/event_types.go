@@ -417,27 +417,29 @@ func (p GitEventPayload) GetSessionID() string {
 }
 
 type GitStatusData struct {
-	StatusState         string   `json:"status_state,omitempty"`
-	FilesComplete       bool     `json:"files_complete"`
-	DetailState         string   `json:"detail_state,omitempty"`
-	ErrorCode           string   `json:"error_code,omitempty"`
-	TrackerID           string   `json:"tracker_id,omitempty"`
-	TrackerEpoch        uint64   `json:"tracker_epoch,omitempty"`
-	SnapshotRevision    uint64   `json:"snapshot_revision,omitempty"`
-	Branch              string   `json:"branch"`
-	RemoteBranch        string   `json:"remote_branch,omitempty"`
-	HeadCommit          string   `json:"head_commit,omitempty"`
-	BaseCommit          string   `json:"base_commit,omitempty"`
-	ComparisonTarget    string   `json:"comparison_target,omitempty"`
-	ComparisonStatus    string   `json:"comparison_status,omitempty"`
-	ComparisonErrorCode string   `json:"comparison_error_code,omitempty"`
-	Modified            []string `json:"modified"`
-	Added               []string `json:"added"`
-	Deleted             []string `json:"deleted"`
-	Untracked           []string `json:"untracked"`
-	Renamed             []string `json:"renamed"`
-	Ahead               int      `json:"ahead"`
-	Behind              int      `json:"behind"`
+	StatusState           string   `json:"status_state,omitempty"`
+	FilesComplete         bool     `json:"files_complete"`
+	DetailState           string   `json:"detail_state,omitempty"`
+	ErrorCode             string   `json:"error_code,omitempty"`
+	TrackerID             string   `json:"tracker_id,omitempty"`
+	TrackerEpoch          uint64   `json:"tracker_epoch,omitempty"`
+	SnapshotRevision      uint64   `json:"snapshot_revision,omitempty"`
+	Branch                string   `json:"branch"`
+	RemoteBranch          string   `json:"remote_branch,omitempty"`
+	HeadCommit            string   `json:"head_commit,omitempty"`
+	BaseCommit            string   `json:"base_commit,omitempty"`
+	ComparisonTarget      string   `json:"comparison_target,omitempty"`
+	ComparisonStatus      string   `json:"comparison_status,omitempty"`
+	ComparisonErrorCode   string   `json:"comparison_error_code,omitempty"`
+	CreationBase          string   `json:"creation_base,omitempty"`
+	CreationBaseErrorCode string   `json:"creation_base_error_code,omitempty"`
+	Modified              []string `json:"modified"`
+	Added                 []string `json:"added"`
+	Deleted               []string `json:"deleted"`
+	Untracked             []string `json:"untracked"`
+	Renamed               []string `json:"renamed"`
+	Ahead                 int      `json:"ahead"`
+	Behind                int      `json:"behind"`
 	// RemoteAhead/RemoteBehind compare against this branch's own upstream
 	// (@{upstream}), unlike Ahead/Behind which are relative to the base
 	// branch and never reach zero just because the branch was pushed. Push

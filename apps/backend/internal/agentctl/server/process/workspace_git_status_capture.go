@@ -207,6 +207,8 @@ func (wt *WorkspaceTracker) captureBasicGitStatus(ctx context.Context) (gitStatu
 		status.ComparisonTarget = comparison.Display
 		status.ComparisonStatus = comparison.Status
 		status.ComparisonErrorCode = comparison.ErrorCode
+	} else if base, present := wt.CreationBaseResolution(); present {
+		status.CreationBase = base.Ref
 	}
 	if wt.gitIndexPath == "" {
 		status.StatusState = gitStatusStateUnavailable

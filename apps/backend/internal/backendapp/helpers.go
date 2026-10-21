@@ -693,21 +693,23 @@ func buildGitStatusNotification(sessionID, taskEnvironmentID, repositoryName str
 		errorCode = "status_unavailable"
 	}
 	statusPayload := map[string]interface{}{
-		branchFieldKey:          status.Branch,
-		"remote_branch":         status.RemoteBranch,
-		"head_commit":           status.HeadCommit,
-		"base_commit":           status.BaseCommit,
-		"status_state":          statusState,
-		"files_complete":        filesComplete,
-		"detail_state":          detailState,
-		"error_code":            errorCode,
-		"tracker_id":            status.TrackerID,
-		"tracker_epoch":         status.TrackerEpoch,
-		"snapshot_revision":     status.SnapshotRevision,
-		"comparison_target":     status.ComparisonTarget,
-		"comparison_status":     status.ComparisonStatus,
-		"comparison_error_code": status.ComparisonErrorCode,
-		"is_submodule":          status.IsSubmodule,
+		branchFieldKey:             status.Branch,
+		"remote_branch":            status.RemoteBranch,
+		"head_commit":              status.HeadCommit,
+		"base_commit":              status.BaseCommit,
+		"status_state":             statusState,
+		"files_complete":           filesComplete,
+		"detail_state":             detailState,
+		"error_code":               errorCode,
+		"tracker_id":               status.TrackerID,
+		"tracker_epoch":            status.TrackerEpoch,
+		"snapshot_revision":        status.SnapshotRevision,
+		"comparison_target":        status.ComparisonTarget,
+		"comparison_status":        status.ComparisonStatus,
+		"comparison_error_code":    status.ComparisonErrorCode,
+		"creation_base":            status.CreationBase,
+		"creation_base_error_code": status.CreationBaseErrorCode,
+		"is_submodule":             status.IsSubmodule,
 	}
 	if filesComplete {
 		statusPayload["files"] = status.Files
@@ -797,16 +799,18 @@ func buildGitSnapshotNotification(sessionID, repositoryName string, snapshot *mo
 	metadata := snapshot.Metadata
 	compactLive := snapshot.TriggeredBy == sqliterepo.TriggeredByLiveMonitor && snapshot.Files == nil
 	statusPayload := map[string]interface{}{
-		branchFieldKey:          snapshot.Branch,
-		"remote_branch":         snapshot.RemoteBranch,
-		"head_commit":           snapshot.HeadCommit,
-		"base_commit":           snapshot.BaseCommit,
-		"status_state":          gitStatusReadyState,
-		"files_complete":        true,
-		"detail_state":          gitStatusReadyState,
-		"comparison_target":     metadata["comparison_target"],
-		"comparison_status":     metadata["comparison_status"],
-		"comparison_error_code": metadata["comparison_error_code"],
+		branchFieldKey:             snapshot.Branch,
+		"remote_branch":            snapshot.RemoteBranch,
+		"head_commit":              snapshot.HeadCommit,
+		"base_commit":              snapshot.BaseCommit,
+		"status_state":             gitStatusReadyState,
+		"files_complete":           true,
+		"detail_state":             gitStatusReadyState,
+		"comparison_target":        metadata["comparison_target"],
+		"comparison_status":        metadata["comparison_status"],
+		"comparison_error_code":    metadata["comparison_error_code"],
+		"creation_base":            metadata["creation_base"],
+		"creation_base_error_code": metadata["creation_base_error_code"],
 	}
 	if compactLive {
 		statusPayload["files_complete"] = false

@@ -140,17 +140,23 @@ func (m *Manager) mergeDurableCreationBases(
 // specs, so the same projection-key derivation as the comparison targets
 // applies.
 func stashPreparedCreationBases(req *LaunchRequest, prepResult *EnvPrepareResult) error {
-	if req == nil || prepResult == nil || len(prepResult.Worktrees) == 0 {
+	if req == nil || prepResult == nil {
 		return nil
+	}
+	observed := make([][2]string, 0, len(prepResult.Worktrees))
+	for i := range prepResult.Worktrees {
+		observed = append(observed, [2]string{prepResult.Worktrees[i].CreationBaseRef, prepResult.Worktrees[i].CreationForkSHA})
+	}
+	if len(observed) == 0 {
+		// Single-repository launches keep the fork point on the legacy result
+		// fields instead of the Worktrees list; mirror them here so the first
+		// session is seeded exactly like a multi-repo launch.
+		observed = append(observed, [2]string{prepResult.CreationBaseRef, prepResult.CreationForkSHA})
 	}
 	specs := req.RepoSpecs()
 	bases := make(map[string]models.CreationBase)
-	for i := range prepResult.Worktrees {
-		if i >= len(specs) {
-			break
-		}
-		w := prepResult.Worktrees[i]
-		if w.CreationBaseRef == "" || w.CreationForkSHA == "" {
+	for i, fork := range observed {
+		if i >= len(specs) || fork[0] == "" || fork[1] == "" {
 			continue
 		}
 		key, err := launchRepositoryProjectionKey(req, specs[i], i)
@@ -159,8 +165,8 @@ func stashPreparedCreationBases(req *LaunchRequest, prepResult *EnvPrepareResult
 		}
 		bases[key] = models.CreationBase{
 			Version: models.CreationBaseVersion,
-			Ref:     w.CreationBaseRef,
-			ForkSHA: w.CreationForkSHA,
+			Ref:     fork[0],
+			ForkSHA: fork[1],
 		}
 	}
 	if len(bases) == 0 {

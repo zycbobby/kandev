@@ -850,9 +850,13 @@ type LaunchAgentResponse struct {
 	RequestedBaseBranch       string
 	BaseBranch                string
 	BaseBranchFallbackWarning string
-	WorkspacePath             string // Effective workspace path (may differ from WorktreePath for quick-chat sessions)
-	Metadata                  map[string]interface{}
-	PrepareResult             *lifecycle.EnvPrepareResult `json:"-"` // Carried from lifecycle.Launch for synchronous persistence
+	// CreationBaseRef and CreationForkSHA are the single-repository mirror of
+	// Worktrees[0]; the executor persists them as the comparison default.
+	CreationBaseRef string
+	CreationForkSHA string
+	WorkspacePath   string // Effective workspace path (may differ from WorktreePath for quick-chat sessions)
+	Metadata        map[string]interface{}
+	PrepareResult   *lifecycle.EnvPrepareResult `json:"-"` // Carried from lifecycle.Launch for synchronous persistence
 
 	// Worktrees is the per-repository preparer result list when the launch is
 	// multi-repo. Empty for single-repo launches; the legacy WorktreeID/Path/

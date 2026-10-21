@@ -397,6 +397,7 @@ func (a *lifecycleAdapter) LaunchAgent(ctx context.Context, req *executor.Launch
 	// can persist N TaskEnvironmentRepo / TaskSessionWorktree rows when multi-repo.
 	var worktrees []executor.RepoWorktreeResult
 	var requestedBaseBranch, baseBranch, baseBranchFallbackWarning string
+	var creationBaseRef, creationForkSHA string
 	if execution.PrepareResult != nil {
 		requestedBaseBranch = execution.PrepareResult.RequestedBaseBranch
 		baseBranch = execution.PrepareResult.BaseBranch
@@ -405,6 +406,10 @@ func (a *lifecycleAdapter) LaunchAgent(ctx context.Context, req *executor.Launch
 			worktreePath = execution.PrepareResult.WorktreePath
 		} else if worktreePath == "" && execution.PrepareResult.WorktreeID != "" && len(execution.PrepareResult.Worktrees) == 0 {
 			worktreePath = execution.PrepareResult.WorkspacePath
+		}
+		if len(execution.PrepareResult.Worktrees) == 0 {
+			creationBaseRef = execution.PrepareResult.CreationBaseRef
+			creationForkSHA = execution.PrepareResult.CreationForkSHA
 		}
 	}
 	if execution.PrepareResult != nil && len(execution.PrepareResult.Worktrees) > 0 {
@@ -443,6 +448,8 @@ func (a *lifecycleAdapter) LaunchAgent(ctx context.Context, req *executor.Launch
 		RequestedBaseBranch:       requestedBaseBranch,
 		BaseBranch:                baseBranch,
 		BaseBranchFallbackWarning: baseBranchFallbackWarning,
+		CreationBaseRef:           creationBaseRef,
+		CreationForkSHA:           creationForkSHA,
 		WorkspacePath:             execution.WorkspacePath,
 		Metadata:                  metadata,
 		PrepareResult:             execution.PrepareResult,

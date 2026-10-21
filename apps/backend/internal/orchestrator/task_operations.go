@@ -6410,21 +6410,23 @@ func (s *Service) saveGitStatusSnapshot(ctx context.Context, sessionID string, f
 	}
 
 	metadata := map[string]interface{}{
-		"repository_name":       status.RepositoryName,
-		"timestamp":             status.Timestamp,
-		"modified":              status.Modified,
-		"added":                 status.Added,
-		"deleted":               status.Deleted,
-		"untracked":             status.Untracked,
-		"renamed":               status.Renamed,
-		"branch_additions":      status.BranchAdditions,
-		"branch_deletions":      status.BranchDeletions,
-		"comparison_target":     status.ComparisonTarget,
-		"comparison_status":     status.ComparisonStatus,
-		"comparison_error_code": status.ComparisonErrorCode,
-		"status_state":          "ready",
-		"files_complete":        true,
-		"detail_state":          "ready",
+		"repository_name":            status.RepositoryName,
+		gitSnapshotKeyTimestamp:      status.Timestamp,
+		gitSnapshotKeyModified:       status.Modified,
+		gitSnapshotKeyAdded:          status.Added,
+		gitSnapshotKeyDeleted:        status.Deleted,
+		gitSnapshotKeyUntracked:      status.Untracked,
+		gitSnapshotKeyRenamed:        status.Renamed,
+		gitSnapshotKeyBranchAdds:     status.BranchAdditions,
+		gitSnapshotKeyBranchDels:     status.BranchDeletions,
+		"comparison_target":          status.ComparisonTarget,
+		"comparison_status":          status.ComparisonStatus,
+		"comparison_error_code":      status.ComparisonErrorCode,
+		gitSnapshotKeyCreationBase:   status.CreationBase,
+		gitSnapshotKeyCreationBaseEC: status.CreationBaseErrorCode,
+		gitSnapshotKeyStatusState:    "ready",
+		gitSnapshotKeyFilesComplete:  true,
+		gitSnapshotKeyDetailState:    "ready",
 	}
 
 	if err := s.repo.CreateGitSnapshot(ctx, &models.GitSnapshot{
@@ -6516,24 +6518,24 @@ func archiveGitStatusMetadata(status *client.GitStatusResult, files map[string]i
 		return nil
 	}
 	return map[string]interface{}{
-		"timestamp": status.Timestamp,
+		gitSnapshotKeyTimestamp: status.Timestamp,
 		// The archive's files map is a cumulative diff, while these status
 		// lists describe the working tree at capture time. Keep an explicit
 		// count for summary consumers so they do not add two different views.
-		"changed_files":      len(files),
-		"modified":           status.Modified,
-		"added":              status.Added,
-		"deleted":            status.Deleted,
-		"untracked":          status.Untracked,
-		"renamed":            status.Renamed,
-		"remote_ahead":       status.RemoteAhead,
-		"remote_behind":      status.RemoteBehind,
-		"remote_head_commit": status.RemoteHeadCommit,
-		"branch_additions":   status.BranchAdditions,
-		"branch_deletions":   status.BranchDeletions,
-		"status_state":       "ready",
-		"files_complete":     true,
-		"detail_state":       "ready",
+		"changed_files":             len(files),
+		gitSnapshotKeyModified:      status.Modified,
+		gitSnapshotKeyAdded:         status.Added,
+		gitSnapshotKeyDeleted:       status.Deleted,
+		gitSnapshotKeyUntracked:     status.Untracked,
+		gitSnapshotKeyRenamed:       status.Renamed,
+		"remote_ahead":              status.RemoteAhead,
+		"remote_behind":             status.RemoteBehind,
+		"remote_head_commit":        status.RemoteHeadCommit,
+		gitSnapshotKeyBranchAdds:    status.BranchAdditions,
+		gitSnapshotKeyBranchDels:    status.BranchDeletions,
+		gitSnapshotKeyStatusState:   "ready",
+		gitSnapshotKeyFilesComplete: true,
+		gitSnapshotKeyDetailState:   "ready",
 	}
 }
 

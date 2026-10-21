@@ -1656,10 +1656,12 @@ export class ApiClient {
       const body = await response.text();
       const transientWorktreeInspection =
         response.status === 500 &&
-        body.includes("exit status 128") &&
-        (body.includes("inspect worktrees before delete") ||
-          body.includes("capture worktree cleanup identities") ||
-          body.includes("capture cleanup identity"));
+        (body.includes("pin worktree cleanup path") ||
+          body.includes("inspect worktree cleanup path") ||
+          (body.includes("exit status 128") &&
+            (body.includes("inspect worktrees before delete") ||
+              body.includes("capture worktree cleanup identities") ||
+              body.includes("capture cleanup identity"))));
       const sessionTransferInProgress =
         response.status === 500 && body.trim() === '{"error":"session transfer in progress"}';
       if ((!transientWorktreeInspection && !sessionTransferInProgress) || attempt === 3) {

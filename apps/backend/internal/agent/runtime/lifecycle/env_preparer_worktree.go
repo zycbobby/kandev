@@ -106,6 +106,8 @@ func (p *WorktreePreparer) Prepare(ctx context.Context, req *EnvPrepareRequest, 
 			WorktreeBranchOwner:    wt.BranchOwner,
 			WorktreeIntegrationRef: wt.IntegrationRef,
 			MainRepoGitDir:         worktreeMainRepoGitDir(wt, req.RepositoryPath),
+			CreationBaseRef:        wt.CreationBaseRef,
+			CreationForkSHA:        wt.CreationForkSHA,
 		}, nil
 	}
 
@@ -174,6 +176,8 @@ func (p *WorktreePreparer) Prepare(ctx context.Context, req *EnvPrepareRequest, 
 		RequestedBaseBranch:       req.BaseBranch,
 		BaseBranch:                wt.BaseBranch,
 		BaseBranchFallbackWarning: wt.BaseBranchFallbackWarning,
+		CreationBaseRef:           wt.CreationBaseRef,
+		CreationForkSHA:           wt.CreationForkSHA,
 	}, nil
 }
 

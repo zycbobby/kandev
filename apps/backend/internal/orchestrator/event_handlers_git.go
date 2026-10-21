@@ -29,6 +29,24 @@ const gitSnapshotPersistInterval = 30 * time.Second
 
 const gitSnapshotTriggeredByAgentCompleted = "agent_completed"
 
+// Snapshot metadata keys shared by the live event handler and the manual
+// status capture writer.
+const (
+	gitSnapshotKeyTimestamp      = "timestamp"
+	gitSnapshotKeyModified       = "modified"
+	gitSnapshotKeyAdded          = "added"
+	gitSnapshotKeyDeleted        = "deleted"
+	gitSnapshotKeyUntracked      = "untracked"
+	gitSnapshotKeyRenamed        = "renamed"
+	gitSnapshotKeyBranchAdds     = "branch_additions"
+	gitSnapshotKeyBranchDels     = "branch_deletions"
+	gitSnapshotKeyStatusState    = "status_state"
+	gitSnapshotKeyFilesComplete  = "files_complete"
+	gitSnapshotKeyDetailState    = "detail_state"
+	gitSnapshotKeyCreationBase   = "creation_base"
+	gitSnapshotKeyCreationBaseEC = "creation_base_error_code"
+)
+
 const gitSnapshotStatusReady = "ready"
 
 const automaticPermissionMessageWriteMaxAttempts = 3
@@ -235,21 +253,23 @@ func (s *Service) persistGitStatusSnapshot(ctx context.Context, data watcher.Git
 		Behind:            st.Behind,
 		Files:             nil, // intentional: badge only needs totals
 		Metadata: map[string]interface{}{
-			"repository_name":       st.RepositoryName,
-			"branch_additions":      st.BranchAdditions,
-			"branch_deletions":      st.BranchDeletions,
-			"comparison_target":     st.ComparisonTarget,
-			"comparison_status":     st.ComparisonStatus,
-			"comparison_error_code": st.ComparisonErrorCode,
-			"modified":              st.Modified,
-			"added":                 st.Added,
-			"deleted":               st.Deleted,
-			"untracked":             st.Untracked,
-			"renamed":               st.Renamed,
-			"timestamp":             data.Timestamp,
-			"status_state":          gitSnapshotStatusReady,
-			"files_complete":        false,
-			"detail_state":          gitSnapshotStatusReady,
+			"repository_name":            st.RepositoryName,
+			gitSnapshotKeyBranchAdds:     st.BranchAdditions,
+			gitSnapshotKeyBranchDels:     st.BranchDeletions,
+			"comparison_target":          st.ComparisonTarget,
+			"comparison_status":          st.ComparisonStatus,
+			"comparison_error_code":      st.ComparisonErrorCode,
+			gitSnapshotKeyCreationBase:   st.CreationBase,
+			gitSnapshotKeyCreationBaseEC: st.CreationBaseErrorCode,
+			gitSnapshotKeyModified:       st.Modified,
+			gitSnapshotKeyAdded:          st.Added,
+			gitSnapshotKeyDeleted:        st.Deleted,
+			gitSnapshotKeyUntracked:      st.Untracked,
+			gitSnapshotKeyRenamed:        st.Renamed,
+			gitSnapshotKeyTimestamp:      data.Timestamp,
+			gitSnapshotKeyStatusState:    gitSnapshotStatusReady,
+			gitSnapshotKeyFilesComplete:  false,
+			gitSnapshotKeyDetailState:    gitSnapshotStatusReady,
 		},
 	}
 	if err := s.repo.UpsertLatestLiveGitSnapshot(ctx, snapshot); err != nil {

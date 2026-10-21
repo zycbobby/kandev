@@ -307,6 +307,11 @@ type EnvPrepareResult struct {
 	RequestedBaseBranch       string `json:"requested_base_branch,omitempty"`
 	BaseBranch                string `json:"base_branch,omitempty"`
 	BaseBranchFallbackWarning string `json:"base_branch_fallback_warning,omitempty"`
+	// CreationBaseRef and CreationForkSHA are the single-repository mirror of
+	// Worktrees[0]: the fork point observed when the worktree branch was cut.
+	// Multi-repo launches read the per-repo entries instead.
+	CreationBaseRef string `json:"-"`
+	CreationForkSHA string `json:"-"`
 
 	// Worktrees is the per-repository outcome list when the preparer ran in
 	// multi-repo mode. Empty for single-repo or repo-less results.

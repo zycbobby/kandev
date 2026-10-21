@@ -1526,38 +1526,40 @@ func mergeCumulativeFiles(dst, src map[string]interface{}, repo, baseRef string,
 
 // GitStatusResult represents the result of a git status query.
 type GitStatusResult struct {
-	Success             bool                   `json:"success"`
-	StatusState         string                 `json:"status_state,omitempty"`
-	FilesComplete       bool                   `json:"files_complete"`
-	DetailState         string                 `json:"detail_state,omitempty"`
-	ErrorCode           string                 `json:"error_code,omitempty"`
-	TrackerID           string                 `json:"tracker_id,omitempty"`
-	TrackerEpoch        uint64                 `json:"tracker_epoch,omitempty"`
-	SnapshotRevision    uint64                 `json:"snapshot_revision,omitempty"`
-	RepositoryName      string                 `json:"repository_name,omitempty"`
-	IsSubmodule         bool                   `json:"is_submodule,omitempty"`
-	Branch              string                 `json:"branch"`
-	RemoteBranch        string                 `json:"remote_branch"`
-	HeadCommit          string                 `json:"head_commit"`
-	BaseCommit          string                 `json:"base_commit"` // Merge-base with origin branch
-	ComparisonTarget    string                 `json:"comparison_target,omitempty"`
-	ComparisonStatus    string                 `json:"comparison_status,omitempty"`
-	ComparisonErrorCode string                 `json:"comparison_error_code,omitempty"`
-	Ahead               int                    `json:"ahead"`
-	Behind              int                    `json:"behind"`
-	RemoteAhead         int                    `json:"remote_ahead"`
-	RemoteBehind        int                    `json:"remote_behind"`
-	RemoteHeadCommit    string                 `json:"remote_head_commit,omitempty"`
-	Modified            []string               `json:"modified"`
-	Added               []string               `json:"added"`
-	Deleted             []string               `json:"deleted"`
-	Untracked           []string               `json:"untracked"`
-	Renamed             []string               `json:"renamed"`
-	Files               map[string]interface{} `json:"files"`
-	Timestamp           string                 `json:"timestamp"`
-	BranchAdditions     int                    `json:"branch_additions,omitempty"`
-	BranchDeletions     int                    `json:"branch_deletions,omitempty"`
-	Error               string                 `json:"error,omitempty"`
+	Success               bool                   `json:"success"`
+	StatusState           string                 `json:"status_state,omitempty"`
+	FilesComplete         bool                   `json:"files_complete"`
+	DetailState           string                 `json:"detail_state,omitempty"`
+	ErrorCode             string                 `json:"error_code,omitempty"`
+	TrackerID             string                 `json:"tracker_id,omitempty"`
+	TrackerEpoch          uint64                 `json:"tracker_epoch,omitempty"`
+	SnapshotRevision      uint64                 `json:"snapshot_revision,omitempty"`
+	RepositoryName        string                 `json:"repository_name,omitempty"`
+	IsSubmodule           bool                   `json:"is_submodule,omitempty"`
+	Branch                string                 `json:"branch"`
+	RemoteBranch          string                 `json:"remote_branch"`
+	HeadCommit            string                 `json:"head_commit"`
+	BaseCommit            string                 `json:"base_commit"` // Merge-base with origin branch
+	ComparisonTarget      string                 `json:"comparison_target,omitempty"`
+	ComparisonStatus      string                 `json:"comparison_status,omitempty"`
+	ComparisonErrorCode   string                 `json:"comparison_error_code,omitempty"`
+	CreationBase          string                 `json:"creation_base,omitempty"`
+	CreationBaseErrorCode string                 `json:"creation_base_error_code,omitempty"`
+	Ahead                 int                    `json:"ahead"`
+	Behind                int                    `json:"behind"`
+	RemoteAhead           int                    `json:"remote_ahead"`
+	RemoteBehind          int                    `json:"remote_behind"`
+	RemoteHeadCommit      string                 `json:"remote_head_commit,omitempty"`
+	Modified              []string               `json:"modified"`
+	Added                 []string               `json:"added"`
+	Deleted               []string               `json:"deleted"`
+	Untracked             []string               `json:"untracked"`
+	Renamed               []string               `json:"renamed"`
+	Files                 map[string]interface{} `json:"files"`
+	Timestamp             string                 `json:"timestamp"`
+	BranchAdditions       int                    `json:"branch_additions,omitempty"`
+	BranchDeletions       int                    `json:"branch_deletions,omitempty"`
+	Error                 string                 `json:"error,omitempty"`
 }
 
 // PerRepoGitStatus pairs a repository_name with its current status. Used by
@@ -1697,37 +1699,39 @@ func gitStatusResult(status types.GitStatusUpdate, repositoryName string) GitSta
 		filesMap[k] = v
 	}
 	return GitStatusResult{
-		Success:             status.StatusState == gitStatusReadyState,
-		StatusState:         status.StatusState,
-		FilesComplete:       status.FilesComplete,
-		DetailState:         status.DetailState,
-		ErrorCode:           status.ErrorCode,
-		TrackerID:           status.TrackerID,
-		TrackerEpoch:        status.TrackerEpoch,
-		SnapshotRevision:    status.SnapshotRevision,
-		RepositoryName:      repositoryName,
-		IsSubmodule:         status.IsSubmodule,
-		Branch:              status.Branch,
-		RemoteBranch:        status.RemoteBranch,
-		HeadCommit:          status.HeadCommit,
-		BaseCommit:          status.BaseCommit,
-		ComparisonTarget:    status.ComparisonTarget,
-		ComparisonStatus:    status.ComparisonStatus,
-		ComparisonErrorCode: status.ComparisonErrorCode,
-		Ahead:               status.Ahead,
-		Behind:              status.Behind,
-		RemoteAhead:         status.RemoteAhead,
-		RemoteBehind:        status.RemoteBehind,
-		RemoteHeadCommit:    status.RemoteHeadCommit,
-		Modified:            status.Modified,
-		Added:               status.Added,
-		Deleted:             status.Deleted,
-		Untracked:           status.Untracked,
-		Renamed:             status.Renamed,
-		Files:               filesMap,
-		Timestamp:           status.Timestamp.Format("2006-01-02T15:04:05.000Z07:00"),
-		BranchAdditions:     status.BranchAdditions,
-		BranchDeletions:     status.BranchDeletions,
+		Success:               status.StatusState == gitStatusReadyState,
+		StatusState:           status.StatusState,
+		FilesComplete:         status.FilesComplete,
+		DetailState:           status.DetailState,
+		ErrorCode:             status.ErrorCode,
+		TrackerID:             status.TrackerID,
+		TrackerEpoch:          status.TrackerEpoch,
+		SnapshotRevision:      status.SnapshotRevision,
+		RepositoryName:        repositoryName,
+		IsSubmodule:           status.IsSubmodule,
+		Branch:                status.Branch,
+		RemoteBranch:          status.RemoteBranch,
+		HeadCommit:            status.HeadCommit,
+		BaseCommit:            status.BaseCommit,
+		ComparisonTarget:      status.ComparisonTarget,
+		ComparisonStatus:      status.ComparisonStatus,
+		ComparisonErrorCode:   status.ComparisonErrorCode,
+		CreationBase:          status.CreationBase,
+		CreationBaseErrorCode: status.CreationBaseErrorCode,
+		Ahead:                 status.Ahead,
+		Behind:                status.Behind,
+		RemoteAhead:           status.RemoteAhead,
+		RemoteBehind:          status.RemoteBehind,
+		RemoteHeadCommit:      status.RemoteHeadCommit,
+		Modified:              status.Modified,
+		Added:                 status.Added,
+		Deleted:               status.Deleted,
+		Untracked:             status.Untracked,
+		Renamed:               status.Renamed,
+		Files:                 filesMap,
+		Timestamp:             status.Timestamp.Format("2006-01-02T15:04:05.000Z07:00"),
+		BranchAdditions:       status.BranchAdditions,
+		BranchDeletions:       status.BranchDeletions,
 	}
 }
 
