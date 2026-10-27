@@ -319,6 +319,20 @@ func handleE2EReset(
 		if _, err := repo.DB().ExecContext(ctx, `DELETE FROM runtime_flag_overrides`); err != nil {
 			log.Warn("e2e reset: runtime flag override cleanup failed", zap.Error(err))
 		}
+		// The multi-instance registry is owner-scoped, not workspace-scoped:
+		// a remote instance registered by an earlier spec sharing this worker
+		// would still be listed for the next spec's user, and its relayed
+		// occurrences would leak into the next spec's dedup and list state.
+		// Wipe both tables so every spec starts from an empty registry.
+		// Best-effort, like the flag overrides above.
+		for _, q := range []string{
+			`DELETE FROM remote_notification_occurrences`,
+			`DELETE FROM instances`,
+		} {
+			if _, err := repo.DB().ExecContext(ctx, q); err != nil {
+				log.Warn("e2e reset: multi-instance registry cleanup failed", zap.String("sql", q), zap.Error(err))
+			}
+		}
 		// Coordinator state (coordinators, proposals, stalls) is keyed by
 		// workspace_id, not task_id, so it outlives a reset's task deletion
 		// the same way review watches and routing state do. Without this,

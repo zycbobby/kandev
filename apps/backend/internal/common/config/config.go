@@ -619,6 +619,12 @@ type FeaturesConfig struct {
 	// AgentBackgroundWork enables normalized background work tracking,
 	// interactive controls, and subagent observation.
 	AgentBackgroundWork bool `mapstructure:"agent_background_work" json:"agentBackgroundWork"`
+
+	// MultiInstance gates the per-owner registry of remote Kandev instances
+	// and the machinery around it: per-instance proxy ports and the remote
+	// notification relay. Off in every shipped profile until federation is
+	// ready; the registry stays inert while the flag is disabled.
+	MultiInstance bool `mapstructure:"multi_instance" json:"multiInstance"`
 }
 
 // LoggingConfig holds logging configuration.

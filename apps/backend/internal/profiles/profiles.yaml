@@ -170,6 +170,14 @@ features:
     dev:  "false"
     e2e:  "false"
 
+  # Multi-instance federation: a per-owner registry of remote Kandev
+  # instances, per-instance proxy ports, and the remote notification relay.
+  # Off in every shipped profile until the federation work is complete.
+  KANDEV_FEATURES_MULTI_INSTANCE:
+    prod: "false"
+    dev:  "false"
+    e2e:  "false"
+
 # ── Mock providers ────────────────────────────────────────────────
 # Swap real third-party services for in-memory fakes. Production
 # leaves all of these unset (real APIs). Dev opts into the mock agent

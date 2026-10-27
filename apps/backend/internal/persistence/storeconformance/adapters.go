@@ -21,6 +21,7 @@ import (
 	editorstore "github.com/kandev/kandev/internal/editors/store"
 	"github.com/kandev/kandev/internal/github"
 	"github.com/kandev/kandev/internal/gitlab"
+	instancestore "github.com/kandev/kandev/internal/instances/store/sqlite"
 	"github.com/kandev/kandev/internal/jira"
 	"github.com/kandev/kandev/internal/linear"
 	"github.com/kandev/kandev/internal/notifications/store"
@@ -84,6 +85,11 @@ func adapterFor(descriptor requiredstores.Descriptor) testconformance.Adapter {
 	}
 }
 
+// storeIDInstances is the required-stores catalog ID of the instance
+// registry; the schema initializer and the behavior adapter must name the
+// same store.
+const storeIDInstances = "instances"
+
 var schemaInitializers = map[string]testconformance.Scenario{
 	"schema-meta":           schemaMeta,
 	"task":                  taskSchema,
@@ -96,6 +102,7 @@ var schemaInitializers = map[string]testconformance.Scenario{
 	"editor":                editorSchema,
 	"prompts":               promptSchema,
 	"utility":               utilitySchema,
+	storeIDInstances:        instancesSchema,
 	"office":                officeSchema,
 	"terminal":              terminalSchema,
 	"quick-terminal":        quickTerminalSchema,
@@ -245,6 +252,13 @@ func promptSchema(s testconformance.ScenarioContext) error {
 func utilitySchema(s testconformance.ScenarioContext) error {
 	if _, _, err := utilitystore.Provide(s.DB, s.DB); err != nil {
 		return fmt.Errorf("utility schema: %w", err)
+	}
+	return nil
+}
+
+func instancesSchema(s testconformance.ScenarioContext) error {
+	if _, _, err := instancestore.Provide(s.Context, s.DB, s.DB); err != nil {
+		return fmt.Errorf("instances schema: %w", err)
 	}
 	return nil
 }

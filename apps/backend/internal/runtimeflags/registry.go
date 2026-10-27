@@ -358,6 +358,24 @@ var registrations = []runtimeFlagRegistration{
 	},
 	{
 		definition: RuntimeFlagDefinition{
+			Key:         "features.multiInstance",
+			EnvVar:      "KANDEV_FEATURES_MULTI_INSTANCE",
+			Kind:        KindFeature,
+			Label:       "Multi-instance federation",
+			Description: "Registers remote Kandev instances per user, proxies task traffic through a per-instance local port, and relays their notifications into the local event feed.",
+			Stability:   StabilityExperimental,
+			RiskLevel:   RiskMedium,
+			RiskDescription: "Federation dials user-registered remote instances, stores a credential per instance, and " +
+				"opens a local proxy port that forwards authenticated task traffic to the remote. " +
+				"Experimental: enable only on a controlled install and review the relay and proxy behavior before relying on it.",
+			RestartRequired: true,
+			Mutable:         true,
+		},
+		read:  func(cfg *config.Config) bool { return cfg.Features.MultiInstance },
+		apply: func(cfg *config.Config, value bool) { cfg.Features.MultiInstance = value },
+	},
+	{
+		definition: RuntimeFlagDefinition{
 			Key:         "debug.devMode",
 			EnvVar:      "KANDEV_DEBUG_DEV_MODE",
 			Kind:        KindDebug,

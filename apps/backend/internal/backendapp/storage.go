@@ -28,6 +28,7 @@ import (
 	workflowrepository "github.com/kandev/kandev/internal/workflow/repository"
 
 	editorstore "github.com/kandev/kandev/internal/editors/store"
+	instancestore "github.com/kandev/kandev/internal/instances/store/sqlite"
 	notificationstore "github.com/kandev/kandev/internal/notifications/store"
 	"github.com/kandev/kandev/internal/office"
 	promptstore "github.com/kandev/kandev/internal/prompts/store"
@@ -220,6 +221,7 @@ func provideRepositories(ctx context.Context, cfg *config.Config, log *logger.Lo
 		Editor:         supportRepos.editor,
 		Prompts:        supportRepos.prompts,
 		Utility:        supportRepos.utility,
+		Instances:      supportRepos.instances,
 		Workflow:       workflowRepo,
 		Secrets:        secretStore,
 		Office:         officeRepo,
@@ -257,11 +259,12 @@ type supportRepositorySet struct {
 	editor       editorstore.Repository
 	prompts      promptstore.Repository
 	utility      utilitystore.Repository
+	instances    *instancestore.Store
 }
 
-// provideSupportRepos wires up user, notification, editor, prompt, and utility
-// repositories. Extracted from provideRepositories to keep its statement count
-// within the funlen limit.
+// provideSupportRepos wires up user, notification, editor, prompt, utility,
+// and instance-registry repositories. Extracted from provideRepositories to
+// keep its statement count within the funlen limit.
 func provideSupportRepos(ctx context.Context, writer, reader *sqlx.DB, tracker *requiredstores.Tracker) (supportRepositorySet, []func() error, error) {
 	var cleanups []func() error
 	var repos supportRepositorySet
@@ -317,6 +320,19 @@ func provideSupportRepos(ctx context.Context, writer, reader *sqlx.DB, tracker *
 		return repos, cleanups, err
 	}
 	repos.utility = utilityRepo
+
+	// The instance registry initializes regardless of features.multiInstance:
+	// the tables are part of the database contract, and the catalog entry must
+	// be recorded before readiness.
+	if err := checkStartupContext(ctx, "instance registry repository"); err != nil {
+		return repos, cleanups, err
+	}
+	instancesRepo, cleanup, err := instancestore.Provide(ctx, writer, reader)
+	cleanups = append(cleanups, cleanup)
+	if err := recordRequiredStore(ctx, tracker, "instances", err); err != nil {
+		return repos, cleanups, err
+	}
+	repos.instances = instancesRepo
 
 	return repos, cleanups, nil
 }

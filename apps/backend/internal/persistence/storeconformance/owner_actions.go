@@ -23,6 +23,7 @@ import (
 	"github.com/kandev/kandev/internal/delivery"
 	"github.com/kandev/kandev/internal/github"
 	"github.com/kandev/kandev/internal/gitlab"
+	instancestore "github.com/kandev/kandev/internal/instances/store/sqlite"
 	"github.com/kandev/kandev/internal/jira"
 	"github.com/kandev/kandev/internal/linear"
 	"github.com/kandev/kandev/internal/office/configsync"
@@ -159,6 +160,24 @@ func buildOwnerBehaviors() map[string]ownerBehavior {
 				createMethod: "CreateAgent", readMethod: "GetAgentByID",
 				updateMethod: "UpdateAgent", deleteMethod: "DeleteAgent",
 				booleanFields: []string{"Enabled", "Builtin"},
+			}),
+		}},
+		storeIDInstances: {actions: []apiAction{
+			standardAction(reflectedSpec{
+				name: storeIDInstances, factory: instanceSQLiteFactory,
+				createMethod: "CreateInstance", readMethod: "GetInstance",
+				updateMethod: "UpdateInstance", deleteMethod: "DeleteInstance",
+				readArgs:   func(id string) []any { return []any{defaultUserID, id} },
+				deleteArgs: func(id string) []any { return []any{defaultUserID, id} },
+				populate: func(record any, id string) {
+					populateRecord(record, id)
+					setStringField(reflectValue(record), "OwnerUserID", defaultUserID)
+					setStringField(reflectValue(record), "BaseURL", "https://example.test/"+id)
+				},
+				booleanFields: []string{"Enabled"},
+				updateMutation: func(record any, id string) {
+					setStringField(reflectValue(record), "Name", "updated-"+id)
+				},
 			}),
 		}},
 	}
@@ -375,6 +394,11 @@ func officeConfigSyncFactory(s testconformance.ScenarioContext) (any, error) {
 
 func automationFactory(s testconformance.ScenarioContext) (any, error) {
 	return automation.NewStore(s.DB, s.DB)
+}
+
+func instanceSQLiteFactory(s testconformance.ScenarioContext) (any, error) {
+	store, _, err := instancestore.Provide(s.Context, s.DB, s.DB)
+	return store, err
 }
 
 func coordinatorFactory(s testconformance.ScenarioContext) (any, error) {

@@ -17,7 +17,7 @@ func TestAdapterIDsMatchExpectedCatalogSet(t *testing.T) {
 	want := map[string]struct{}{
 		"agent-settings": {}, "analytics": {}, "auth": {}, "auth-hostnames": {}, "automation": {},
 		"azure-devops": {}, "canvas": {}, "coordinator": {}, "delivery": {}, "editor": {},
-		"github": {}, "gitlab": {}, "jira": {}, "linear": {}, "message-queue": {},
+		"github": {}, "gitlab": {}, "instances": {}, "jira": {}, "linear": {}, "message-queue": {},
 		"notification": {}, "office": {}, "office-config-sync": {}, "organization-units": {},
 		"organizations": {}, "plugin-instance-state": {}, "plugin-instances": {},
 		"plugin-marketplace": {}, "plugin-settings": {}, "plugin-state": {},

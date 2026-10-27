@@ -53,7 +53,7 @@ func TestRecordRequiredStoreAdvancesItsDescriptorsSweep(t *testing.T) {
 
 // TestProvideRepositoriesReportsStoresRepositoriesSweep covers the
 // stores.repositories half of AC-PLATFORM-STARTUP-PROGRESS-005.2/.7: every
-// admission in provideRepositories (including the five inside
+// admission in provideRepositories (including the six inside
 // provideSupportRepos) advances the sweep step its catalog descriptor names,
 // and the sweep closes and hands off to stores.services at the same
 // storage.go:215 boundary that already switches the phase - this is
@@ -98,8 +98,8 @@ func TestProvideRepositoriesReportsStoresRepositoriesSweep(t *testing.T) {
 	if snap.Step.Total == nil || *snap.Step.Total != wantServicesTotal {
 		t.Fatalf("Step.Total = %v, want %d", snap.Step.Total, wantServicesTotal)
 	}
-	if wantRepositoriesTotal != 20 {
-		t.Fatalf("stores.repositories catalog total = %d, want 20 (sanity check on the fixture)", wantRepositoriesTotal)
+	if wantRepositoriesTotal != 21 {
+		t.Fatalf("stores.repositories catalog total = %d, want 21 (sanity check on the fixture)", wantRepositoriesTotal)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestProvideRepositoriesReportsStoresRepositoriesSweep(t *testing.T) {
 // would silently no-op against a step that had already been ended out from
 // under it, and it would never log "Startup step completed" at all. This
 // asserts the sweep both logs its completion and reaches done == total ==
-// 20, proving every admission after the nested steps still landed.
+// 21, proving every admission after the nested steps still landed.
 func TestProvideRepositoriesStoresRepositoriesSweepReachesFullTotal(t *testing.T) {
 	cfg := &config.Config{
 		HomeDir:  t.TempDir(),

@@ -446,7 +446,8 @@
     "office-config-sync",
     "automation",
     "coordinator",
-    "stats-sync"
+    "stats-sync",
+    "instances"
   ],
   "known_missing_required_tables": {
     "task": [

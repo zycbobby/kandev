@@ -22,6 +22,7 @@ import (
 	"github.com/kandev/kandev/internal/gitcredentials"
 	"github.com/kandev/kandev/internal/github"
 	"github.com/kandev/kandev/internal/gitlab"
+	"github.com/kandev/kandev/internal/instances"
 	"github.com/kandev/kandev/internal/jira"
 	"github.com/kandev/kandev/internal/linear"
 	notificationservice "github.com/kandev/kandev/internal/notifications/service"
@@ -66,11 +67,15 @@ type Repositories struct {
 	User           userstore.Repository
 	// UserAccounts is the account-management view of the same user store
 	// (list/create/role/status), consumed by the auth service.
-	UserAccounts  userstore.AccountRepository
-	Notification  notificationstore.Repository
-	Editor        editorstore.Repository
-	Prompts       promptstore.Repository
-	Utility       utilitystore.Repository
+	UserAccounts userstore.AccountRepository
+	Notification notificationstore.Repository
+	Editor       editorstore.Repository
+	Prompts      promptstore.Repository
+	Utility      utilitystore.Repository
+	// Instances persists the per-owner remote-instance registry. Always
+	// initialized: the schema is part of the database contract even when
+	// features.multiInstance is disabled.
+	Instances     instances.Repository
 	Workflow      *workflowrepository.Repository
 	Secrets       secrets.SecretStore
 	Office        *officesqlite.Repository
