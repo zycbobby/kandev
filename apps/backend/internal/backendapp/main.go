@@ -464,6 +464,8 @@ func startServices( //nolint:cyclop
 		log.Error("Failed to initialize auth service", zap.Error(err))
 		return false
 	}
+	stopInstanceProxies := initInstanceProxies(ctx, cfg, repos, services, log)
+	addCleanup(func() error { stopInstanceProxies(); return nil })
 	warnIfExposedWithoutAuth(cfg, services.Auth, log)
 	taskservice.SetTenancyEnforced(cfg.Features.MultiTenancy)
 	if services.Org != nil && services.Org.Enabled() {

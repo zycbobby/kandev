@@ -44,15 +44,29 @@ type MultiInstanceEnabled func() bool
 // health tracker it carries is written by the HealthPoller (health.go) and
 // read by GetHealth.
 type Service struct {
-	repo    Repository
-	enabled MultiInstanceEnabled
-	health  *healthTracker
+	repo           Repository
+	enabled        MultiInstanceEnabled
+	health         *healthTracker
+	changeNotifier func()
 }
 
 // NewService builds the instance registry service. The enabled predicate
 // gates every method; pass nil only when the feature must stay inert.
 func NewService(repo Repository, enabled MultiInstanceEnabled) *Service {
 	return &Service{repo: repo, enabled: enabled, health: newHealthTracker()}
+}
+
+// SetChangeNotifier installs the callback used to reconcile instance bridges.
+// Configure it during assembly, before serving requests.
+func (s *Service) SetChangeNotifier(notify func()) { s.changeNotifier = notify }
+
+func (s *Service) notifyChanged() {
+	if s.changeNotifier == nil {
+		return
+	}
+	// A notification failure cannot change an already-committed write's result.
+	defer func() { _ = recover() }()
+	s.changeNotifier()
 }
 
 func (s *Service) checkEnabled() error {
@@ -86,6 +100,7 @@ func (s *Service) CreateInstance(
 	if err := s.repo.CreateInstance(ctx, instance); err != nil {
 		return nil, err
 	}
+	s.notifyChanged()
 	return instance, nil
 }
 
@@ -124,6 +139,7 @@ func (s *Service) UpdateInstance(
 	if err := s.repo.UpdateInstance(ctx, current); err != nil {
 		return nil, err
 	}
+	s.notifyChanged()
 	return current, nil
 }
 
@@ -158,5 +174,9 @@ func (s *Service) DeleteInstance(ctx context.Context, callerUserID, id string) e
 	if err := s.checkEnabled(); err != nil {
 		return err
 	}
-	return s.repo.DeleteInstance(ctx, callerUserID, id)
+	if err := s.repo.DeleteInstance(ctx, callerUserID, id); err != nil {
+		return err
+	}
+	s.notifyChanged()
+	return nil
 }
