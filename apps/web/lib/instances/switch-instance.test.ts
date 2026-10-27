@@ -37,17 +37,21 @@ describe("switchInstance", () => {
     expect(assign).toHaveBeenCalledWith("/t/task-7?kandev_instance=inst-1");
   });
 
-  it("switches back to the local instance without selecting a registry row", async () => {
-    await switchInstance("local", "/t/task-7");
+  it("clears the selection when switching back to the local instance", async () => {
+    select.mockResolvedValue({ href: "/" });
 
-    expect(select).not.toHaveBeenCalled();
-    expect(assign).toHaveBeenCalledWith("/t/task-7?kandev_instance=local");
-  });
-
-  it("defaults the local switch target to the app root", async () => {
     await switchInstance("local");
 
-    expect(select).not.toHaveBeenCalled();
-    expect(assign).toHaveBeenCalledWith("/?kandev_instance=local");
+    expect(select).toHaveBeenCalledWith("local");
+    expect(assign).toHaveBeenCalledWith("/");
+  });
+
+  it("reloads a local switch to the target path without an instance query pin", async () => {
+    select.mockResolvedValue({ href: "/" });
+
+    await switchInstance("local", "/t/task-7");
+
+    expect(select).toHaveBeenCalledWith("local");
+    expect(assign).toHaveBeenCalledWith("/t/task-7");
   });
 });

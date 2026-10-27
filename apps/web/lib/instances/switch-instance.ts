@@ -6,18 +6,16 @@ import { LOCAL_INSTANCE_ID } from "@/lib/state/slices/instances/types";
  * backend (the registry lives there, not behind the instance proxy), then a
  * full page reload so the Go shell re-boots the SPA for that instance. A
  * targetPath (for example /t/:taskId) deep-links into the target instance;
- * the kandev_instance query keeps that load on the target instance.
+ * for a remote instance the kandev_instance query pins that load to it.
+ * Selecting the local instance clears the selection cookie, so its reload
+ * carries no query pin: a query-less load stays local.
  */
 export async function switchInstance(instanceId: string, targetPath?: string): Promise<void> {
+  const { href } = await selectInstance(instanceId);
   if (instanceId === LOCAL_INSTANCE_ID) {
-    // The local instance has no registry row to select, and a remote
-    // selection cookie may still be set; the shell treats an unknown id
-    // (including 'local') as the local boot, so the query pins this load to
-    // local without a select round-trip.
-    window.location.assign(instanceHref(targetPath ?? "/", instanceId));
+    window.location.assign(targetPath ?? href);
     return;
   }
-  const { href } = await selectInstance(instanceId);
   window.location.assign(targetPath ? instanceHref(targetPath, instanceId) : href);
 }
 

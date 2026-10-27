@@ -139,6 +139,46 @@ func TestSelectSetsInstanceAndBridgeCookies(t *testing.T) {
 	require.Equal(t, inert.ID, rec.Result().Cookies()[0].Value)
 }
 
+// TestSelectLocalClearsSelection pins the switch-back contract: the local
+// sentinel id is not a registry row, so selecting it deletes the selection
+// cookie (same attributes, Max-Age=0) and mints no bridge capability, and a
+// query-less reload boots the local instance.
+func TestSelectLocalClearsSelection(t *testing.T) {
+	services, cfg := newInstanceShellFixture(t)
+	item, err := services.Instances.CreateInstance(
+		t.Context(), userstore.DefaultUserID, "GPU box", "http://localhost:1", "", true)
+	require.NoError(t, err)
+
+	router := gin.New()
+	registerInstanceRoutes(routeParams{router: router, services: services, features: cfg.Features})
+
+	// Seed a remote selection, then switch back to local.
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, instanceRouteRequest(http.MethodPost, "/api/v1/instances/"+item.ID+"/select", ""))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, instanceRouteRequest(http.MethodPost, "/api/v1/instances/local/select", ""))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"href":"/"}`, rec.Body.String())
+
+	headers := rec.Header().Values("Set-Cookie")
+	require.Len(t, headers, 1)
+	require.Contains(t, headers[0], webapp.InstanceCookieName+"=")
+	require.Contains(t, headers[0], "Max-Age=0")
+	require.Contains(t, headers[0], "Path=/")
+	require.Contains(t, headers[0], "HttpOnly")
+
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	require.Equal(t, webapp.InstanceCookieName, cookies[0].Name)
+	require.Empty(t, cookies[0].Value)
+	require.Negative(t, cookies[0].MaxAge)
+	for _, cookie := range cookies {
+		require.NotContains(t, cookie.Name, "kandev_bridge_")
+	}
+}
+
 func TestInstanceRoutesFlagOffGone(t *testing.T) {
 	router := gin.New()
 	registerInstanceRoutes(routeParams{router: router, services: &Services{}})

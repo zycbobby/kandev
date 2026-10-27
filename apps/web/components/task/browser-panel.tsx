@@ -12,6 +12,7 @@ import {
   PanelHeaderOverflowMenu,
 } from "./panel-primitives";
 import { useAppStore } from "@/components/state-provider";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { detectPreviewUrlFromOutput, rewritePreviewUrlForProxy } from "@/lib/preview-url-detector";
 import { PreviewFeedbackControls } from "./inspector/preview-feedback-controls";
 import { usePreviewCapture } from "@/hooks/use-preview-capture";
@@ -26,14 +27,29 @@ function BrowserPanelContent({
   refreshKey,
   iframeRef,
   onIframeLoad,
+  hostPreviewUnavailable,
 }: {
   showIframeDelayed: string | false;
   iframeSrc: string;
   refreshKey: number;
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   onIframeLoad: () => void;
+  hostPreviewUnavailable: boolean;
 }) {
   const { t } = useTranslation();
+  // Host-bound preview: the port-proxy URL binds to the machine serving the
+  // panel, so a remote instance's preview cannot be embedded; the degraded
+  // affordance replaces the iframe (and its loading state) entirely.
+  if (hostPreviewUnavailable) {
+    return (
+      <div
+        data-testid="browser-panel-remote-unavailable"
+        className="h-full w-full flex flex-col items-center justify-center gap-2 p-4 text-center text-muted-foreground"
+      >
+        <p className="text-sm">{t("instances:unavailableForRemote")}</p>
+      </div>
+    );
+  }
   if (showIframeDelayed) {
     return (
       <iframe
@@ -151,7 +167,11 @@ export const BrowserPanel = memo(function BrowserPanel({ params }: BrowserPanelP
   const activeTaskId = useAppStore((state) => state.tasks.activeTaskId);
   const activeSessionId = useAppStore((state) => state.tasks.activeSessionId);
   const url = useBrowserPanelUrl((params.url as string) || "");
-  const showInspect = url.canProxy;
+  // The proxied preview (canProxy) is host-bound; the capture controls ride
+  // the same port-proxy, so both degrade for a remote instance.
+  const isRemoteInstance = useIsRemoteInstance();
+  const hostPreviewUnavailable = isRemoteInstance && url.canProxy;
+  const showInspect = url.canProxy && !isRemoteInstance;
   const capture = usePreviewCapture({
     taskId: activeTaskId,
     iframeRef,
@@ -179,6 +199,7 @@ export const BrowserPanel = memo(function BrowserPanel({ params }: BrowserPanelP
           refreshKey={url.refreshKey}
           iframeRef={iframeRef}
           onIframeLoad={capture.handleIframeLoad}
+          hostPreviewUnavailable={hostPreviewUnavailable}
         />
       </PanelBody>
     </PanelRoot>

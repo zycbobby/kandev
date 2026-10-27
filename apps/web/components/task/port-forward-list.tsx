@@ -15,6 +15,7 @@ import type { ListeningPort } from "@/lib/api/domains/port-api";
 import { PortUrlActions } from "./port-forward-dialog-actions";
 import { buildPortForwardRows, type ForwardablePort } from "./port-forward-rows";
 import { getBackendConfig } from "@/lib/config";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { toast } from "@/lib/toast/sonner";
 import { useTranslation } from "react-i18next";
 
@@ -58,7 +59,11 @@ function TunnelToggleButton({
   port: number;
 }) {
   const { t } = useTranslation();
+  // Host-bound: a tunnel binds a dedicated port on the machine serving the
+  // panel, so a remote instance's tasks have no reachable tunnel to manage.
+  const isRemoteInstance = useIsRemoteInstance();
   const Icon = isTunnelActive ? IconPlugConnectedX : IconPlugConnected;
+  const toggleLabel = isTunnelActive ? t("task:stopTunnel") : t("task:startTunnel");
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -67,12 +72,13 @@ function TunnelToggleButton({
           ref={buttonRef}
           data-testid={`port-forward-tunnel-toggle-${port}`}
           variant="ghost"
-          aria-label={isTunnelActive ? t("task:stopTunnel") : t("task:startTunnel")}
+          aria-label={toggleLabel}
           className={`cursor-pointer shrink-0 ${isTunnelActive ? "text-destructive hover:text-destructive" : ""}`}
           onClick={() => {
             if (!tunnelPending) (isTunnelActive ? onStop : onToggleForm)();
           }}
-          aria-disabled={tunnelPending}
+          disabled={isRemoteInstance}
+          aria-disabled={tunnelPending || isRemoteInstance}
         >
           {tunnelPending ? (
             <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
@@ -82,7 +88,7 @@ function TunnelToggleButton({
         </Button>
       </TooltipTrigger>
       <TooltipContent>
-        {isTunnelActive ? t("task:stopTunnel") : t("task:startTunnel")}
+        {isRemoteInstance ? t("instances:unavailableForRemote") : toggleLabel}
       </TooltipContent>
     </Tooltip>
   );

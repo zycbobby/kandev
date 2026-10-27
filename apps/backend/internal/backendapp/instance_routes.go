@@ -219,14 +219,25 @@ func visibleInstance(ctx context.Context, svc *instances.Service, owner, id stri
 	return nil
 }
 
+// localInstanceID is the instance picker's sentinel for the serving instance.
+// Registry ids are UUIDs, so the sentinel can never name a registry row; the
+// select route treats it as "clear the selection" rather than a lookup.
+const localInstanceID = "local"
+
 // selectInstanceRoute implements the switch contract: it verifies the instance
 // is visible to the caller, records the selection in the kandev_instance
 // cookie the shell re-reads on the next full-page load, mints the bridge
 // capability cookie through the live proxy server, and returns the reload
-// target. The bridge mint happens only after both checks above it.
+// target. The bridge mint happens only after both checks above it. The local
+// sentinel id clears the selection instead: no registry lookup, no bridge.
 func selectInstanceRoute(svc *instances.Service, proxies *ProxyManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
+		if id == localInstanceID {
+			clearInstanceSelection(c.Writer, c.Request)
+			c.JSON(http.StatusOK, gin.H{"href": "/"})
+			return
+		}
 		if visibleInstance(c.Request.Context(), svc, instanceCallerUserID(c), id) == nil {
 			c.JSON(http.StatusNotFound, gin.H{errKey: "instance not found"})
 			return
@@ -246,4 +257,19 @@ func selectInstanceRoute(svc *instances.Service, proxies *ProxyManager) gin.Hand
 		}
 		c.JSON(http.StatusOK, gin.H{"href": "/"})
 	}
+}
+
+// clearInstanceSelection deletes the selection cookie with the same
+// attributes it was set with, so a query-less reload boots the local
+// instance. MaxAge<0 serializes as Max-Age=0.
+func clearInstanceSelection(w http.ResponseWriter, req *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     webapp.InstanceCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   req.TLS != nil || strings.EqualFold(req.Header.Get("X-Forwarded-Proto"), "https"),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 }
