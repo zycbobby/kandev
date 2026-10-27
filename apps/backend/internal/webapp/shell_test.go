@@ -273,9 +273,10 @@ func TestBytesCapacityReturnsZeroOnOverflow(t *testing.T) {
 
 // TestShellRemoteInstanceInjectsPortAndOmitsPayload pins the remote-instance
 // shell contract: a boot payload marked OmitBootData renders a script that
-// assigns only window.__KANDEV_API_PORT, never the boot payload global, so the
-// SPA re-hydrates through the /api/v1/app-state fallback against the proxy
-// port. The title still rewrites through the regular TitlePrefix path.
+// assigns only window.__KANDEV_API_PORT and window.__KANDEV_INSTANCE_ID, never
+// the boot payload global, so the SPA re-hydrates through the /api/v1/app-state
+// fallback against the proxy port. The title still rewrites through the
+// regular TitlePrefix path.
 func TestShellRemoteInstanceInjectsPortAndOmitsPayload(t *testing.T) {
 	t.Parallel()
 
@@ -288,6 +289,7 @@ func TestShellRemoteInstanceInjectsPortAndOmitsPayload(t *testing.T) {
 		payload := NewBootPayload(route, RuntimeConfig{TitlePrefix: "GPU box"}, nil)
 		payload.OmitBootData = true
 		payload.APIPort = 41234
+		payload.InstanceID = "inst-gpu-9"
 		return payload
 	}))
 
@@ -300,6 +302,9 @@ func TestShellRemoteInstanceInjectsPortAndOmitsPayload(t *testing.T) {
 	}
 	if !strings.Contains(got, `window.__KANDEV_API_PORT="41234"`) {
 		t.Fatalf("remote-instance shell missing API port global: %s", got)
+	}
+	if !strings.Contains(got, `window.__KANDEV_INSTANCE_ID="inst-gpu-9"`) {
+		t.Fatalf("remote-instance shell missing instance ID global: %s", got)
 	}
 	if strings.Contains(got, bootPayloadGlobal) {
 		t.Fatalf("remote-instance shell must omit the boot payload global: %s", got)

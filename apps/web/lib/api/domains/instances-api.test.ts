@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The panel's data base points at the selected instance's proxy port while
+// the registry stays on the local backend, so the two resolutions diverge.
+const bases = vi.hoisted(() => ({ proxy: "http://proxy.test:41234", local: "http://api.test" }));
+
 vi.mock("@/lib/config", () => ({
-  getBackendConfig: () => ({ apiBaseUrl: "http://api.test" }),
+  getBackendConfig: () => ({ apiBaseUrl: bases.proxy }),
+  getLocalBackendConfig: () => ({ apiBaseUrl: bases.local }),
 }));
 
 import {
@@ -43,6 +48,7 @@ function lastCall(): { url: string; init: FetchInit | undefined } {
 }
 
 const BASE = "http://api.test/api/v1/instances";
+const CHECKED_AT = "2026-10-20T10:00:00Z";
 const INSTANCE_BASE_URL = "http://192.168.1.20:43110";
 
 function instanceRow(overrides: Record<string, unknown> = {}) {
@@ -176,6 +182,35 @@ describe("selectInstance", () => {
     const { url, init } = lastCall();
     expect(url).toBe(`${BASE}/inst-1/select`);
     expect(init?.method).toBe("POST");
+  });
+});
+
+describe("local-base resolution", () => {
+  it("resolves registry reads against the local backend while the panel views a remote proxy", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ href: "/" }));
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({ reachable: true, supported: true, lastCheckedAt: CHECKED_AT }),
+    );
+
+    await listInstances();
+    await selectInstance("inst-1");
+    await getInstanceHealth("inst-1");
+
+    expect(fetchSpy.mock.calls.map((call) => String(call[0]))).toEqual([
+      `${bases.local}/api/v1/instances`,
+      `${bases.local}/api/v1/instances/inst-1/select`,
+      `${bases.local}/api/v1/instances/inst-1/health`,
+    ]);
+    expect(fetchSpy.mock.calls.some((call) => String(call[0]).startsWith(bases.proxy))).toBe(false);
+  });
+
+  it("lets an explicit caller baseUrl still win", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+    await listInstances({ baseUrl: "http://explicit.test" });
+
+    expect(lastCall().url).toBe("http://explicit.test/api/v1/instances");
   });
 });
 

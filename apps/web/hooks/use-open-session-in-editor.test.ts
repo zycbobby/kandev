@@ -5,6 +5,11 @@ const mockOpenSessionInEditor = vi.fn();
 const mockOpenFileInVscode = vi.fn();
 const mockOpenInternalVscode = vi.fn();
 const mockToast = vi.fn();
+const remote = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/hooks/domains/instances/use-is-remote-instance", () => ({
+  useIsRemoteInstance: () => remote.value,
+}));
 
 vi.mock("@/components/toast-provider", () => ({
   useToast: () => ({ toast: mockToast }),
@@ -37,7 +42,19 @@ import { useOpenSessionInEditor } from "./use-open-session-in-editor";
 describe("useOpenSessionInEditor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    remote.value = false;
     mockOpenSessionInEditor.mockResolvedValue({});
+  });
+
+  it("does not dispatch the host command for a remote instance", async () => {
+    remote.value = true;
+    const { result } = renderHook(() => useOpenSessionInEditor("session-1"));
+
+    await expect(result.current.open({ editorId: "editor-1" })).resolves.toBeNull();
+
+    expect(mockOpenSessionInEditor).not.toHaveBeenCalled();
+    expect(mockOpenInternalVscode).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalled();
   });
 
   it("forwards the selected worktree as worktree_id", async () => {

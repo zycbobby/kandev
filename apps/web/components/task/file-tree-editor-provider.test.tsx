@@ -45,6 +45,7 @@ vi.mock("@/components/state-provider", () => ({
     selector({
       userSettings: { defaultEditorId: "vscode" },
       embeddedVscodeSupport: { bySessionId: { "session-1": fixtures.embeddedVscodeSupported } },
+      instances: { activeId: "local" },
     }),
 }));
 

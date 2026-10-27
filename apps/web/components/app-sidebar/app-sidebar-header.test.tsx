@@ -46,6 +46,12 @@ vi.mock("./app-sidebar-workspace-picker", () => ({
   ),
 }));
 
+vi.mock("./app-sidebar-instance-picker", () => ({
+  AppSidebarInstancePicker: ({ triggerClassName }: { triggerClassName?: string }) => (
+    <button type="button" data-testid="instance-picker" data-trigger-class={triggerClassName} />
+  ),
+}));
+
 import { AppSidebarHeader } from "./app-sidebar-header";
 
 function renderHeader(collapsed = false) {
@@ -121,6 +127,18 @@ describe("AppSidebarHeader", () => {
     const header = screen.getByTestId("app-sidebar-header");
     expect(header.getAttribute("data-sidebar-header-collapsed")).toBe("true");
     expect(header.getAttribute("data-tauri-drag-region")).toBe("deep");
+  });
+
+  it("mounts the instance picker beside the workspace picker when expanded", () => {
+    renderHeader();
+
+    expect(screen.getByTestId("instance-picker")).toBeTruthy();
+  });
+
+  it("omits the instance picker from the collapsed rail", () => {
+    renderHeader(true);
+
+    expect(screen.queryByTestId("instance-picker")).toBeNull();
   });
 });
 

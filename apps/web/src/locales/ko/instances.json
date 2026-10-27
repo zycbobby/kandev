@@ -35,5 +35,13 @@
   "saveFailed": "인스턴스를 저장할 수 없습니다: {{error}}",
   "deleteFailed": "인스턴스를 제거할 수 없습니다: {{error}}",
   "loadFailed": "인스턴스를 불러올 수 없습니다: {{error}}",
-  "nameAndBaseUrlRequired": "이름과 기본 URL은 필수입니다"
+  "nameAndBaseUrlRequired": "이름과 기본 URL은 필수입니다",
+  "localInstance": "이 컴퓨터",
+  "switchInstance": "인스턴스 전환",
+  "unavailableForRemote": "원격 인스턴스에서는 사용할 수 없습니다",
+  "instanceDisabledHint": "전환하려면 설정에서 이 인스턴스를 활성화하세요.",
+  "healthDotHealthy": "정상",
+  "healthDotUnreachable": "연결 불가",
+  "healthDotUnsupported": "지원되지 않는 버전",
+  "healthDotUnknown": "아직 상태를 확인하지 않았습니다"
 }

@@ -33,6 +33,7 @@ export {
   createInboxHistorySlice,
   defaultInboxHistoryState,
 } from "./inbox-history/inbox-history-slice";
+export { createInstancesSlice, defaultInstancesState } from "./instances/instances-slice";
 
 // Export types
 export type { KanbanSlice, KanbanSliceState, KanbanSliceActions } from "./kanban/types";
@@ -138,6 +139,13 @@ export type {
   InboxHistoryWorkspaceState,
   InboxHistoryReadStatus,
 } from "./inbox-history/types";
+export type {
+  InstancesSlice,
+  InstancesSliceActions,
+  InstancesSliceState,
+  InstanceListItem,
+  InstancesStatus,
+} from "./instances/types";
 
 // Re-export commonly used types from each domain
 export type {

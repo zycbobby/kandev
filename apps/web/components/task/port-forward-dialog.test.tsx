@@ -49,6 +49,12 @@ const {
   },
 }));
 
+// These suites cover local-instance behavior; the port-proxy actions'
+// host-bound degradation stays pinned off here.
+vi.mock("@/hooks/domains/instances/use-is-remote-instance", () => ({
+  useIsRemoteInstance: () => false,
+}));
+
 vi.mock("@/lib/api/domains/port-api", () => ({
   listPorts: listPortsMock,
   listTunnels: listTunnelsMock,

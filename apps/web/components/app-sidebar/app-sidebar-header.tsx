@@ -10,6 +10,7 @@ import { useOfficeModeState } from "@/hooks/use-in-office";
 import { cn } from "@/lib/utils";
 import { workspaceHomeHref } from "./app-sidebar-workspace-navigation";
 import { AppSidebarWorkspacePicker } from "./app-sidebar-workspace-picker";
+import { AppSidebarInstancePicker } from "./app-sidebar-instance-picker";
 import { macTauriDragRegionProps } from "@/lib/desktop/window-chrome";
 
 type AppSidebarHeaderProps = {
@@ -116,6 +117,8 @@ export function AppSidebarHeader({
       </span>
       {/* Hover already provides an anchor; the global picker action persistently expands the rail. */}
       <AppSidebarWorkspacePicker {...pickerProps} triggerClassName="text-xs" />
+      {/* The instance picker hides itself while no remote instance is registered. */}
+      <AppSidebarInstancePicker />
       <Tooltip>
         <TooltipTrigger asChild>
           <Button

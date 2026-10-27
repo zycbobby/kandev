@@ -12,6 +12,7 @@ import {
 } from "@kandev/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
 import { useEditors } from "@/hooks/domains/settings/use-editors";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { useOpenSessionInEditor } from "@/hooks/use-open-session-in-editor";
 import { useOpenSessionFolder } from "@/hooks/use-open-session-folder";
 import { useAppStore } from "@/components/state-provider";
@@ -120,6 +121,9 @@ export function FileActionsMenuItems(props: FileActionsMenuItemsProps) {
     handleOpenFolder,
     handleOpenInEditor,
   } = useFileActions(props);
+  // Host-bound: opening a file in an editor or its folder runs on the
+  // machine serving the panel, so both degrade for a remote instance.
+  const isRemoteInstance = useIsRemoteInstance();
 
   return (
     <>
@@ -127,6 +131,7 @@ export function FileActionsMenuItems(props: FileActionsMenuItemsProps) {
         <DropdownMenuItem
           key={editor.id}
           className="cursor-pointer text-xs"
+          disabled={isRemoteInstance}
           onSelect={() => handleOpenInEditor(editor.id)}
         >
           <IconExternalLink className="h-3.5 w-3.5" />
@@ -141,6 +146,11 @@ export function FileActionsMenuItems(props: FileActionsMenuItemsProps) {
       {enabledEditors.length === 0 && (
         <DropdownMenuItem disabled className="text-xs">
           {t("editors:noEditorsConfigured")}
+        </DropdownMenuItem>
+      )}
+      {isRemoteInstance && (
+        <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+          {t("instances:unavailableForRemote")}
         </DropdownMenuItem>
       )}
       <DropdownMenuSeparator />

@@ -35,5 +35,13 @@
   "saveFailed": "Não foi possível guardar a instância: {{error}}",
   "deleteFailed": "Não foi possível remover a instância: {{error}}",
   "loadFailed": "Não foi possível carregar as instâncias: {{error}}",
-  "nameAndBaseUrlRequired": "São necessários um nome e um URL base"
+  "nameAndBaseUrlRequired": "São necessários um nome e um URL base",
+  "localInstance": "Este computador",
+  "switchInstance": "Trocar instância",
+  "unavailableForRemote": "Indisponível para instâncias remotas",
+  "instanceDisabledHint": "Ative esta instância nas definições antes de trocar.",
+  "healthDotHealthy": "Saudável",
+  "healthDotUnreachable": "Inacessível",
+  "healthDotUnsupported": "Versão não suportada",
+  "healthDotUnknown": "Estado de saúde ainda não verificado"
 }

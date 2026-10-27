@@ -5,6 +5,12 @@ import { ToastProvider } from "@/components/toast-provider";
 import { WebSocketClient } from "@/lib/ws/client";
 import { getWebSocketClient, setWebSocketClient } from "@/lib/ws/connection";
 import targets from "../../backend/internal/editors/service/testdata/embedded-editor-file-targets.json";
+// The wire harness renders the hook outside a store provider; these suites
+// cover local-instance behavior, so the remote-instance flag is pinned off.
+vi.mock("@/hooks/domains/instances/use-is-remote-instance", () => ({
+  useIsRemoteInstance: () => false,
+}));
+
 import { useOpenSessionInEditor } from "./use-open-session-in-editor";
 
 type Wire = { id: string; type: string; action: string; payload: unknown };

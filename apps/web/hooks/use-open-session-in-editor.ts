@@ -1,6 +1,7 @@
 "use client";
 
 import { openSessionInEditor } from "@/lib/api";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { useRequest } from "@/lib/http/use-request";
 import { useDockviewStore } from "@/lib/state/dockview-store";
 import { openFileInVscode } from "@/lib/api/domains/vscode-api";
@@ -51,6 +52,9 @@ function openInternalVscode(sessionId: string, url: string, options?: OpenEditor
 
 export function useOpenSessionInEditor(sessionId?: string | null) {
   const { toast } = useToast();
+  // Host-bound: the editors API launches an editor installed on the machine
+  // serving the panel, so a task of a remote instance must never dispatch it.
+  const isRemoteInstance = useIsRemoteInstance();
   const request = useRequest(async (options?: OpenEditorOptions) => {
     if (!sessionId) {
       return null;
@@ -83,6 +87,7 @@ export function useOpenSessionInEditor(sessionId?: string | null) {
 
   return {
     open: async (options?: OpenEditorOptions) => {
+      if (isRemoteInstance) return null;
       try {
         return await request.run(options);
       } catch (error) {

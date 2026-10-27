@@ -50,6 +50,7 @@ import {
   defaultFailedInboxState,
   defaultPreviewFeedbackState,
   defaultInboxHistoryState,
+  defaultInstancesState,
 } from "./slices";
 import type {
   WorkspaceState,
@@ -80,6 +81,7 @@ import type {
   NeedsYouInboxBootSeed,
 } from "./slices";
 import type { TaskOverviewSlice } from "./slices/task-overview-types";
+import type { InstancesSliceActions } from "./slices/instances/types";
 import type { AppStateExtraActions } from "./app-state-extra-actions";
 import type { TurnChangeSetSummary } from "@/lib/types/turn-changes";
 import type { GitStatusRefreshState } from "./slices/session-runtime/types";
@@ -249,6 +251,10 @@ export type AppState = KanbanSlice & {
   // Inbox History slice (actions merged via InboxHistorySliceActions
   // intersection on AppState)
   inboxHistory: (typeof defaultInboxHistoryState)["inboxHistory"];
+
+  // Instances slice (actions merged via InstancesSliceActions intersection on
+  // AppState)
+  instances: (typeof defaultInstancesState)["instances"];
 
   // UI slice
   previewPanel: (typeof defaultUIState)["previewPanel"];
@@ -751,6 +757,7 @@ export type AppState = KanbanSlice & {
   acknowledgeAgentErrors: UIA["acknowledgeAgentErrors"];
   dismissAgentError: UIA["dismissAgentError"];
 } & TaskOverviewSlice &
+  InstancesSliceActions &
   AppStateExtraActions &
   Pick<
     UIA,

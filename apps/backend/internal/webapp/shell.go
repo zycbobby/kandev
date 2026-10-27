@@ -14,6 +14,7 @@ import (
 
 const bootPayloadGlobal = "window.__KANDEV_BOOT_PAYLOAD__"
 const apiPortGlobal = "window.__KANDEV_API_PORT"
+const instanceIDGlobal = "window.__KANDEV_INSTANCE_ID"
 const debugGlobalAssignment = "window.__KANDEV_DEBUG=true;"
 const maxInt = int(^uint(0) >> 1)
 
@@ -170,10 +171,11 @@ func BootPayloadScript(payload BootPayload) ([]byte, error) {
 	if payload.Runtime.Debug {
 		debugPrefix = debugGlobalAssignment
 	}
-	// A remote-instance boot carries no local state: only the proxy port is
-	// assigned and the SPA re-hydrates through /api/v1/app-state.
+	// A remote-instance boot carries no local state: only the proxy port and
+	// the active instance ID are assigned and the SPA re-hydrates through
+	// /api/v1/app-state.
 	if payload.OmitBootData {
-		return apiPortScript(payload.APIPort, debugPrefix), nil
+		return instanceGlobalsScript(payload.APIPort, payload.InstanceID, debugPrefix), nil
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -189,16 +191,29 @@ func BootPayloadScript(payload BootPayload) ([]byte, error) {
 	return script, nil
 }
 
-// apiPortScript builds the OmitBootData boot script: the quoted port matches
-// the window.__KANDEV_API_PORT global type the SPA reads in lib/config.ts.
-func apiPortScript(port int, debugPrefix string) []byte {
-	script := make([]byte, 0, bytesCapacity(len(debugPrefix), len(apiPortGlobal), 16))
+// instanceGlobalsScript builds the OmitBootData boot script: the quoted port
+// matches the window.__KANDEV_API_PORT global type the SPA reads in
+// lib/config.ts, and window.__KANDEV_INSTANCE_ID tells the SPA which instance
+// is active without reading the HttpOnly selection cookie. strconv.Quote
+// delimits the values so no ID can terminate the assignment.
+func instanceGlobalsScript(port int, instanceID, debugPrefix string) []byte {
+	script := make(
+		[]byte,
+		0,
+		bytesCapacity(len(debugPrefix), len(apiPortGlobal), len(instanceIDGlobal), 16+len(instanceID)),
+	)
 	script = append(script, "<script>"...)
 	script = append(script, debugPrefix...)
 	script = append(script, apiPortGlobal...)
 	script = append(script, `="`...)
 	script = append(script, strconv.Itoa(port)...)
 	script = append(script, `";`...)
+	if instanceID != "" {
+		script = append(script, instanceIDGlobal...)
+		script = append(script, `=`...)
+		script = append(script, strconv.Quote(instanceID)...)
+		script = append(script, ';')
+	}
 	script = append(script, "</script>"...)
 	return script
 }

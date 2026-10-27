@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNo
 import { useTranslation } from "react-i18next";
 import { MobileWorkspaceActionsSection } from "@/components/app-sidebar/app-sidebar-workspace-actions";
 import { AppSidebarWorkspacePicker } from "@/components/app-sidebar/app-sidebar-workspace-picker";
+import { AppSidebarInstancePicker } from "@/components/app-sidebar/app-sidebar-instance-picker";
 import { MobileQuickActions } from "@/components/kanban/mobile-listing-menu-actions";
 import { StatusSurfaceMetrics } from "@/components/system-metrics/status-surface-metrics";
 import { useAppStore } from "@/components/state-provider";
@@ -69,8 +70,9 @@ export function AppNavSheet(props: AppNavSheetProps) {
         trigger={<AppNavTrigger ref={opener} aria-expanded={open} />}
       >
         {isMobile && (
-          <div className="shrink-0 px-4 pb-3">
+          <div className="shrink-0 space-y-2 px-4 pb-3">
             <NavigationWorkspacePicker close={close} />
+            <NavigationInstancePicker />
           </div>
         )}
         <nav
@@ -181,6 +183,22 @@ function NavigationWorkspacePicker({ close }: { close: () => void }) {
         chevronTestId="mobile-workspace-trigger-chevron"
         itemTestIdPrefix="mobile-workspace-item"
         contentClassName="w-80 max-w-[calc(100vw-2rem)]"
+      />
+    </section>
+  );
+}
+
+/** Same layer as the workspace picker: outside the scrolling menu body. */
+function NavigationInstancePicker() {
+  const { t } = useTranslation();
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="sr-only">{t("instances:switchInstance")}</h3>
+      <AppSidebarInstancePicker
+        triggerClassName="min-h-11 w-full flex-none"
+        triggerTestId="mobile-instance-trigger"
+        itemTestIdPrefix="mobile-instance-item"
+        healthTestIdPrefix="mobile-instance-health"
       />
     </section>
   );

@@ -35,5 +35,13 @@
   "saveFailed": "Ćōũĺď ńōţ śàvē ţĥē ĩńśţàńćē: {{error}}",
   "deleteFailed": "Ćōũĺď ńōţ ŕēḿōvē ţĥē ĩńśţàńćē: {{error}}",
   "loadFailed": "Ćōũĺď ńōţ ĺōàď ĩńśţàńćēś: {{error}}",
-  "nameAndBaseUrlRequired": "À ńàḿē àńď à ƀàśē ŨŔĹ àŕē ŕēqũĩŕēď"
+  "nameAndBaseUrlRequired": "À ńàḿē àńď à ƀàśē ŨŔĹ àŕē ŕēqũĩŕēď",
+  "localInstance": "Ţĥĩś ćōḿƥũţēŕ",
+  "switchInstance": "Śŵĩţćĥ ĩńśţàńćē",
+  "unavailableForRemote": "Ũńàvàĩĺàƀĺē ƒōŕ ŕēḿōţē ĩńśţàńćēś",
+  "instanceDisabledHint": "Ēńàƀĺē ţĥĩś ĩńśţàńćē ĩń śēţţĩńĝś ţō śŵĩţćĥ ţō ĩţ.",
+  "healthDotHealthy": "Ĥēàĺţĥŷ",
+  "healthDotUnreachable": "Ũńŕēàćĥàƀĺē",
+  "healthDotUnsupported": "Ũńśũƥƥōŕţēď vēŕśĩōń",
+  "healthDotUnknown": "Ĥēàĺţĥ ńōţ ćĥēćķēď ŷēţ"
 }

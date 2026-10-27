@@ -31,6 +31,12 @@ type BootPayload struct {
 	// remote instance through the local proxy. Only meaningful together with
 	// OmitBootData.
 	APIPort int `json:"apiPort,omitempty"`
+	// InstanceID is the selected remote instance's ID, injected alongside
+	// APIPort so the SPA can tell which instance is active: the selection
+	// cookie is HttpOnly, so the injected global is the SPA's only readable
+	// source. Only meaningful together with OmitBootData; like OmitBootData it
+	// is a shell rendering instruction, never serialized payload data.
+	InstanceID string `json:"-"`
 	// OmitBootData switches the injected script from the boot payload global
 	// to an API-port-only assignment, so the SPA re-hydrates through its
 	// /api/v1/app-state fallback instead of local boot data. It is a shell

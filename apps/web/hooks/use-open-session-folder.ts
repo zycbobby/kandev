@@ -1,6 +1,7 @@
 "use client";
 
 import { useEditors } from "@/hooks/domains/settings/use-editors";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { create } from "zustand";
 import { openSessionFolder } from "@/lib/api";
 import { useRequest } from "@/lib/http/use-request";
@@ -23,6 +24,10 @@ function setFolderPending(sessionId: string, pending: boolean) {
 
 export function useOpenSessionFolder(sessionId?: string | null) {
   const { folderOpeningAvailable } = useEditors();
+  // Host-bound: the opener runs on the machine serving the panel, so a task
+  // of a remote instance has no local folder to open.
+  const isRemoteInstance = useIsRemoteInstance();
+  const available = folderOpeningAvailable && !isRemoteInstance;
   const { toast } = useToast();
   const isLoading = usePendingFolders((state) =>
     Boolean(sessionId && state.sessions.has(sessionId)),
@@ -40,11 +45,7 @@ export function useOpenSessionFolder(sessionId?: string | null) {
 
   return {
     open: async (worktreeId?: string) => {
-      if (
-        !sessionId ||
-        !folderOpeningAvailable ||
-        usePendingFolders.getState().sessions.has(sessionId)
-      )
+      if (!sessionId || !available || usePendingFolders.getState().sessions.has(sessionId))
         return null;
       setFolderPending(sessionId, true);
       try {
@@ -56,7 +57,7 @@ export function useOpenSessionFolder(sessionId?: string | null) {
         setFolderPending(sessionId, false);
       }
     },
-    available: folderOpeningAvailable,
+    available,
     status: isLoading ? "loading" : request.status,
     isLoading,
   };

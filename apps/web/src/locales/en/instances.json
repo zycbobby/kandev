@@ -35,5 +35,13 @@
   "saveFailed": "Could not save the instance: {{error}}",
   "deleteFailed": "Could not remove the instance: {{error}}",
   "loadFailed": "Could not load instances: {{error}}",
-  "nameAndBaseUrlRequired": "A name and a base URL are required"
+  "nameAndBaseUrlRequired": "A name and a base URL are required",
+  "localInstance": "This computer",
+  "switchInstance": "Switch instance",
+  "unavailableForRemote": "Unavailable for remote instances",
+  "instanceDisabledHint": "Enable this instance in settings to switch to it.",
+  "healthDotHealthy": "Healthy",
+  "healthDotUnreachable": "Unreachable",
+  "healthDotUnsupported": "Unsupported version",
+  "healthDotUnknown": "Health not checked yet"
 }

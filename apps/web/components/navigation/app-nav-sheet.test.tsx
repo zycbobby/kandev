@@ -158,6 +158,23 @@ vi.mock("@/components/theme/app-theme", () => ({
   useTheme: () => ({ resolvedTheme, setTheme: mocks.setTheme }),
 }));
 
+// Local-only registry by default: the picker renders nothing until a test
+// registers a remote instance.
+const instances = vi.hoisted(() => ({
+  state: {
+    items: [{ id: "local", name: "", enabled: true }],
+    activeId: "local",
+    health: {} as Record<string, unknown>,
+    status: "ready",
+  },
+}));
+vi.mock("@/hooks/domains/instances/use-instances", () => ({
+  useInstances: () => instances.state,
+}));
+vi.mock("@/lib/instances/switch-instance", () => ({
+  switchInstance: vi.fn(),
+}));
+
 type SectionsProps = Parameters<typeof AppNavSections>[0];
 
 function SectionsHost({
@@ -322,6 +339,34 @@ describe("AppNavSheet", () => {
       workspaceLabel: "Workspace",
       presentation: "mobile",
     });
+  });
+});
+
+describe("AppNavSheet instance picker", () => {
+  afterEach(cleanup);
+
+  it("keeps the instance picker reachable outside the scrolling menu", () => {
+    const previousItems = instances.state.items;
+    state.features.multiInstance = true;
+    instances.state = {
+      ...instances.state,
+      items: [
+        { id: "local", name: "", enabled: true },
+        { id: "inst-1", name: "Studio workstation", enabled: true },
+      ],
+    };
+    try {
+      render(<AppNavSheet />);
+      fireEvent.click(screen.getByTestId(NAV_TRIGGER));
+      const trigger = screen.getByTestId("mobile-instance-trigger");
+      expect(trigger).toBeTruthy();
+      // The workspace picker's layer: above the nav body, never inside the scroller.
+      expect(trigger.closest("nav")).toBeNull();
+      expect(trigger.className).toContain("min-h-11");
+    } finally {
+      state.features.multiInstance = false;
+      instances.state = { ...instances.state, items: previousItems };
+    }
   });
 });
 

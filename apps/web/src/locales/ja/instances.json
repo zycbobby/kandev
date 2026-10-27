@@ -35,5 +35,13 @@
   "saveFailed": "インスタンスを保存できませんでした: {{error}}",
   "deleteFailed": "インスタンスを削除できませんでした: {{error}}",
   "loadFailed": "インスタンスを読み込めませんでした: {{error}}",
-  "nameAndBaseUrlRequired": "名前とベース URL は必須です"
+  "nameAndBaseUrlRequired": "名前とベース URL は必須です",
+  "localInstance": "このコンピューター",
+  "switchInstance": "インスタンスを切り替える",
+  "unavailableForRemote": "リモートインスタンスでは利用できません",
+  "instanceDisabledHint": "切り替えるには設定でこのインスタンスを有効にしてください。",
+  "healthDotHealthy": "正常",
+  "healthDotUnreachable": "到達できません",
+  "healthDotUnsupported": "サポート対象外のバージョン",
+  "healthDotUnknown": "ヘルスチェックはまだ実行されていません"
 }

@@ -15,6 +15,7 @@ import {
 } from "@kandev/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
 import { useEditors } from "@/hooks/domains/settings/use-editors";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { useOpenSessionInEditor } from "@/hooks/use-open-session-in-editor";
 import { useSessionWorktrees } from "@/hooks/domains/session/use-session-worktrees";
 import { useAppStore } from "@/components/state-provider";
@@ -35,6 +36,16 @@ type EditorsMenuProps = {
   activeSessionId: string | null;
   embeddedVscodeSupported: boolean;
 };
+
+function resolveOpenButtonTooltip(
+  isRemoteInstance: boolean,
+  activeSessionId: string | null,
+  t: (key: string) => string,
+): string {
+  if (isRemoteInstance) return t("instances:unavailableForRemote");
+  if (activeSessionId) return t("task:openEditor");
+  return t("task:selectASessionToOpenIts");
+}
 
 function useWorktreeOptions(sessionId: string | null): WorktreeOption[] {
   const worktrees = useSessionWorktrees(sessionId);
@@ -180,6 +191,9 @@ export function EditorsMenu({ activeSessionId, embeddedVscodeSupported }: Editor
   const { editors } = useEditors();
   const defaultEditorId = useAppStore((state) => state.userSettings.defaultEditorId);
   const worktreeOptions = useWorktreeOptions(activeSessionId ?? null);
+  // Host-bound actions: opening a task's worktree in an editor or folder runs
+  // on the machine serving the panel, not the remote instance.
+  const isRemoteInstance = useIsRemoteInstance();
   const enabledEditors = useMemo(
     () => getAvailableTaskTopbarEditors(editors, embeddedVscodeSupported),
     [editors, embeddedVscodeSupported],
@@ -194,29 +208,40 @@ export function EditorsMenu({ activeSessionId, embeddedVscodeSupported }: Editor
     void openEditor.open({ editorId, worktreeId });
   };
 
+  const openButtonTooltip = resolveOpenButtonTooltip(isRemoteInstance, activeSessionId, t);
+
+  // Editor entries are host-bound and dropped for a remote instance; the
+  // folder row below carries the inline explanation for the whole dropdown.
+  const editorEntries = () => {
+    if (isRemoteInstance) return null;
+    if (enabledEditors.length === 0) {
+      return <DropdownMenuItem disabled>{t("task:noEditorsAvailable")}</DropdownMenuItem>;
+    }
+    return enabledEditors.map((editor: EditorOption) => (
+      <EditorMenuEntry
+        key={editor.id}
+        editor={editor}
+        worktreeOptions={worktreeOptions}
+        onOpen={openWith}
+      />
+    ));
+  };
+
   return (
     <div className="inline-flex h-7 rounded-md border border-border overflow-hidden">
       <OpenEditorButton
-        disabled={!activeSessionId || openEditor.isLoading || enabledEditors.length === 0}
+        disabled={
+          !activeSessionId ||
+          openEditor.isLoading ||
+          enabledEditors.length === 0 ||
+          isRemoteInstance
+        }
         isLoading={openEditor.isLoading}
-        tooltip={activeSessionId ? t("task:openEditor") : t("task:selectASessionToOpenIts")}
+        tooltip={openButtonTooltip}
         worktreeOptions={worktreeOptions}
         onOpen={(worktreeId) => openWith(resolvedEditorId, worktreeId)}
       />
-      <EditorActionsDropdown sessionId={activeSessionId}>
-        {enabledEditors.length === 0 ? (
-          <DropdownMenuItem disabled>{t("task:noEditorsAvailable")}</DropdownMenuItem>
-        ) : (
-          enabledEditors.map((editor: EditorOption) => (
-            <EditorMenuEntry
-              key={editor.id}
-              editor={editor}
-              worktreeOptions={worktreeOptions}
-              onOpen={openWith}
-            />
-          ))
-        )}
-      </EditorActionsDropdown>
+      <EditorActionsDropdown sessionId={activeSessionId}>{editorEntries()}</EditorActionsDropdown>
     </div>
   );
 }

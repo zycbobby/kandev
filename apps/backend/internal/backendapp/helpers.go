@@ -1555,6 +1555,7 @@ func remoteInstanceShellPayload(
 	payload := webapp.NewBootPayload(route, runtime, nil)
 	payload.OmitBootData = true
 	payload.APIPort = server.Port()
+	payload.InstanceID = instance.ID
 	return payload, true
 }
 

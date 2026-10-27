@@ -35,5 +35,13 @@
   "saveFailed": "無法儲存實例：{{error}}",
   "deleteFailed": "無法移除實例：{{error}}",
   "loadFailed": "無法載入實例：{{error}}",
-  "nameAndBaseUrlRequired": "名稱和基礎 URL 為必填項"
+  "nameAndBaseUrlRequired": "名稱和基礎 URL 為必填項",
+  "localInstance": "本機",
+  "switchInstance": "切換實例",
+  "unavailableForRemote": "遠端實例不可用",
+  "instanceDisabledHint": "先在設定中啟用該實例才能切換。",
+  "healthDotHealthy": "健康",
+  "healthDotUnreachable": "無法連線",
+  "healthDotUnsupported": "版本不受支援",
+  "healthDotUnknown": "尚未檢查健康狀態"
 }

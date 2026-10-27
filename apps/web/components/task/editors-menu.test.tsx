@@ -12,6 +12,10 @@ const fixtures = vi.hoisted(() => ({
   openSessionFolder: vi.fn(),
   toast: vi.fn(),
 }));
+const remote = vi.hoisted(() => ({ value: false }));
+vi.mock("@/hooks/domains/instances/use-is-remote-instance", () => ({
+  useIsRemoteInstance: () => remote.value,
+}));
 vi.mock("@/hooks/domains/settings/use-editors", () => ({
   useEditors: () => ({
     editors: fixtures.editors,
@@ -38,6 +42,16 @@ vi.mock("@/hooks/use-responsive-breakpoint", () => ({
 }));
 
 const OPEN_FOLDER_LABEL = "Open folder";
+const MENUITEM_ROLE = "menuitem";
+const ARIA_DISABLED = "aria-disabled";
+const EDITOR_OPTION: EditorOption = {
+  id: "editor-1",
+  type: "editor",
+  name: "Test editor",
+  kind: "custom",
+  installed: true,
+  enabled: true,
+};
 const EDITOR_MENU_TRIGGER_TEST_ID = "editors-menu-list";
 
 function view(sessionId: string | null) {
@@ -54,6 +68,7 @@ beforeEach(() => {
   fixtures.editors = [];
   fixtures.folderOpeningAvailable = true;
   fixtures.openSessionFolder.mockResolvedValue({ success: true });
+  remote.value = false;
 });
 afterEach(cleanup);
 
@@ -64,7 +79,7 @@ async function openMenu() {
 }
 async function chooseFolder() {
   await openMenu();
-  fireEvent.click(screen.getByRole("menuitem", { name: OPEN_FOLDER_LABEL }));
+  fireEvent.click(screen.getByRole(MENUITEM_ROLE, { name: OPEN_FOLDER_LABEL }));
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 }
 
@@ -154,13 +169,13 @@ describe("task folder action", () => {
     await chooseFolder();
     await openMenu();
     expect(
-      screen.getByRole("menuitem", { name: OPEN_FOLDER_LABEL }).getAttribute("aria-disabled"),
+      screen.getByRole(MENUITEM_ROLE, { name: OPEN_FOLDER_LABEL }).getAttribute(ARIA_DISABLED),
     ).toBe("true");
     await act(async () => {
       finish({ success: true });
     });
     expect(
-      screen.getByRole("menuitem", { name: OPEN_FOLDER_LABEL }).getAttribute("aria-disabled"),
+      screen.getByRole(MENUITEM_ROLE, { name: OPEN_FOLDER_LABEL }).getAttribute(ARIA_DISABLED),
     ).not.toBe("true");
   });
 });
@@ -173,8 +188,8 @@ it("blocks the picker and requests when the host opener is missing", async () =>
   ];
   render(view("s1"));
   await openMenu();
-  const button = screen.getByRole("menuitem", { name: OPEN_FOLDER_LABEL });
-  expect(button.getAttribute("aria-disabled")).toBe("true");
+  const button = screen.getByRole(MENUITEM_ROLE, { name: OPEN_FOLDER_LABEL });
+  expect(button.getAttribute(ARIA_DISABLED)).toBe("true");
   fireEvent.click(button);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(fixtures.openSessionFolder).not.toHaveBeenCalled();
@@ -196,21 +211,12 @@ it("reports folder errors and permits retry without launching an editor", async 
 
 it("keeps editor launching available when the folder opener is unavailable", async () => {
   fixtures.folderOpeningAvailable = false;
-  fixtures.editors = [
-    {
-      id: "editor-1",
-      type: "editor",
-      name: "Test editor",
-      kind: "custom",
-      installed: true,
-      enabled: true,
-    },
-  ];
+  fixtures.editors = [EDITOR_OPTION];
   render(view("s1"));
   fireEvent.click(screen.getByTestId("editors-menu-open"));
   expect(fixtures.openEditor).toHaveBeenCalledWith({ editorId: "editor-1", worktreeId: undefined });
   await openMenu();
-  fireEvent.click(screen.getByRole("menuitem", { name: "Test editor" }));
+  fireEvent.click(screen.getByRole(MENUITEM_ROLE, { name: "Test editor" }));
   expect(fixtures.openEditor).toHaveBeenCalledTimes(2);
   expect(fixtures.openSessionFolder).not.toHaveBeenCalled();
 });
@@ -221,4 +227,22 @@ it("announces both editor and folder actions on the dropdown trigger", () => {
   expect(screen.getByRole("button", { name: "Editor and folder actions" })).toBe(
     screen.getByTestId(EDITOR_MENU_TRIGGER_TEST_ID),
   );
+});
+
+it("degrades the host-bound editor and folder actions for a remote instance", async () => {
+  remote.value = true;
+  fixtures.editors = [EDITOR_OPTION];
+  render(view("s1"));
+
+  expect((screen.getByTestId("editors-menu-open") as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByTestId("editors-menu-open"));
+  expect(fixtures.openEditor).not.toHaveBeenCalled();
+
+  await openMenu();
+  const folder = screen.getByRole(MENUITEM_ROLE, { name: /Open folder/ });
+  expect(folder.getAttribute(ARIA_DISABLED)).toBe("true");
+  fireEvent.click(folder);
+  expect(fixtures.openSessionFolder).not.toHaveBeenCalled();
+  expect(fixtures.openEditor).not.toHaveBeenCalled();
+  expect(screen.getByText("Unavailable for remote instances")).toBeTruthy();
 });

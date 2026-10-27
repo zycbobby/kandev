@@ -58,7 +58,7 @@ function actionsWith(editors: EditorOption[], defaultEditorId: string) {
   const openInEditor = vi.fn();
   const resolveTarget = vi.fn(() => ({ filePath: "resolved" }));
   return {
-    actions: { editors, defaultEditorId, resolveTarget, openInEditor },
+    actions: { editors, defaultEditorId, resolveTarget, openInEditor, remoteInstance: false },
     openInEditor,
     resolveTarget,
   };
@@ -108,10 +108,22 @@ describe("Open in editor context menu items", () => {
         defaultEditorId: "",
         resolveTarget: () => ({ filePath: "resolved" }),
         openInEditor: vi.fn(),
+        remoteInstance: false,
       },
     });
 
     expect(screen.queryByTestId(OPEN_ITEM)).toBeNull();
+  });
+
+  it("disables the open action with an explanation for a remote instance", () => {
+    const { actions, openInEditor } = actionsWith([editor(VSCODE_ID, "VS Code")], VSCODE_ID);
+    renderMenu({ actions: { ...actions, remoteInstance: true } });
+
+    const item = screen.getByTestId(OPEN_ITEM);
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(openInEditor).not.toHaveBeenCalled();
+    expect(screen.getByText("Unavailable for remote instances")).toBeTruthy();
   });
 
   it("hides the open action for a node that resolves to no worktree", () => {

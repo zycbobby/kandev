@@ -9,6 +9,7 @@ import {
   ContextMenuSubTrigger,
 } from "@kandev/ui/context-menu";
 import { useEditors } from "@/hooks/domains/settings/use-editors";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { useOpenSessionInEditor } from "@/hooks/use-open-session-in-editor";
 import { useSessionWorktrees } from "@/hooks/domains/session/use-session-worktrees";
 import { useAppStore } from "@/components/state-provider";
@@ -27,6 +28,8 @@ export type FileTreeEditorActions = {
   /** `null` when the node has no worktree the editors API can resolve against. */
   resolveTarget: (node: FileTreeNode) => FileTreeEditorTarget | null;
   openInEditor: (node: FileTreeNode, editorId: string) => void;
+  /** True while the panel views a remote instance: open-in-editor is host-bound and degrades. */
+  remoteInstance: boolean;
 };
 
 export const FileTreeEditorContext = createContext<FileTreeEditorActions | null>(null);
@@ -60,6 +63,9 @@ export function FileTreeEditorProvider({
     (state) => state.embeddedVscodeSupport.bySessionId[sessionId] ?? false,
   );
   const openEditor = useOpenSessionInEditor(sessionId);
+  // Host-bound: opening a tree node in an editor runs on the machine serving
+  // the panel, so the context-menu actions degrade for a remote instance.
+  const remoteInstance = useIsRemoteInstance();
 
   // `open` is a fresh closure on every render; keep the context value stable by
   // calling through a ref instead of depending on it directly.
@@ -98,8 +104,9 @@ export function FileTreeEditorProvider({
       defaultEditorId: resolveTaskTopbarEditorId(defaultEditorId, availableEditors),
       resolveTarget,
       openInEditor,
+      remoteInstance,
     }),
-    [availableEditors, defaultEditorId, resolveTarget, openInEditor],
+    [availableEditors, defaultEditorId, resolveTarget, openInEditor, remoteInstance],
   );
 
   return <FileTreeEditorContext.Provider value={value}>{children}</FileTreeEditorContext.Provider>;
@@ -113,10 +120,22 @@ export function OpenInEditorMenuItems({ node }: { node: FileTreeNode }) {
   const { t } = useTranslation();
   const actions = useFileTreeEditorActions();
   if (!actions) return null;
-  const { editors, defaultEditorId, openInEditor } = actions;
+  const { editors, defaultEditorId, openInEditor, remoteInstance } = actions;
   const primary = editors.find((editor) => editor.id === defaultEditorId);
   if (!primary) return null;
   const others = editors.filter((editor) => editor.id !== primary.id);
+
+  if (remoteInstance) {
+    return (
+      <ContextMenuItem data-testid="file-tree-open-in-editor" disabled>
+        <IconCode className="h-3.5 w-3.5" />
+        {t("task:openInEditorNamed", { name: primary.name })}
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {t("instances:unavailableForRemote")}
+        </span>
+      </ContextMenuItem>
+    );
+  }
 
   return (
     <>

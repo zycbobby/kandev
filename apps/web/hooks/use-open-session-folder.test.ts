@@ -2,13 +2,17 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useOpenSessionFolder } from "./use-open-session-folder";
 
-const { openSessionFolder, toast, availability } = vi.hoisted(() => ({
+const { openSessionFolder, toast, availability, remote } = vi.hoisted(() => ({
   openSessionFolder: vi.fn(),
   toast: vi.fn(),
   availability: { value: true },
+  remote: { value: false },
 }));
 vi.mock("@/hooks/domains/settings/use-editors", () => ({
   useEditors: () => ({ folderOpeningAvailable: availability.value }),
+}));
+vi.mock("@/hooks/domains/instances/use-is-remote-instance", () => ({
+  useIsRemoteInstance: () => remote.value,
 }));
 vi.mock("@/lib/api", () => ({ openSessionFolder }));
 vi.mock("@/components/toast-provider", () => ({ useToast: () => ({ toast }) }));
@@ -16,6 +20,7 @@ vi.mock("@/components/toast-provider", () => ({ useToast: () => ({ toast }) }));
 beforeEach(() => {
   vi.clearAllMocks();
   availability.value = true;
+  remote.value = false;
   openSessionFolder.mockResolvedValue({ success: true });
 });
 
@@ -24,6 +29,17 @@ describe("useOpenSessionFolder", () => {
   it("does not send requests when the host opener is unavailable", async () => {
     availability.value = false;
     const { result } = renderHook(() => useOpenSessionFolder("session-1"));
+    await act(async () => {
+      expect(await result.current.open("wt-2")).toBeNull();
+    });
+    expect(openSessionFolder).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("marks the opener unavailable and sends nothing for a remote instance", async () => {
+    remote.value = true;
+    const { result } = renderHook(() => useOpenSessionFolder("session-1"));
+    expect(result.current.available).toBe(false);
     await act(async () => {
       expect(await result.current.open("wt-2")).toBeNull();
     });

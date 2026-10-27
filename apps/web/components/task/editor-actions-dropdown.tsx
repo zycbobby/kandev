@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@kandev/ui/dropdown-menu";
 import { useTaskFolderAction } from "@/hooks/use-task-folder-action";
+import { useIsRemoteInstance } from "@/hooks/domains/instances/use-is-remote-instance";
 import { TaskFolderPicker } from "./task-folder-picker";
 
 export function EditorActionsDropdown({
@@ -23,6 +24,9 @@ export function EditorActionsDropdown({
 }) {
   const { t } = useTranslation();
   const action = useTaskFolderAction(sessionId);
+  // Host-bound: opening a task's folder runs on the machine serving the
+  // panel, so the action degrades behind the remote-instance flag.
+  const isRemoteInstance = useIsRemoteInstance();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const selectedSessionRef = useRef<string | null>(null);
 
@@ -68,6 +72,11 @@ export function EditorActionsDropdown({
               <IconFolderOpen className="size-4" aria-hidden />
             )}
             {t("editors:openFolder")}
+            {isRemoteInstance && (
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                {t("instances:unavailableForRemote")}
+              </span>
+            )}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

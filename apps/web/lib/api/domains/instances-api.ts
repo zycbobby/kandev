@@ -1,4 +1,5 @@
 import { fetchJson, type ApiRequestOptions } from "../client";
+import { getLocalBackendConfig } from "@/lib/config";
 import { parseStrictRfc3339Timestamp } from "@/lib/utils/strict-timestamp";
 
 /**
@@ -7,6 +8,11 @@ import { parseStrictRfc3339Timestamp } from "@/lib/utils/strict-timestamp";
  * The routes exist only while `features.multiInstance` is on; with the flag
  * off every request 404s. Foreign and missing ids are one indistinguishable
  * 404, so callers surface a single "not found" outcome.
+ *
+ * The registry is a local-backend surface: while the panel views a remote
+ * instance, `getBackendConfig().apiBaseUrl` points at that instance's proxy
+ * port, which does not serve these routes. Every call here therefore resolves
+ * against the local base by default; an explicit caller baseUrl still wins.
  */
 
 /** One registered remote instance, as returned by the registry REST routes. */
@@ -50,8 +56,13 @@ function instancePath(id: string): string {
   return `${INSTANCES_PATH}/${encodeURIComponent(id)}`;
 }
 
+/** Resolves the request against the local backend unless the caller overrides the base. */
+function localOptions(options?: ApiRequestOptions): ApiRequestOptions {
+  return { ...options, baseUrl: options?.baseUrl ?? getLocalBackendConfig().apiBaseUrl };
+}
+
 export async function listInstances(options?: ApiRequestOptions): Promise<RemoteInstance[]> {
-  return fetchJson<RemoteInstance[]>(INSTANCES_PATH, options);
+  return fetchJson<RemoteInstance[]>(INSTANCES_PATH, localOptions(options));
 }
 
 export async function createInstance(
@@ -59,7 +70,7 @@ export async function createInstance(
   options?: ApiRequestOptions,
 ): Promise<RemoteInstance> {
   return fetchJson<RemoteInstance>(INSTANCES_PATH, {
-    ...options,
+    ...localOptions(options),
     init: { ...options?.init, method: "POST", body: JSON.stringify(payload) },
   });
 }
@@ -70,7 +81,7 @@ export async function updateInstance(
   options?: ApiRequestOptions,
 ): Promise<RemoteInstance> {
   return fetchJson<RemoteInstance>(instancePath(id), {
-    ...options,
+    ...localOptions(options),
     init: { ...options?.init, method: "PATCH", body: JSON.stringify(payload) },
   });
 }
@@ -80,7 +91,7 @@ export async function deleteInstance(
   options?: ApiRequestOptions,
 ): Promise<{ success: boolean }> {
   return fetchJson<{ success: boolean }>(instancePath(id), {
-    ...options,
+    ...localOptions(options),
     init: { ...options?.init, method: "DELETE" },
   });
 }
@@ -89,7 +100,7 @@ export async function getInstanceHealth(
   id: string,
   options?: ApiRequestOptions,
 ): Promise<InstanceHealth> {
-  return fetchJson<InstanceHealth>(`${instancePath(id)}/health`, options);
+  return fetchJson<InstanceHealth>(`${instancePath(id)}/health`, localOptions(options));
 }
 
 /** POST select: records the instance cookie and returns the reload target. */
@@ -98,7 +109,7 @@ export async function selectInstance(
   options?: ApiRequestOptions,
 ): Promise<{ href: string }> {
   return fetchJson<{ href: string }>(`${instancePath(id)}/select`, {
-    ...options,
+    ...localOptions(options),
     init: { ...options?.init, method: "POST" },
   });
 }

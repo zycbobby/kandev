@@ -92,15 +92,17 @@ func TestRemoteInstanceShellPayloadResolution(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, payload.OmitBootData)
 	require.Equal(t, services.InstanceProxies.Server(item.ID).Port(), payload.APIPort)
+	require.Equal(t, item.ID, payload.InstanceID)
 	require.Equal(t, "GPU box", payload.Runtime.TitlePrefix)
 
-	// Query parameter selection overrides the cookie.
+	// Query parameter selection overrides the cookie and rewrites the ID.
 	other, err := services.Instances.CreateInstance(
 		t.Context(), userstore.DefaultUserID, "Second box", "http://localhost:1", "", true)
 	require.NoError(t, err)
 	req = instanceShellRequest(t, "/?kandev_instance="+other.ID, item.ID, &synthetic)
 	payload, ok = remoteInstanceShellPayload(req.Context(), req, p, route)
 	require.True(t, ok)
+	require.Equal(t, other.ID, payload.InstanceID)
 	require.Equal(t, "Second box", payload.Runtime.TitlePrefix)
 
 	// A foreign owner sees the instance exactly like a missing one: local boot.
@@ -150,6 +152,7 @@ func TestRemoteInstanceShellHTML(t *testing.T) {
 	got := resp.Body.String()
 	require.Equal(t, http.StatusOK, resp.Code)
 	require.Contains(t, got, "window.__KANDEV_API_PORT=")
+	require.Contains(t, got, `window.__KANDEV_INSTANCE_ID="`+item.ID+`"`)
 	require.NotContains(t, got, "__KANDEV_BOOT_PAYLOAD__")
 	require.Contains(t, got, "<title>GPU box Kandev</title>")
 
@@ -157,6 +160,7 @@ func TestRemoteInstanceShellHTML(t *testing.T) {
 	handler.ServeHTTP(resp, instanceShellRequest(t, "/", "", &synthetic))
 	require.Contains(t, resp.Body.String(), "__KANDEV_BOOT_PAYLOAD__")
 	require.NotContains(t, resp.Body.String(), "window.__KANDEV_API_PORT=")
+	require.NotContains(t, resp.Body.String(), "window.__KANDEV_INSTANCE_ID=")
 }
 
 // TestStartInstanceHealthPollerRecordsHealth drives the wiring helper end to
