@@ -297,22 +297,22 @@ git commit -m "feat: keep turn-group running cue for background subagents"
 
 **Files:** 无新改动（只跑门禁 + 自检；发现问题时回到对应 Task 修复后重跑）。
 
-- [ ] **Step 1: 聚焦 vitest 全绿**
+- [x] **Step 1: 聚焦 vitest 全绿**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/subagent-status.test.ts components/task/chat/messages/tool-subagent-message.test.tsx components/task/chat/messages/turn-group-message.test.tsx`
 Expected: PASS
 
-- [ ] **Step 2: 静态与 i18n 门禁**
+- [x] **Step 2: 静态与 i18n 门禁**
 
 Run: `pnpm -C apps/web run typecheck && pnpm -C apps --filter @kandev/web lint && pnpm -C apps/web run i18n:check && pnpm -C apps/web run i18n:ratchet`
 Expected: 全部 PASS
 
-- [ ] **Step 3: 范围自检**
+- [x] **Step 3: 范围自检**
 
 Run: `git diff --name-only main...HEAD`（或对基线分支）
 Expected: 变更文件仅为本计划 Files 列表所列 `apps/web` 路径；`apps/backend` 零文件。
 
-- [ ] **Step 4: OpenSpec 校验**
+- [x] **Step 4: OpenSpec 校验**
 
 Run: `openspec validate show-background-subagent-running --strict --no-interactive`
 Expected: valid
