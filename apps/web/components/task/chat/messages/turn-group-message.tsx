@@ -9,7 +9,7 @@ import type { Message } from "@/lib/types/http";
 import type { TurnGroup } from "@/hooks/use-processed-messages";
 import { hasProjectedShellOutput, type ToolCallMetadata } from "@/components/task/chat/types";
 import { MessageRenderer } from "@/components/task/chat/message-renderer";
-import { isSubagentEffectivelyActive } from "@/components/task/chat/messages/tool-subagent-message";
+import { isSubagentEffectivelyActive } from "@/components/task/chat/messages/subagent-status";
 
 type TurnGroupMessageProps = {
   group: TurnGroup;
