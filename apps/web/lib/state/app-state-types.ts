@@ -51,6 +51,7 @@ import {
   defaultPreviewFeedbackState,
   defaultInboxHistoryState,
   defaultInstancesState,
+  defaultRemoteNotificationsState,
 } from "./slices";
 import type {
   WorkspaceState,
@@ -82,6 +83,7 @@ import type {
 } from "./slices";
 import type { TaskOverviewSlice } from "./slices/task-overview-types";
 import type { InstancesSliceActions } from "./slices/instances/types";
+import type { RemoteNotificationsSliceActions } from "./slices/remote-notifications/types";
 import type { AppStateExtraActions } from "./app-state-extra-actions";
 import type { TurnChangeSetSummary } from "@/lib/types/turn-changes";
 import type { GitStatusRefreshState } from "./slices/session-runtime/types";
@@ -255,6 +257,10 @@ export type AppState = KanbanSlice & {
   // Instances slice (actions merged via InstancesSliceActions intersection on
   // AppState)
   instances: (typeof defaultInstancesState)["instances"];
+
+  // Remote notifications slice (actions merged via
+  // RemoteNotificationsSliceActions intersection on AppState)
+  remoteNotifications: (typeof defaultRemoteNotificationsState)["remoteNotifications"];
 
   // UI slice
   previewPanel: (typeof defaultUIState)["previewPanel"];
@@ -758,6 +764,7 @@ export type AppState = KanbanSlice & {
   dismissAgentError: UIA["dismissAgentError"];
 } & TaskOverviewSlice &
   InstancesSliceActions &
+  RemoteNotificationsSliceActions &
   AppStateExtraActions &
   Pick<
     UIA,

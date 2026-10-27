@@ -43,5 +43,8 @@
   "healthDotHealthy": "正常",
   "healthDotUnreachable": "到達できません",
   "healthDotUnsupported": "サポート対象外のバージョン",
-  "healthDotUnknown": "ヘルスチェックはまだ実行されていません"
+  "healthDotUnknown": "ヘルスチェックはまだ実行されていません",
+  "notificationsSectionLabel": "リモート通知",
+  "notificationsMarkAllRead": "すべて既読にする",
+  "notificationDismiss": "通知を消去"
 }

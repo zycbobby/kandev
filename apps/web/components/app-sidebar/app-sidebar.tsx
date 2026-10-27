@@ -24,6 +24,7 @@ import { AppSidebarSettingsMode } from "./app-sidebar-settings-mode";
 import { AgentsSection } from "./sections/agents-section";
 import { AutomationsSection } from "./sections/automations-section";
 import { CoordinatorsSection } from "./sections/coordinators-section";
+import { NotificationsSection } from "./sections/notifications-section";
 import { CanvasesSection } from "./sections/canvases-section";
 import { IntegrationsSection } from "./sections/integrations-section";
 import { OfficeNavigationSection } from "./sections/office-navigation-section";
@@ -86,6 +87,9 @@ function AppSidebarModeNav({ collapsed, inOffice }: { collapsed: boolean; inOffi
       )}
       data-testid="app-sidebar-scroll"
     >
+      {/* Cross-instance module: instance-scoped, so it precedes the
+          workspace-mode sections in both layout branches. */}
+      <NotificationsSection collapsed={collapsed} />
       {hasSavedSidebarLayout ? (
         <SidebarLayoutNavigation key={workspaceId} collapsed={collapsed} inOffice={inOffice} />
       ) : (

@@ -34,6 +34,10 @@ export {
   defaultInboxHistoryState,
 } from "./inbox-history/inbox-history-slice";
 export { createInstancesSlice, defaultInstancesState } from "./instances/instances-slice";
+export {
+  createRemoteNotificationsSlice,
+  defaultRemoteNotificationsState,
+} from "./remote-notifications/remote-notifications-slice";
 
 // Export types
 export type { KanbanSlice, KanbanSliceState, KanbanSliceActions } from "./kanban/types";
@@ -146,6 +150,13 @@ export type {
   InstanceListItem,
   InstancesStatus,
 } from "./instances/types";
+export type {
+  RemoteNotificationsSlice,
+  RemoteNotificationsSliceActions,
+  RemoteNotificationsSliceState,
+  RemoteNotificationsStatus,
+  RemoteNotificationEntry,
+} from "./remote-notifications/types";
 
 // Re-export commonly used types from each domain
 export type {

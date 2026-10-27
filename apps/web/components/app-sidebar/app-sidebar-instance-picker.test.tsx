@@ -5,6 +5,7 @@ import type { InstancesSliceState } from "@/lib/state/slices/instances/types";
 const switchMock = vi.hoisted(() => vi.fn());
 const feature = vi.hoisted(() => ({ enabled: true }));
 const instances = vi.hoisted(() => ({ state: null as InstancesSliceState["instances"] | null }));
+const unread = vi.hoisted(() => ({ byInstance: {} as Record<string, number> }));
 
 vi.mock("@/hooks/domains/features/use-feature", () => ({
   useFeature: (name: string) => name === "multiInstance" && feature.enabled,
@@ -12,6 +13,10 @@ vi.mock("@/hooks/domains/features/use-feature", () => ({
 
 vi.mock("@/hooks/domains/instances/use-instances", () => ({
   useInstances: () => instances.state,
+}));
+
+vi.mock("@/hooks/domains/remote-notifications/use-remote-notifications", () => ({
+  useRemoteNotificationUnreadByInstance: () => unread.byInstance,
 }));
 
 vi.mock("@/lib/instances/switch-instance", () => ({
@@ -90,6 +95,7 @@ function setInstances(overrides: Partial<InstancesSliceState["instances"]> = {})
 beforeEach(() => {
   feature.enabled = true;
   switchMock.mockReset();
+  unread.byInstance = {};
   setInstances();
 });
 
@@ -207,5 +213,33 @@ describe("AppSidebarInstancePicker", () => {
 
     fireEvent.click(screen.getByTestId("sidebar-instance-item-inst-1"));
     expect(switchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AppSidebarInstancePicker unread badges", () => {
+  it("renders one remote-notification unread badge per instance with unread entries", () => {
+    setInstances({
+      items: [LOCAL_ITEM, STUDIO_ITEM, RACK_ITEM],
+    });
+    unread.byInstance = { "inst-1": 3 };
+
+    render(<AppSidebarInstancePicker />);
+
+    expect(screen.getByTestId("sidebar-instance-unread-inst-1").textContent).toBe("3");
+    // Zero counts and the local row stay badge-free.
+    expect(screen.queryByTestId("sidebar-instance-unread-inst-2")).toBeNull();
+    expect(screen.queryByTestId("sidebar-instance-unread-local")).toBeNull();
+  });
+
+  it("keeps the unread badge out of the row's accessible name", () => {
+    setInstances({
+      items: [LOCAL_ITEM, STUDIO_ITEM],
+    });
+    unread.byInstance = { "inst-1": 3 };
+
+    render(<AppSidebarInstancePicker />);
+
+    const badge = screen.getByTestId("sidebar-instance-unread-inst-1");
+    expect(badge.getAttribute("aria-hidden")).toBe("true");
   });
 });

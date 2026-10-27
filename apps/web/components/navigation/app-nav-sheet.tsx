@@ -20,6 +20,7 @@ import { MobileAutomationsSection } from "./mobile-automations-section";
 import { MobileCoordinatorsSection } from "./mobile-coordinators-section";
 import { AppNavTrigger } from "./app-nav-trigger";
 import { AppNavSurface } from "./app-nav-surface";
+import { NotificationsSection } from "@/components/app-sidebar/sections/notifications-section";
 
 import { useMobileTaskNavigationOutlet } from "./mobile-task-navigation-provider";
 import { useWorkbenchTaskSelection } from "@/components/task/mobile/task-sheet-selection-context";
@@ -81,6 +82,7 @@ export function AppNavSheet(props: AppNavSheetProps) {
         >
           <AppNavigationMode close={close}>
             {!isMobile && renderedPageNav}
+            {isMobile && <NavigationNotifications />}
             <AppNavSections
               onNavigate={close}
               phoneNavigation={isMobile}
@@ -186,6 +188,13 @@ function NavigationWorkspacePicker({ close }: { close: () => void }) {
       />
     </section>
   );
+}
+
+/** Same layer family as the instance picker, but inside the scroller: the
+ *  module's entry list scrolls with the menu body instead of pinning the
+ *  sheet open. */
+function NavigationNotifications() {
+  return <NotificationsSection collapsed={false} />;
 }
 
 /** Same layer as the workspace picker: outside the scrolling menu body. */

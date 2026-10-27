@@ -102,6 +102,9 @@ export const defaultState = {
   previewFeedback: defaultPreviewFeedbackState.previewFeedback,
   inboxHistory: defaultInboxHistoryState.inboxHistory,
   instances: defaultInstancesState.instances,
+  // remoteNotifications holds no entry here: the slice spread in store.ts
+  // owns its default (nothing hydrates or overrides this key), and this file
+  // sits at its max-lines budget.
   queue: defaultSessionState.queue,
   terminal: defaultSessionRuntimeState.terminal,
   shell: defaultSessionRuntimeState.shell,

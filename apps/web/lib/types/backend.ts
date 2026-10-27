@@ -29,6 +29,7 @@ export type { OfficeEventType, OfficeEventPayload } from "./office-events";
 import type { RunEventAppendedPayload } from "./run-events";
 export type { RunEventAppendedPayload } from "./run-events";
 import type { CoordinatorUpdatedPayload } from "@/lib/api/domains/coordinator-api";
+import type { RemoteNotificationOccurrence } from "@/lib/api/domains/remote-notifications-api";
 
 import type {
   Agent,
@@ -571,6 +572,10 @@ export type BackendMessageMap = SessionBackendMessageMap &
     "canvas.removed": BackendMessage<"canvas.removed", CanvasLifecyclePayload>;
 
     "office.inbox_item": BackendMessage<"office.inbox_item", OfficeInboxItemNotificationPayload>;
+
+    // The local backend's relay of one remote-instance occurrence. The frame
+    // payload is the same shape as the remote-notifications REST rows.
+    remote_notification: BackendMessage<"remote_notification", RemoteNotificationOccurrence>;
 
     "executor.created": BackendMessage<"executor.created", ExecutorPayload>;
     "executor.catalogue.invalidated": BackendMessage<
