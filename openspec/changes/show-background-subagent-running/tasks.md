@@ -190,7 +190,7 @@ git commit -m "feat: resolve background-running subagent display status"
 - Consumes: Task 2 的 `resolveSubagentDisplayStatus`/`SubagentDisplayStatus`。
 - Produces: 用户可见行为；无下游代码接口。
 
-- [ ] **Step 1: 改写/新增组件测试（先红）**
+- [x] **Step 1: 改写/新增组件测试（先红）**
 
 `tool-subagent-message.test.tsx`：新增常量 `const BACKGROUND_RUNNING = "Running in background";`；factory `subagentMessage` 增 `isAsync?: boolean` 选项写入 `subagent_task.is_async`。
 
@@ -217,31 +217,31 @@ it("shows the background-running state for an is_async payload without status", 
 
 既有 `:297`（Codex stale 失活）与其余用例**不动**（回归护栏）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/tool-subagent-message.test.tsx`
 Expected: FAIL（新用例找不到 BACKGROUND_RUNNING 文本）
 
-- [ ] **Step 3: 接线组件 + en key**
+- [x] **Step 3: 接线组件 + en key**
 
 `tool-subagent-message.tsx`：`deriveSubagentDisplay` 增返回 `display = resolveSubagentDisplayStatus(metadata, isContainingTurnActive)`；`SubagentStatusIcon` props 改为 `{ display: SubagentDisplayStatus }`，`background` 分支镜像 working 分支结构（`GridSpinner` + 斜体可见文本 `t("task:statusBackgroundRunning")` + 同值 `title` 的 span）；`working`/`terminal` 分支行为不变；`SubagentHeader` 改传 `display`。布局行（:386 autoExpand、:417 meta 行）零改动。
 `src/locales/en/task.json`：在 `statusWorking` 邻近加 `"statusBackgroundRunning": "Running in background"`。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/tool-subagent-message.test.tsx components/task/chat/messages/subagent-status.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 补齐 locale catalog**
+- [x] **Step 5: 补齐 locale catalog**
 
 `pnpm -C apps/web run i18n:pseudo`（从 en 再生成 pseudo）；按 design.md 值表手写 pt-pt `A correr em segundo plano`、zh-cn `后台运行中`、ja `バックグラウンドで実行中`、ko `백그라운드 실행 중`（各 `src/locales/<locale>/task.json` 的 `statusWorking` 邻近）；`pnpm -C apps/web run i18n:zh-hant`（生成 zh-hk/zh-tw）。
 
-- [ ] **Step 6: i18n 门禁 + 静态检查**
+- [x] **Step 6: i18n 门禁 + 静态检查**
 
 Run: `pnpm -C apps/web run i18n:check && pnpm -C apps/web run i18n:ratchet && pnpm -C apps/web run typecheck`
 Expected: 全部 PASS（无缺 key、无 em dash、无新硬编码）
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add apps/web/components/task/chat/messages/tool-subagent-message.tsx apps/web/components/task/chat/messages/tool-subagent-message.test.tsx apps/web/src/locales
