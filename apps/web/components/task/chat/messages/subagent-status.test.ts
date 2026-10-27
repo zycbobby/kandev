@@ -4,6 +4,7 @@ import {
   isSubagentBackgroundRunning,
   isSubagentEffectivelyActive,
   resolveSubagentDisplayStatus,
+  type SubagentDisplayStatus,
 } from "./subagent-status";
 
 const COMPLETE = "complete";
@@ -231,7 +232,13 @@ describe("isSubagentBackgroundRunning", () => {
 });
 
 describe("resolveSubagentDisplayStatus", () => {
-  it.each([
+  const RESOLVE_DISPLAY_CASES: Array<{
+    name: string;
+    metadataStatus: ToolCallMetadata["status"];
+    payload: SubagentTaskPayload | undefined;
+    turnActive: boolean;
+    expected: SubagentDisplayStatus;
+  }> = [
     {
       name: "async + tool complete + turn inactive → background",
       metadataStatus: "complete",
@@ -295,7 +302,9 @@ describe("resolveSubagentDisplayStatus", () => {
       turnActive: false,
       expected: { kind: "terminal", terminal: "complete" },
     },
-  ])("$name", ({ metadataStatus, payload, turnActive, expected }) => {
+  ];
+
+  it.each(RESOLVE_DISPLAY_CASES)("$name", ({ metadataStatus, payload, turnActive, expected }) => {
     const metadata =
       payload === undefined ? undefined : subagentMetadataWith(metadataStatus, payload);
     expect(resolveSubagentDisplayStatus(metadata, turnActive)).toEqual(expected);

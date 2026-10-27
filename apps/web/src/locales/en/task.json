@@ -1894,6 +1894,7 @@
   "statusInReview": "In Review",
   "statusTodo": "Todo",
   "statusUpdate": "Status update",
+  "statusBackgroundRunning": "Running in background",
   "statusWorking": "Working",
   "stepCount_one": "{{count}} step",
   "stepCount_other": "{{count}} steps",

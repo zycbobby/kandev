@@ -1814,6 +1814,7 @@
   "statusInReview": "審閱中",
   "statusTodo": "待辦",
   "statusUpdate": "狀態更新",
+  "statusBackgroundRunning": "後台執行中",
   "statusWorking": "工作中",
   "stepCount_one": "{{count}} 個步驟",
   "stepCount_other": "{{count}} 個步驟",

@@ -11,6 +11,7 @@ const SUBAGENT_CHEVRON = "subagent-chevron";
 const STARTED = "started";
 const WORKING = "Working...";
 const COMPLETED = "Completed";
+const BACKGROUND_RUNNING = "Running in background";
 const FAILED = "Failed";
 const CANCELLED = "Cancelled";
 const SUBAGENT_DESCRIPTION = "subagent-description";
@@ -25,6 +26,7 @@ function subagentMessage({
   payloadStatus = "started",
   description = "ten_second_probe",
   subagentType = "subagent",
+  isAsync,
   prompt,
   resultText,
   durationMs,
@@ -33,6 +35,7 @@ function subagentMessage({
   payloadStatus?: string;
   description?: string;
   subagentType?: string;
+  isAsync?: boolean;
   prompt?: string;
   resultText?: string;
   durationMs?: number;
@@ -54,6 +57,7 @@ function subagentMessage({
           description,
           subagent_type: subagentType,
           status: payloadStatus,
+          is_async: isAsync,
           child_session_id: "child-session-123456",
           prompt,
           result_text: resultText,
@@ -154,16 +158,6 @@ describe("ToolSubagentMessage", () => {
     expect(screen.getByTitle("Working")).toBeTruthy();
   });
 
-  it("shows Working after spawn completes while the nested Claude task is still async_launched", () => {
-    renderSubagent(subagentMessage({ metadataStatus: COMPLETE, payloadStatus: "async_launched" }), {
-      isContainingTurnActive: true,
-    });
-
-    expect(screen.getByRole("status", { name: "Loading" })).toBeTruthy();
-    expect(screen.getByText(WORKING)).toBeTruthy();
-    expect(screen.getByTitle("Working")).toBeTruthy();
-  });
-
   it("does not keep Working after a nested Codex task settles as errored", () => {
     renderSubagent(subagentMessage({ metadataStatus: COMPLETE, payloadStatus: "errored" }), {
       isContainingTurnActive: true,
@@ -212,6 +206,40 @@ describe("ToolSubagentMessage", () => {
 
     expect(screen.getByTitle(CANCELLED)).toBeTruthy();
     expect(screen.queryByText(WORKING)).toBeNull();
+  });
+});
+
+describe("ToolSubagentMessage background running state", () => {
+  it("shows the background-running label after spawn completes while the nested Claude task is still async_launched", () => {
+    renderSubagent(subagentMessage({ metadataStatus: COMPLETE, payloadStatus: "async_launched" }), {
+      isContainingTurnActive: true,
+    });
+
+    expect(screen.getByRole("status", { name: "Loading" })).toBeTruthy();
+    expect(screen.getByText(BACKGROUND_RUNNING)).toBeTruthy();
+    expect(screen.getByTitle(BACKGROUND_RUNNING)).toBeTruthy();
+    expect(screen.queryByText(WORKING)).toBeNull();
+  });
+
+  it("keeps the background-running state after the containing turn ends", () => {
+    renderSubagent(subagentMessage({ metadataStatus: COMPLETE, payloadStatus: "async_launched" }), {
+      isContainingTurnActive: false,
+    });
+
+    expect(screen.getByRole("status", { name: "Loading" })).toBeTruthy();
+    expect(screen.getByText(BACKGROUND_RUNNING)).toBeTruthy();
+    expect(screen.queryByTitle(COMPLETED)).toBeNull();
+    expect(screen.getByTestId("subagent-meta-background")).toBeTruthy();
+  });
+
+  it("shows the background-running state for an is_async payload without status", () => {
+    renderSubagent(
+      subagentMessage({ metadataStatus: COMPLETE, payloadStatus: undefined, isAsync: true }),
+      { isContainingTurnActive: false },
+    );
+
+    expect(screen.getByText(BACKGROUND_RUNNING)).toBeTruthy();
+    expect(screen.queryByTitle(COMPLETED)).toBeNull();
   });
 });
 

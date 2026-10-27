@@ -1933,6 +1933,7 @@
   "statusInReview": "レビュー中",
   "statusTodo": "未着手",
   "statusUpdate": "ステータス更新",
+  "statusBackgroundRunning": "バックグラウンドで実行中",
   "statusWorking": "作業中",
   "stepCount_one": "{{count}}ステップ",
   "stepCount_other": "{{count}}ステップ",

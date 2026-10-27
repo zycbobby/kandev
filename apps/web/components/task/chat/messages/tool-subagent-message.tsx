@@ -9,7 +9,8 @@ import type { SubagentTaskPayload, ToolCallMetadata } from "@/components/task/ch
 import { SubagentMetaRow } from "@/components/task/chat/messages/subagent-meta-row";
 import {
   isSubagentEffectivelyActive,
-  resolveSubagentTerminalStatus,
+  resolveSubagentDisplayStatus,
+  type SubagentDisplayStatus,
 } from "@/components/task/chat/messages/subagent-status";
 import { useTranslation } from "react-i18next";
 
@@ -67,10 +68,12 @@ function deriveSubagentDisplay(
 ) {
   const subagentTask = metadata?.normalized?.subagent_task;
   const isActive = isSubagentEffectivelyActive(metadata, isContainingTurnActive);
+  const display = resolveSubagentDisplayStatus(metadata, isContainingTurnActive);
   const { resultText, prompt } = deriveSubagentBody(childCount, subagentTask);
   return {
     subagentTask,
     isActive,
+    display,
     resultText,
     prompt,
     hasExpandableContent: childCount > 0 || Boolean(resultText) || Boolean(prompt),
@@ -107,25 +110,24 @@ type SubagentHeaderProps = {
   isExpanded: boolean;
   subagentType: string;
   description: string;
-  isActive: boolean;
-  status?: ToolCallMetadata["status"];
-  payloadStatus?: string;
+  display: SubagentDisplayStatus;
   childCount: number;
   hasExpandableContent: boolean;
   onToggle: () => void;
 };
 
-function SubagentStatusIcon({
-  isActive,
-  status,
-  payloadStatus,
-}: {
-  isActive: boolean;
-  status?: ToolCallMetadata["status"];
-  payloadStatus?: string;
-}) {
+function SubagentStatusIcon({ display }: { display: SubagentDisplayStatus }) {
   const { t } = useTranslation();
-  if (isActive) {
+  if (display.kind === "background") {
+    const backgroundLabel = t("task:statusBackgroundRunning");
+    return (
+      <span className="inline-flex items-center gap-1.5 shrink-0" title={backgroundLabel}>
+        <span className="text-xs text-muted-foreground italic">{backgroundLabel}</span>
+        <GridSpinner className="text-muted-foreground shrink-0" />
+      </span>
+    );
+  }
+  if (display.kind === "working") {
     const workingLabel = t("task:statusWorking");
     return (
       <span className="inline-flex items-center gap-1.5 shrink-0" title={workingLabel}>
@@ -134,7 +136,7 @@ function SubagentStatusIcon({
       </span>
     );
   }
-  const normalized = resolveSubagentTerminalStatus(status, payloadStatus);
+  const normalized = display.terminal;
   if (normalized === "error" || normalized === "cancelled") {
     const label = normalized === "cancelled" ? t("task:statusCancelled") : t("task:failed");
     return (
@@ -155,9 +157,7 @@ function SubagentHeader({
   isExpanded,
   subagentType,
   description,
-  isActive,
-  status,
-  payloadStatus,
+  display,
   childCount,
   hasExpandableContent,
   onToggle,
@@ -194,7 +194,7 @@ function SubagentHeader({
           {shownDescription}
         </span>
       )}
-      <SubagentStatusIcon isActive={isActive} status={status} payloadStatus={payloadStatus} />
+      <SubagentStatusIcon display={display} />
       {childCount > 0 && (
         <span
           data-testid="subagent-child-count"
@@ -300,7 +300,7 @@ export const ToolSubagentMessage = memo(function ToolSubagentMessage({
   const { t } = useTranslation();
   const metadata = comment.metadata as ToolCallMetadata | undefined;
   const childCount = childMessages.length;
-  const { subagentTask, isActive, resultText, prompt, hasExpandableContent } =
+  const { subagentTask, isActive, display, resultText, prompt, hasExpandableContent } =
     deriveSubagentDisplay(metadata, childCount, isContainingTurnActive);
   const resultSummary = firstResultLine(resultText);
   const description = subagentTask?.description || comment.content || t("task:subagent");
@@ -330,9 +330,7 @@ export const ToolSubagentMessage = memo(function ToolSubagentMessage({
         isExpanded={isExpanded}
         subagentType={subagentType}
         description={description}
-        isActive={isActive}
-        status={metadata?.status}
-        payloadStatus={subagentTask?.status}
+        display={display}
         childCount={childCount}
         hasExpandableContent={hasExpandableContent}
         onToggle={handleToggle}
