@@ -473,6 +473,9 @@
       "turn_change_sets",
       "turn_file_changes",
       "turn_repository_changes"
+    ],
+    "notification": [
+      "notification_occurrences"
     ]
   }
 }
