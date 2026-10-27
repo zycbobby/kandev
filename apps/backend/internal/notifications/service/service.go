@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -25,6 +26,19 @@ const (
 	EventOfficeInboxItem               = "office.inbox_item"
 	EventSystemUpdateAvailable         = "system.update_available"
 	desktopNativeNotificationsEnv      = "KANDEV_DESKTOP_NATIVE_NOTIFICATIONS"
+)
+
+const (
+	// defaultOccurrenceRetention bounds how long dispatched occurrences stay
+	// reconcilable; it matches the store's sweep default.
+	defaultOccurrenceRetention = 7 * 24 * time.Hour
+	// occurrenceSweepInterval throttles the retention sweep that piggybacks
+	// on occurrence activity, so recording stays cheap under load.
+	occurrenceSweepInterval = time.Hour
+	// occurrenceLimitBounds clamp the reconciliation REST endpoint: the
+	// default page and the hard ceiling.
+	defaultOccurrenceLimit = 100
+	maxOccurrenceLimit     = 200
 )
 
 // ErrProviderNotFound is the store sentinel, re-exported so HTTP handlers can
@@ -55,6 +69,10 @@ type Service struct {
 	logger             *logger.Logger
 	providers          map[models.ProviderType]providers.Provider
 	authEnforced       AuthEnforced
+
+	occurrenceSweepMu   sync.Mutex
+	lastOccurrenceSweep time.Time
+	occurrenceSweepNow  func() time.Time
 }
 
 // NewService builds the notification service. authEnforced decides what
@@ -71,12 +89,13 @@ func NewService(repo notificationstore.Repository, taskRepo TaskContextReader, h
 		providerMap[models.ProviderTypeSystem] = providers.NewSystemProvider()
 	}
 	return &Service{
-		repo:         repo,
-		taskRepo:     taskRepo,
-		hub:          hub,
-		logger:       log.WithFields(zap.String("component", "notifications-service")),
-		providers:    providerMap,
-		authEnforced: authEnforced,
+		repo:               repo,
+		taskRepo:           taskRepo,
+		hub:                hub,
+		logger:             log.WithFields(zap.String("component", "notifications-service")),
+		providers:          providerMap,
+		authEnforced:       authEnforced,
+		occurrenceSweepNow: time.Now,
 	}
 }
 
@@ -235,8 +254,65 @@ func (s *Service) handleSemanticOccurrence(ctx context.Context, taskID, sessionI
 		Body:          body,
 		Payload:       payload,
 	}
+	s.recordOccurrence(ctx, recipients, message)
 	for _, userID := range recipients {
 		s.deliverOccurrence(ctx, userID, message)
+	}
+}
+
+// recordOccurrence writes the dispatched occurrence to the local history a
+// federating peer reconciles against, one row per recipient so each user's
+// rows stay scoped to the workspaces they own. The write happens before any
+// provider fan-out and is best-effort: a recording failure is logged and
+// never blocks delivery.
+func (s *Service) recordOccurrence(ctx context.Context, recipients []string, message notificationPayload) {
+	for _, userID := range recipients {
+		_, err := s.repo.InsertOccurrence(ctx, &models.Occurrence{
+			UserID:       userID,
+			EventType:    message.EventType,
+			OccurrenceID: message.OccurrenceID,
+			TaskID:       message.TaskID,
+			SessionID:    message.TaskSessionID,
+			Title:        message.Title,
+			Body:         message.Body,
+		})
+		if err != nil {
+			s.logger.Warn("failed to record notification occurrence",
+				zap.String("occurrence_id", message.OccurrenceID), zap.Error(err))
+		}
+	}
+	s.sweepOccurrencesIfDue(ctx)
+}
+
+// ListOccurrences returns the occurrences dispatched to userID strictly newer
+// than since, oldest first, with the limit clamped to the reconciliation
+// contract: a default page of 100 and a ceiling of 200.
+func (s *Service) ListOccurrences(ctx context.Context, userID string, since time.Time, limit int) ([]*models.Occurrence, error) {
+	if limit <= 0 {
+		limit = defaultOccurrenceLimit
+	}
+	if limit > maxOccurrenceLimit {
+		limit = maxOccurrenceLimit
+	}
+	s.sweepOccurrencesIfDue(ctx)
+	return s.repo.ListOccurrences(ctx, userID, since, limit)
+}
+
+// sweepOccurrencesIfDue runs the bounded-retention sweep at most once per
+// sweep interval. Rows are only created by dispatches and reads, so
+// piggybacking the sweep on both keeps the table bounded without a dedicated
+// background goroutine; the store's constructor sweep covers startup.
+func (s *Service) sweepOccurrencesIfDue(ctx context.Context) {
+	s.occurrenceSweepMu.Lock()
+	now := s.occurrenceSweepNow()
+	if now.Sub(s.lastOccurrenceSweep) < occurrenceSweepInterval {
+		s.occurrenceSweepMu.Unlock()
+		return
+	}
+	s.lastOccurrenceSweep = now
+	s.occurrenceSweepMu.Unlock()
+	if _, err := s.repo.SweepOccurrences(ctx, now.Add(-defaultOccurrenceRetention)); err != nil {
+		s.logger.Warn("failed to sweep expired notification occurrences", zap.Error(err))
 	}
 }
 

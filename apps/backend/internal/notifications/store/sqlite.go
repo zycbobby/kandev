@@ -38,6 +38,16 @@ func newSQLiteRepository(ctx context.Context, writer, reader *sqlx.DB, ownsDB bo
 		}
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
+	// Startup retention sweep: every boot bounds the occurrence table, so an
+	// instance that never dispatches again still forgets old occurrences.
+	if _, err := repo.SweepOccurrences(ctx, time.Now().UTC().Add(-DefaultOccurrenceRetention)); err != nil {
+		if ownsDB {
+			if closeErr := writer.Close(); closeErr != nil {
+				return nil, fmt.Errorf("failed to close database after retention sweep error: %w", closeErr)
+			}
+		}
+		return nil, fmt.Errorf("failed to sweep notification occurrences: %w", err)
+	}
 	return repo, nil
 }
 
@@ -89,10 +99,24 @@ func (r *sqliteRepository) initSchema(ctx context.Context) error {
 		completed_at TIMESTAMP NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS notification_occurrences (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		occurrence_id TEXT NOT NULL,
+		task_id TEXT NOT NULL DEFAULT '',
+		session_id TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL DEFAULT '',
+		body TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMP NOT NULL,
+		UNIQUE(user_id, event_type, occurrence_id)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_notification_providers_user_id ON notification_providers(user_id);
 	CREATE INDEX IF NOT EXISTS idx_notification_subscriptions_provider_id ON notification_subscriptions(provider_id);
 	CREATE INDEX IF NOT EXISTS idx_notification_subscriptions_user_id ON notification_subscriptions(user_id);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_session_id ON notification_deliveries(task_session_id);
+	CREATE INDEX IF NOT EXISTS idx_notification_occurrences_user_created ON notification_occurrences(user_id, created_at);
 	`
 
 	if _, err := r.db.Exec(schema); err != nil {

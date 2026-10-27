@@ -41,6 +41,22 @@ type Delivery struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// Occurrence is one semantic notification occurrence this instance actually
+// dispatched: the deduplicated unit a federating peer reconciles against. It
+// is recorded per recipient at the semantic dispatch boundary, so UserID is
+// the workspace owner the dispatch targeted.
+type Occurrence struct {
+	ID           string    `json:"id"`
+	UserID       string    `json:"user_id"`
+	EventType    string    `json:"event"`
+	OccurrenceID string    `json:"occurrence_id"`
+	TaskID       string    `json:"task_id"`
+	SessionID    string    `json:"session_id"`
+	Title        string    `json:"title"`
+	Body         string    `json:"body"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // RuntimeUpdateMember is one claimed runtime version included in a summary.
 type RuntimeUpdateMember struct {
 	OccurrenceID    string `json:"occurrence_id"`

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/kandev/kandev/internal/auth/authn"
 	"github.com/kandev/kandev/internal/notifications/dto"
@@ -103,6 +104,22 @@ func (c *Controller) DeleteProvider(ctx context.Context, providerID string) erro
 
 func (c *Controller) TestProvider(ctx context.Context, providerID string) error {
 	return c.service.TestProvider(ctx, callerUserID(ctx), providerID)
+}
+
+// ListOccurrences exposes the occurrences dispatched to the caller, the
+// history a federating peer reconciles against. callerUserID scopes the rows,
+// so a peer authenticated as one user can never read another user's
+// occurrences.
+func (c *Controller) ListOccurrences(ctx context.Context, since time.Time, limit int) ([]dto.NotificationOccurrenceDTO, error) {
+	occurrences, err := c.service.ListOccurrences(ctx, callerUserID(ctx), since, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]dto.NotificationOccurrenceDTO, 0, len(occurrences))
+	for _, occurrence := range occurrences {
+		result = append(result, dto.FromOccurrence(occurrence))
+	}
+	return result, nil
 }
 
 func defaultNameForType(providerType string) string {

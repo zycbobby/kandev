@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/kandev/kandev/internal/common/logger"
 	"github.com/kandev/kandev/internal/notifications/dto"
@@ -102,6 +103,18 @@ func (r *controllerRepository) InsertDelivery(context.Context, *models.Delivery)
 }
 func (r *controllerRepository) DeleteDelivery(context.Context, string, string, string) error {
 	return nil
+}
+
+// The occurrence surface is irrelevant to the provider-focused controller
+// tests; these stubs only keep the fake satisfying the repository interface.
+func (r *controllerRepository) InsertOccurrence(context.Context, *models.Occurrence) (bool, error) {
+	return false, nil
+}
+func (r *controllerRepository) ListOccurrences(context.Context, string, time.Time, int) ([]*models.Occurrence, error) {
+	return nil, nil
+}
+func (r *controllerRepository) SweepOccurrences(context.Context, time.Time) (int64, error) {
+	return 0, nil
 }
 func (r *controllerRepository) Close() error { return nil }
 

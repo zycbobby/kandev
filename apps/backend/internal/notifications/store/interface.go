@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/kandev/kandev/internal/notifications/models"
 )
@@ -31,6 +32,17 @@ type Repository interface {
 
 	InsertDelivery(ctx context.Context, delivery *models.Delivery) (bool, error)
 	DeleteDelivery(ctx context.Context, providerID, eventType, occurrenceID string) error
+
+	// InsertOccurrence records one dispatched semantic occurrence for its
+	// recipient, deduplicated on (user, event, occurrence); it reports whether
+	// the row was newly inserted.
+	InsertOccurrence(ctx context.Context, occurrence *models.Occurrence) (bool, error)
+	// ListOccurrences returns the occurrences dispatched to userID strictly
+	// newer than since, oldest first, capped at limit.
+	ListOccurrences(ctx context.Context, userID string, since time.Time, limit int) ([]*models.Occurrence, error)
+	// SweepOccurrences deletes occurrence rows older than before and returns
+	// how many rows were removed.
+	SweepOccurrences(ctx context.Context, before time.Time) (int64, error)
 
 	Close() error
 }

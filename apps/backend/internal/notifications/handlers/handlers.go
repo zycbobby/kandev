@@ -3,6 +3,8 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -29,6 +31,7 @@ func RegisterRoutes(router *gin.Engine, ctrl *controller.Controller, log *logger
 	api.PATCH("/notification-providers/:id", h.httpUpdateProvider)
 	api.DELETE("/notification-providers/:id", h.httpDeleteProvider)
 	api.POST("/notification-providers/:id/test", h.httpTestProvider)
+	api.GET("/notifications/occurrences", h.httpListOccurrences)
 }
 
 func (h *Handlers) httpListProviders(c *gin.Context) {
@@ -104,4 +107,35 @@ func (h *Handlers) httpDeleteProvider(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// httpListOccurrences serves the occurrence reconciliation feed: dispatches
+// newer than the RFC3339 since cursor, oldest first, with the limit clamped
+// to the contract (default 100, ceiling 200) by the service.
+func (h *Handlers) httpListOccurrences(c *gin.Context) {
+	var since time.Time
+	if raw := c.Query("since"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid since parameter"})
+			return
+		}
+		since = parsed
+	}
+	limit := 0
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit parameter"})
+			return
+		}
+		limit = parsed
+	}
+	occurrences, err := h.controller.ListOccurrences(c.Request.Context(), since, limit)
+	if err != nil {
+		h.logger.Error("failed to list notification occurrences", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list notification occurrences"})
+		return
+	}
+	c.JSON(http.StatusOK, occurrences)
 }

@@ -39,6 +39,19 @@ type UpdateProviderRequest struct {
 	Events  *[]string              `json:"events,omitempty"`
 }
 
+// NotificationOccurrenceDTO is one dispatched occurrence on the
+// reconciliation feed: the exact fields a federating peer consumes, keyed on
+// the semantic occurrence identity.
+type NotificationOccurrenceDTO struct {
+	Event        string `json:"event"`
+	OccurrenceID string `json:"occurrence_id"`
+	TaskID       string `json:"task_id"`
+	SessionID    string `json:"session_id"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	CreatedAt    string `json:"created_at"`
+}
+
 func FromProvider(provider *models.Provider, events []string) NotificationProviderDTO {
 	return NotificationProviderDTO{
 		ID:        provider.ID,
@@ -49,5 +62,17 @@ func FromProvider(provider *models.Provider, events []string) NotificationProvid
 		Events:    events,
 		CreatedAt: provider.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: provider.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func FromOccurrence(occurrence *models.Occurrence) NotificationOccurrenceDTO {
+	return NotificationOccurrenceDTO{
+		Event:        occurrence.EventType,
+		OccurrenceID: occurrence.OccurrenceID,
+		TaskID:       occurrence.TaskID,
+		SessionID:    occurrence.SessionID,
+		Title:        occurrence.Title,
+		Body:         occurrence.Body,
+		CreatedAt:    occurrence.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

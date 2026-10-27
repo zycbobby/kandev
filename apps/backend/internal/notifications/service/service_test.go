@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kandev/kandev/internal/common/logger"
 	gatewayws "github.com/kandev/kandev/internal/gateway/websocket"
@@ -19,6 +20,8 @@ type notificationTestRepository struct {
 	providers     []*models.Provider
 	subscriptions map[string][]*models.Subscription
 	deliveries    []*models.Delivery
+	occurrences   []*models.Occurrence
+	sweepCutoffs  []time.Time
 }
 
 func (r *notificationTestRepository) CreateProvider(_ context.Context, provider *models.Provider) error {
