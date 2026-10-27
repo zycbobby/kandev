@@ -20,11 +20,14 @@ var ErrMultiInstanceDisabled = errors.New("multi-instance feature is disabled")
 
 // Repository is the persistence contract behind the instance registry. Reads
 // and deletes are owner-scoped: a row belonging to another owner is reported
-// exactly like a missing one, through ErrInstanceNotFound.
+// exactly like a missing one, through ErrInstanceNotFound. ListAllInstances
+// is the one exception: it backs the internal health poller, which has no
+// caller identity; user-facing reads must go through ListInstancesByOwner.
 type Repository interface {
 	CreateInstance(ctx context.Context, instance *Instance) error
 	GetInstance(ctx context.Context, ownerUserID, id string) (*Instance, error)
 	ListInstancesByOwner(ctx context.Context, ownerUserID string) ([]*Instance, error)
+	ListAllInstances(ctx context.Context) ([]*Instance, error)
 	UpdateInstance(ctx context.Context, instance *Instance) error
 	DeleteInstance(ctx context.Context, ownerUserID, id string) error
 	UpdateProxyPort(ctx context.Context, id string, port int) error
@@ -37,16 +40,19 @@ type Repository interface {
 type MultiInstanceEnabled func() bool
 
 // Service owns the per-owner remote-instance registry. All methods take the
-// calling user's ID and scope every read and write to it.
+// calling user's ID and scope every read and write to it. The in-process
+// health tracker it carries is written by the HealthPoller (health.go) and
+// read by GetHealth.
 type Service struct {
 	repo    Repository
 	enabled MultiInstanceEnabled
+	health  *healthTracker
 }
 
 // NewService builds the instance registry service. The enabled predicate
 // gates every method; pass nil only when the feature must stay inert.
 func NewService(repo Repository, enabled MultiInstanceEnabled) *Service {
-	return &Service{repo: repo, enabled: enabled}
+	return &Service{repo: repo, enabled: enabled, health: newHealthTracker()}
 }
 
 func (s *Service) checkEnabled() error {

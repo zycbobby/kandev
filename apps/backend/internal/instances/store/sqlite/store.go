@@ -133,9 +133,23 @@ func (s *Store) GetInstance(ctx context.Context, ownerUserID, id string) (*insta
 // ListInstancesByOwner returns every instance owned by ownerUserID, oldest
 // first.
 func (s *Store) ListInstancesByOwner(ctx context.Context, ownerUserID string) ([]*instances.Instance, error) {
-	rows, err := s.ro.QueryContext(ctx, s.ro.Rebind(`
+	return s.listInstances(ctx, `
 		SELECT `+instanceColumns+` FROM instances WHERE owner_user_id = ? ORDER BY created_at ASC
-	`), ownerUserID)
+	`, ownerUserID)
+}
+
+// ListAllInstances returns every registered instance across owners, oldest
+// first. It backs the internal health poller, which has no caller identity;
+// user-facing reads must go through ListInstancesByOwner so rows stay
+// owner-scoped.
+func (s *Store) ListAllInstances(ctx context.Context) ([]*instances.Instance, error) {
+	return s.listInstances(ctx, `
+		SELECT `+instanceColumns+` FROM instances ORDER BY created_at ASC
+	`)
+}
+
+func (s *Store) listInstances(ctx context.Context, query string, args ...any) ([]*instances.Instance, error) {
+	rows, err := s.ro.QueryContext(ctx, s.ro.Rebind(query), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list instances: %w", err)
 	}
