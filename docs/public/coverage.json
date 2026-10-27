@@ -53,6 +53,43 @@
       ]
     },
     {
+      "id": "multi-instance-federation",
+      "audiences": [
+        "user",
+        "operator"
+      ],
+      "stability": "experimental",
+      "docs": [
+        "multi-instance"
+      ],
+      "sources": [
+        "apps/backend/internal/instances/service.go",
+        "apps/backend/internal/instances/health.go",
+        "apps/backend/internal/instances/proxy/server.go",
+        "apps/backend/internal/instances/relay/relay.go",
+        "apps/backend/internal/backendapp/instance_routes.go",
+        "apps/backend/internal/webapp/shell.go",
+        "apps/web/components/settings/instances/instances-settings.tsx",
+        "apps/web/components/app-sidebar/app-sidebar-instance-picker.tsx",
+        "apps/web/components/app-sidebar/sections/notifications-section.tsx"
+      ],
+      "tests": [
+        "apps/backend/internal/instances/service_test.go",
+        "apps/backend/internal/instances/health_test.go",
+        "apps/backend/internal/instances/proxy/server_test.go",
+        "apps/backend/internal/instances/relay/relay_test.go",
+        "apps/backend/internal/backendapp/instance_routes_test.go",
+        "apps/backend/internal/backendapp/instance_shell_test.go",
+        "apps/web/components/settings/instances/instances-settings.test.tsx",
+        "apps/web/components/app-sidebar/app-sidebar-instance-picker.test.tsx",
+        "apps/web/components/app-sidebar/sections/notifications-section.test.tsx",
+        "apps/web/e2e/tests/multi-instance/multi-instance.spec.ts"
+      ],
+      "settingsRoutes": [
+        "/settings/system/instances"
+      ]
+    },
+    {
       "id": "workspaces-and-repositories",
       "audiences": [
         "user"

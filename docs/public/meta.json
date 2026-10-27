@@ -28,6 +28,7 @@
     "integrations",
     "automation-and-mcp",
     "stats-sync",
+    "multi-instance",
     "crashlytics-alerts",
     "authentication",
     "team-access",
