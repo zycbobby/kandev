@@ -38,6 +38,7 @@ import (
 	"github.com/kandev/kandev/internal/common/subproc"
 	"github.com/kandev/kandev/internal/profiles"
 	"github.com/kandev/kandev/internal/startup"
+	"github.com/kandev/kandev/internal/system/maintenance"
 	"github.com/kandev/kandev/internal/task/deliveryretention"
 	"github.com/kandev/kandev/internal/task/inventoryrepair"
 
@@ -1187,6 +1188,11 @@ func startGatewayAndServe(
 		return false
 	}
 
+	stopInstanceRelays := initInstanceRelays(ctx, cfg, repos, services, gateway.Hub, log)
+	addCleanup(func() error { stopInstanceRelays(); return nil })
+	if services.InstanceRelays != nil {
+		services.InstanceRelays.startRetention(maintenance.ForPool(dbPool))
+	}
 	gateways.RegisterSessionStreamNotifications(ctx, eventBus, gateway.Hub, log)
 	if cfg.Features.Canvases {
 		gateways.RegisterCanvasNotifications(ctx, eventBus, gateway.Hub, log)

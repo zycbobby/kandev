@@ -95,6 +95,7 @@ type Repositories struct {
 type Services struct {
 	Instances                *instances.Service
 	InstanceProxies          *ProxyManager
+	InstanceRelays           *RelayManager
 	DeliveryRetention        *deliveryretention.Worker
 	ManagedRuntimeSelections managedruntime.SelectionStore
 	DynamicProfileResolver   *agentruntime.ProfileExecutionResolver

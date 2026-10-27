@@ -1845,6 +1845,7 @@ func registerSecondaryRoutes(
 	p.log.Debug("Registered User handlers (HTTP + WebSocket)")
 
 	notificationhandlers.RegisterRoutes(p.router, p.notificationCtrl, p.log)
+	registerRemoteNotificationRoutes(p.router, p.services)
 	p.log.Debug("Registered Notification handlers (HTTP)")
 
 	editorhandlers.RegisterRoutes(p.router, p.editorCtrl, p.log)
