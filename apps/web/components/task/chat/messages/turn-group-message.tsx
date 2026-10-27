@@ -9,7 +9,10 @@ import type { Message } from "@/lib/types/http";
 import type { TurnGroup } from "@/hooks/use-processed-messages";
 import { hasProjectedShellOutput, type ToolCallMetadata } from "@/components/task/chat/types";
 import { MessageRenderer } from "@/components/task/chat/message-renderer";
-import { isSubagentEffectivelyActive } from "@/components/task/chat/messages/subagent-status";
+import {
+  isSubagentBackgroundRunning,
+  isSubagentEffectivelyActive,
+} from "@/components/task/chat/messages/subagent-status";
 
 type TurnGroupMessageProps = {
   group: TurnGroup;
@@ -68,6 +71,18 @@ const TOOL_MESSAGE_TYPES = new Set([
  * Check if any tool or subagent in the group is still running.
  * A tool/subagent is considered running if it's not in a terminal state.
  */
+function isSubagentMessageRunning(
+  metadata: ToolCallMetadata | undefined,
+  isContainingTurnActive: boolean,
+): boolean {
+  // A backgrounded subagent keeps running after the turn ends, so the
+  // collapsed group header must keep its running cue too.
+  return (
+    isSubagentEffectivelyActive(metadata, isContainingTurnActive) ||
+    isSubagentBackgroundRunning(metadata?.normalized?.subagent_task)
+  );
+}
+
 function hasRunningTool(messages: Message[], isContainingTurnActive: boolean): boolean {
   for (const msg of messages) {
     const metadata = msg.metadata as ToolCallMetadata | undefined;
@@ -75,7 +90,7 @@ function hasRunningTool(messages: Message[], isContainingTurnActive: boolean): b
     const isSubagent = metadata?.normalized?.kind === "subagent_task";
     if (!isToolMessage && !isSubagent) continue;
     if (isSubagent) {
-      if (isSubagentEffectivelyActive(metadata, isContainingTurnActive)) return true;
+      if (isSubagentMessageRunning(metadata, isContainingTurnActive)) return true;
       continue;
     }
     const status = metadata?.status;
