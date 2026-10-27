@@ -258,7 +258,7 @@ git commit -m "feat: show background-running state on async subagent cards"
 - Consumes: Task 2 的 `isSubagentBackgroundRunning`（与 Task 1 迁入的 `isSubagentEffectivelyActive` 同模块）。
 - Produces: 组头运行指示覆盖 spec 新 Scenario「折叠 turn 组的头保持运行指示」（spec delta 已在 plan 阶段补好，本任务不改 spec）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 复用该测试文件既有的组/消息构造方式；若无构造 `subagent_task` metadata 的 helper，仿 `tool-subagent-message.test.tsx` 的 factory 加最小 builder。两用例：
 ```
@@ -271,22 +271,22 @@ it("does not show a running indicator for a group of settled subagents", ...)
   断言无运行指示。
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/turn-group-message.test.tsx`
 Expected: FAIL（后台用例无运行指示）
 
-- [ ] **Step 3: 实现（1 行谓词）**
+- [x] **Step 3: 实现（1 行谓词）**
 
 `turn-group-message.tsx:78` 的 subagent 分支改为：
 `if (isSubagentEffectivelyActive(metadata, isContainingTurnActive) || isSubagentBackgroundRunning(metadata?.normalized?.subagent_task)) return true;`
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/turn-group-message.test.tsx`
 Expected: PASS（含守卫用例）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/web/components/task/chat/messages/turn-group-message.tsx apps/web/components/task/chat/messages/turn-group-message.test.tsx
