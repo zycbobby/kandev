@@ -4,14 +4,14 @@ Playwright-based end-to-end tests. Each Playwright worker spawns its own real Go
 
 ## Project layout
 
-| Folder                 | What's in it                                                                                                                                 |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/`               | Spec files, grouped by feature (`chat/`, `docker/`, `git/`, `integrations/`, `kanban/`, `pr/`, `search/`, `session/`, `ssh/`, `layout/`, …). |
-| `fixtures/`            | Worker-scoped fixtures that own the backend lifecycle (`backend.ts`, `docker-test-base.ts`, `ssh-test-base.ts`, `test-base.ts`).             |
-| `helpers/`             | Reusable building blocks for specs (`api-client.ts`, `docker.ts`, `ssh.ts`, `git-helper.ts`, `ws-capture.ts`, …).                            |
-| `pages/`               | Page Objects (one class per top-level UI surface — `SessionPage`, `KanbanPage`, `JiraSettingsPage`, `SSHSettingsPage`, …).                   |
-| `playwright.config.ts` | Project definitions, timeouts, sharding config.                                                                                              |
-| `global-setup.ts`      | Pre-flight checks for required backend artifacts, the Vite web build, and backend artifact freshness.                                        |
+| Folder                 | What's in it                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/`               | Spec files, grouped by feature (`chat/`, `docker/`, `git/`, `integrations/`, `kanban/`, `multi-instance/`, `pr/`, `search/`, `session/`, `ssh/`, `layout/`, …). |
+| `fixtures/`            | Worker-scoped fixtures that own the backend lifecycle (`backend.ts`, `remote-backend.ts`, `docker-test-base.ts`, `ssh-test-base.ts`, `test-base.ts`).           |
+| `helpers/`             | Reusable building blocks for specs (`api-client.ts`, `docker.ts`, `ssh.ts`, `git-helper.ts`, `ws-capture.ts`, …).                                               |
+| `pages/`               | Page Objects (one class per top-level UI surface — `SessionPage`, `KanbanPage`, `JiraSettingsPage`, `SSHSettingsPage`, …).                                      |
+| `playwright.config.ts` | Project definitions, timeouts, sharding config.                                                                                                                 |
+| `global-setup.ts`      | Pre-flight checks for required backend artifacts, the Vite web build, and backend artifact freshness.                                                           |
 
 ## Quick start for a fresh checkout
 
@@ -429,6 +429,43 @@ before each test.
 Docker image usage remains daemon-wide because images and their layers are
 shared across shards; only container records, cleanup, and container-based
 storage reporting are filtered by the process-scoped ownership label.
+
+### Multi-instance dual-backend fixture
+
+`tests/multi-instance/multi-instance.spec.ts` drives the federation flows
+(register, switch, proxied chat, cross-instance notifications, read state,
+remote death, flag-off) against two real backends. `fixtures/remote-backend.ts`
+boots the second one with `bootRemoteBackend()`: its own HOME, SQLite database
+and tmpDir, a port band disjoint from the local fixture's for every
+(offset, slot) pair (HTTP 21000-21149, standalone agentctl 22000-22149,
+agentctl instances 24001-29730), the `e2e` mock profile, and one seeded
+agent-backed task whose title is unique to the remote. B-side assertions go
+through `helpers/api-client.ts` pointed at the remote's own base URL.
+
+Three mechanisms are worth knowing before touching the spec:
+
+- **Version stamping.** The local instance's health probe requires a remote
+  version at or above `instances.MinRemoteVersion`, but both the CI e2e build
+  (`0.0.0-e2e.<sha>`) and a mid-development `git describe` are below that
+  floor, and the CI e2e shards have no Go toolchain to rebuild with
+  `VERSION=`. The fixture instead copies the prebuilt binary and rewrites the
+  embedded version string in place — a same-byte-length replacement, since
+  Go string headers keep their length and the health parser cuts at the
+  first `-` — and re-signs the copy ad hoc on macOS, where a modified Mach-O
+  would otherwise be killed on exec.
+- **Feature flag.** The local backend runs with
+  `KANDEV_FEATURES_MULTI_INSTANCE=true` via `backend.useEnv` (scoped for the
+  whole file so every later restart keeps it, released by the flag-off test
+  or `afterAll`). The remote backend runs with the flag on as well: the SPA
+  hydrates its feature flags from the ACTIVE instance's app-state, so a
+  remote with the flag off would hide the instance picker while being
+  viewed — the only switch-back affordance. The remote's own registry stays
+  empty, so its proxy and relay managers are inert.
+- **Health poller cadence.** Instance health shares the 90s `healthpoll`
+  cadence, so a just-registered (or just-killed) remote is otherwise first
+  probed on the next pass. The spec restarts the local backend at those two
+  points to run the poller's immediate boot pass instead of waiting out the
+  interval.
 
 ## Mocked vs real
 

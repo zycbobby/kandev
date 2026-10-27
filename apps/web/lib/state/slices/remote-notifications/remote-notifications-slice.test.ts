@@ -150,4 +150,21 @@ describe("remote notification selectors", () => {
     expect(selectRemoteNotificationUnreadByInstance(state)).toEqual({});
     expect(selectRemoteNotificationUnreadCount(state)).toBe(0);
   });
+
+  it("reuses the counts reference while the entries are unchanged", () => {
+    const store = makeStore();
+    store.getState().setRemoteNotificationsLoaded([occurrence()]);
+    const state = store.getState();
+    const counts = selectRemoteNotificationUnreadByInstance(state);
+    expect(counts).toEqual({ "inst-1": 1 });
+    // Subscribers bind the selector through useSyncExternalStore, which polls
+    // getSnapshot between store updates: a fresh object per call re-renders
+    // them in a loop (React error #185).
+    expect(selectRemoteNotificationUnreadByInstance(state)).toBe(counts);
+
+    store.getState().markRemoteNotificationRead("occ-row-1");
+    const afterMark = selectRemoteNotificationUnreadByInstance(store.getState());
+    expect(afterMark).toEqual({});
+    expect(afterMark).not.toBe(counts);
+  });
 });

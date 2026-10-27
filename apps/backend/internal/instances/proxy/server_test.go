@@ -76,6 +76,33 @@ func TestProxyForwardsApiAndInjectsCredential(t *testing.T) {
 	}
 }
 
+func TestProxyStripsUpstreamCorsHeaders(t *testing.T) {
+	// A real remote never sees the browser's Origin (the proxy strips it), so
+	// its global CORS middleware answers with the no-Origin shape, including
+	// Access-Control-Allow-Origin: *. Forwarding that alongside the bridge's
+	// own CORS headers duplicates the header and the browser rejects every
+	// cross-origin response.
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("remote-body"))
+	}))
+	t.Cleanup(remote.Close)
+	s := startProxy(t, remote.URL, false, "")
+	req, err := http.NewRequest(http.MethodGet, proxyURL(s)+"/api/v1/workspaces", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", "http://localhost:3000")
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = res.Body.Close() }()
+	require.Equal(t, 200, res.StatusCode)
+	require.Equal(t, []string{"http://localhost:3000"}, res.Header.Values("Access-Control-Allow-Origin"))
+	require.Equal(t, []string{"true"}, res.Header.Values("Access-Control-Allow-Credentials"))
+	require.Empty(t, res.Header.Values("Access-Control-Expose-Headers"))
+}
+
 func TestWsBridgeBidirectionalFrames(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ws" || r.Header.Get("Authorization") != "Bearer remote-pat" {

@@ -137,7 +137,7 @@ func (s *Server) httpProxy(target *url.URL, transport http.RoundTripper) http.Ha
 		Transport:      transport,
 		Rewrite:        func(r *httputil.ProxyRequest) { r.SetURL(target); r.Out.Host = target.Host },
 		ErrorHandler:   func(w http.ResponseWriter, _ *http.Request, _ error) { s.remoteError(w) },
-		ModifyResponse: func(r *http.Response) error { r.Header.Del("Set-Cookie"); return nil },
+		ModifyResponse: modifyUpstreamResponse,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Resolve credentials before ReverseProxy so errors cannot forward unauthenticated requests.
@@ -149,6 +149,23 @@ func (s *Server) httpProxy(target *url.URL, transport http.RoundTripper) http.Ha
 		}
 		proxy.ServeHTTP(w, outbound)
 	})
+}
+
+// modifyUpstreamResponse drops remote headers that describe the remote's
+// view of the proxied request. The remote never sees the browser's Origin
+// (upstreamHeaders strips it), so a real remote answers with its no-Origin
+// CORS shape (Access-Control-Allow-Origin: *); forwarded alongside the
+// bridge's own CORS headers that duplicates the header and the browser
+// rejects every response. The local bridge is the browser-facing CORS
+// authority, so the remote's CORS headers never survive the hop.
+func modifyUpstreamResponse(res *http.Response) error {
+	res.Header.Del("Set-Cookie")
+	res.Header.Del("Access-Control-Allow-Origin")
+	res.Header.Del("Access-Control-Allow-Credentials")
+	res.Header.Del("Access-Control-Allow-Methods")
+	res.Header.Del("Access-Control-Allow-Headers")
+	res.Header.Del("Access-Control-Expose-Headers")
+	return nil
 }
 
 func (s *Server) remoteError(w http.ResponseWriter) {
