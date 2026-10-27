@@ -120,7 +120,7 @@ git commit -m "refactor: extract subagent status helpers into a pure module"
 - Consumes: Task 1 的 `isSubagentPayloadTerminal`/`isSubagentEffectivelyActive`/`resolveSubagentTerminalStatus`。
 - Produces（Task 3/4 消费，签名见 design.md）: `isSubagentBackgroundRunning(payload: SubagentTaskPayload | undefined): boolean`；`type SubagentDisplayStatus = { kind: "background" } | { kind: "working" } | { kind: "terminal"; terminal: "complete" | "error" | "cancelled" }`；`resolveSubagentDisplayStatus(metadata: ToolCallMetadata | undefined, isContainingTurnActive: boolean): SubagentDisplayStatus`。
 
-- [ ] **Step 1: 写失败测试（新 describe，覆盖 Review Focus 1/2/5）**
+- [x] **Step 1: 写失败测试（新 describe，覆盖 Review Focus 1/2/5）**
 
 ```ts
 describe("isSubagentBackgroundRunning", () => {
@@ -157,22 +157,22 @@ describe("resolveSubagentDisplayStatus", () => {
 
 `subagentMetadataWith`：Task 1 builder 的扩展版，接受完整 `SubagentTaskPayload`（status 与 is_async 都落进 `normalized.subagent_task`）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/subagent-status.test.ts`
 Expected: FAIL（`isSubagentBackgroundRunning`/`resolveSubagentDisplayStatus` 未导出）
 
-- [ ] **Step 3: 实现两个导出**
+- [x] **Step 3: 实现两个导出**
 
 `isSubagentBackgroundRunning`：`payload` 存在、`!isSubagentPayloadTerminal(payload.status)`、且 `payload.status === "async_launched" || payload.is_async === true`。
 `resolveSubagentDisplayStatus`：顺序判定 background → working（`isSubagentEffectivelyActive`）→ terminal（`resolveSubagentTerminalStatus(metadata?.status, payload?.status)`）。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `pnpm -C apps/web exec vitest run components/task/chat/messages/subagent-status.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add apps/web/components/task/chat/messages/subagent-status.ts apps/web/components/task/chat/messages/subagent-status.test.ts
