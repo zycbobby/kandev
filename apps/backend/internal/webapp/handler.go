@@ -19,6 +19,26 @@ func init() {
 
 type PayloadBuilder func(*http.Request, RouteClassification) BootPayload
 
+// InstanceCookieName is the shell-level remote-instance selection state. The
+// cookie carries the selected instance ID across full-page reloads; a query
+// parameter of the same name overrides it for deep links like
+// /t/:taskId?kandev_instance=<id>. Reading the selection is this package's
+// seam — resolving the ID to an instance and port belongs to the caller.
+const InstanceCookieName = "kandev_instance"
+
+// SelectedInstanceID returns the instance ID a shell request selects: the
+// kandev_instance query parameter when non-blank, otherwise the cookie.
+// Empty means the local instance.
+func SelectedInstanceID(r *http.Request) string {
+	if id := strings.TrimSpace(r.URL.Query().Get(InstanceCookieName)); id != "" {
+		return id
+	}
+	if cookie, err := r.Cookie(InstanceCookieName); err == nil {
+		return strings.TrimSpace(cookie.Value)
+	}
+	return ""
+}
+
 type Handler struct {
 	assets       fs.FS
 	payloadFor   PayloadBuilder

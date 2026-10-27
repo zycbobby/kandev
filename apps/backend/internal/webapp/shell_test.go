@@ -1,6 +1,8 @@
 package webapp
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -266,5 +268,73 @@ func TestBytesCapacityReturnsZeroOnOverflow(t *testing.T) {
 	}
 	if got := bytesCapacity(maxInt, 1); got != 0 {
 		t.Fatalf("bytesCapacity overflow returned %d, want 0", got)
+	}
+}
+
+// TestShellRemoteInstanceInjectsPortAndOmitsPayload pins the remote-instance
+// shell contract: a boot payload marked OmitBootData renders a script that
+// assigns only window.__KANDEV_API_PORT, never the boot payload global, so the
+// SPA re-hydrates through the /api/v1/app-state fallback against the proxy
+// port. The title still rewrites through the regular TitlePrefix path.
+func TestShellRemoteInstanceInjectsPortAndOmitsPayload(t *testing.T) {
+	t.Parallel()
+
+	assets := fstest.MapFS{
+		"index.html": {
+			Data: []byte(`<!doctype html><html lang="en"><head><title>Kandev</title></head><body></body></html>`),
+		},
+	}
+	handler := NewHandler(assets, WithPayloadBuilder(func(_ *http.Request, route RouteClassification) BootPayload {
+		payload := NewBootPayload(route, RuntimeConfig{TitlePrefix: "GPU box"}, nil)
+		payload.OmitBootData = true
+		payload.APIPort = 41234
+		return payload
+	}))
+
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/t/task-1", nil))
+
+	got := resp.Body.String()
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", resp.Code, http.StatusOK, got)
+	}
+	if !strings.Contains(got, `window.__KANDEV_API_PORT="41234"`) {
+		t.Fatalf("remote-instance shell missing API port global: %s", got)
+	}
+	if strings.Contains(got, bootPayloadGlobal) {
+		t.Fatalf("remote-instance shell must omit the boot payload global: %s", got)
+	}
+	if !strings.Contains(got, "<title>GPU box Kandev</title>") {
+		t.Fatalf("remote-instance shell missing instance title: %s", got)
+	}
+}
+
+func TestSelectedInstanceID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		url    string
+		cookie string
+		want   string
+	}{
+		{name: "no selection", url: "/", want: ""},
+		{name: "cookie selects", url: "/", cookie: "inst-1", want: "inst-1"},
+		{name: "query overrides cookie", url: "/?kandev_instance=inst-2", cookie: "inst-1", want: "inst-2"},
+		{name: "query without cookie", url: "/t/task-9?kandev_instance=inst-2", want: "inst-2"},
+		{name: "blank query falls back to cookie", url: "/?kandev_instance=", cookie: "inst-1", want: "inst-1"},
+		{name: "blank cookie means no selection", url: "/", cookie: "", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			if tc.cookie != "" || tc.name == "blank cookie means no selection" {
+				req.AddCookie(&http.Cookie{Name: InstanceCookieName, Value: tc.cookie})
+			}
+			if got := SelectedInstanceID(req); got != tc.want {
+				t.Fatalf("SelectedInstanceID = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

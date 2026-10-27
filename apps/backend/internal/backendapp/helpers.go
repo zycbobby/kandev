@@ -58,6 +58,7 @@ import (
 	"github.com/kandev/kandev/internal/health/oslimits"
 	"github.com/kandev/kandev/internal/i18n"
 	"github.com/kandev/kandev/internal/improvekandev"
+	"github.com/kandev/kandev/internal/instances"
 	"github.com/kandev/kandev/internal/integrations/workspacescope"
 	"github.com/kandev/kandev/internal/jira"
 	kuberneteshandlers "github.com/kandev/kandev/internal/kubernetes"
@@ -99,6 +100,7 @@ import (
 	taskservice "github.com/kandev/kandev/internal/task/service"
 	usercontroller "github.com/kandev/kandev/internal/user/controller"
 	userhandlers "github.com/kandev/kandev/internal/user/handlers"
+	userstore "github.com/kandev/kandev/internal/user/store"
 	utilitycontroller "github.com/kandev/kandev/internal/utility/controller"
 	utilityhandlers "github.com/kandev/kandev/internal/utility/handlers"
 	"github.com/kandev/kandev/internal/webapp"
@@ -1505,9 +1507,71 @@ func newWebDevHandler(p routeParams) (*webapp.DevHandler, error) {
 func webAppHandlerOptions(p routeParams) []webapp.HandlerOption {
 	return []webapp.HandlerOption{
 		webapp.WithPayloadBuilder(func(req *http.Request, route webapp.RouteClassification) webapp.BootPayload {
-			return bootPayload(req.Context(), req, p, route)
+			return shellPayloadFor(req.Context(), req, p, route)
 		}),
 	}
+}
+
+// shellPayloadFor builds the shell boot payload for one request: a selected,
+// owner-visible remote instance with a live bridge boots the remote shell;
+// every other request boots the local payload unchanged.
+func shellPayloadFor(ctx context.Context, req *http.Request, p routeParams, route webapp.RouteClassification) webapp.BootPayload {
+	if payload, ok := remoteInstanceShellPayload(ctx, req, p, route); ok {
+		return payload
+	}
+	return bootPayload(ctx, req, p, route)
+}
+
+// remoteInstanceShellPayload resolves the remote-instance shell boot. It
+// applies only when features.multiInstance is on, the request selects an
+// instance (kandev_instance query or cookie), that instance is visible to the
+// requesting user, and a live proxy server exists for it — anything else
+// reports ok=false so the caller falls back to the local boot.
+func remoteInstanceShellPayload(
+	ctx context.Context, req *http.Request, p routeParams, route webapp.RouteClassification,
+) (webapp.BootPayload, bool) {
+	if !p.features.MultiInstance || p.services == nil ||
+		p.services.Instances == nil || p.services.InstanceProxies == nil {
+		return webapp.BootPayload{}, false
+	}
+	instanceID := webapp.SelectedInstanceID(req)
+	if instanceID == "" {
+		return webapp.BootPayload{}, false
+	}
+	owner, ok := shellInstanceOwner(req)
+	if !ok {
+		return webapp.BootPayload{}, false
+	}
+	instance := visibleInstance(ctx, p.services.Instances, owner, instanceID)
+	if instance == nil {
+		return webapp.BootPayload{}, false
+	}
+	server := p.services.InstanceProxies.Server(instance.ID)
+	if server == nil {
+		return webapp.BootPayload{}, false
+	}
+	runtime := webRuntimeConfig(p.devMode, p.webTitlePrefix, req)
+	runtime.TitlePrefix = strings.TrimSpace(instance.Name)
+	payload := webapp.NewBootPayload(route, runtime, nil)
+	payload.OmitBootData = true
+	payload.APIPort = server.Port()
+	return payload, true
+}
+
+// shellInstanceOwner resolves the owner scope for the shell boot path. Unlike
+// API routes — where the auth middleware rejects anonymous callers before the
+// handler — unauthenticated shell visitors are a real case (the SPA path is
+// deferred so the login page can render), and they get no remote boot at all
+// rather than the synthetic admin's.
+func shellInstanceOwner(req *http.Request) (string, bool) {
+	identity, ok := authn.IdentityFromContext(req.Context())
+	if !ok {
+		return "", false
+	}
+	if identity.Synthetic || identity.UserID == "" {
+		return userstore.DefaultUserID, true
+	}
+	return identity.UserID, true
 }
 
 // webRuntimeConfig builds the SPA's runtime block. `req` supplies the active
@@ -1846,6 +1910,7 @@ func registerSecondaryRoutes(
 
 	notificationhandlers.RegisterRoutes(p.router, p.notificationCtrl, p.log)
 	registerRemoteNotificationRoutes(p.router, p.services)
+	registerInstanceRoutes(p)
 	p.log.Debug("Registered Notification handlers (HTTP)")
 
 	editorhandlers.RegisterRoutes(p.router, p.editorCtrl, p.log)
@@ -2282,6 +2347,253 @@ func registerRetentionRoutes(p routeParams) {
 	read := p.router.Group("/api/v1/system")
 	admin := read.Group("", authz.RequireOrgScope(authz.ScopeOrgSettingsManage))
 	retention.RegisterRoutes(read, admin, p.services.Retention.Handler)
+}
+
+// registerInstanceRoutes mounts the remote-instance registry REST group on
+// /api/v1/instances. The group exists only when features.multiInstance is on
+// (the instance service is assembled by initInstanceProxies under the flag);
+// with the flag off every route here is a plain 404, mirroring
+// registerRemoteNotificationRoutes' gating. Caller scoping follows the
+// settings convention: the global auth middleware guards the group and the
+// owner is resolved per request, with the synthetic admin owning everything
+// while auth is disabled.
+func registerInstanceRoutes(p routeParams) {
+	if p.services == nil || p.services.Instances == nil {
+		return
+	}
+	svc := p.services.Instances
+	api := p.router.Group("/api/v1/instances")
+	api.GET("", listInstancesRoute(svc))
+	api.POST("", createInstanceRoute(svc))
+	api.PATCH("/:id", updateInstanceRoute(svc))
+	api.DELETE("/:id", deleteInstanceRoute(svc))
+	api.GET("/:id/health", instanceHealthRoute(svc))
+	api.POST("/:id/select", selectInstanceRoute(svc, p.services.InstanceProxies))
+}
+
+// instanceCallerUserID resolves the owner scope for the instance routes,
+// mirroring remoteNotificationOwner: the authenticated caller, or the
+// synthetic admin (DefaultUserID) when auth is disabled.
+func instanceCallerUserID(c *gin.Context) string {
+	identity, ok := authn.FromGin(c)
+	if !ok || identity.Synthetic || identity.UserID == "" {
+		return userstore.DefaultUserID
+	}
+	return identity.UserID
+}
+
+// instanceAPI is the REST shape of one registered remote instance. It omits
+// the internal owner column and the proxy port: the shell injects the port
+// server-side and the browser never needs it.
+type instanceAPI struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	BaseURL            string    `json:"base_url"`
+	CredentialSecretID string    `json:"credential_secret_id,omitempty"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// instanceHealthAPI is the REST shape of one instance's last health report.
+// A zero LastCheckedAt means the poller has not run yet.
+type instanceHealthAPI struct {
+	Reachable     bool      `json:"reachable"`
+	Version       string    `json:"version,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	Supported     bool      `json:"supported"`
+	LastCheckedAt time.Time `json:"lastCheckedAt"`
+}
+
+func instanceToAPI(item *instances.Instance) instanceAPI {
+	return instanceAPI{
+		ID:                 item.ID,
+		Name:               item.Name,
+		BaseURL:            item.BaseURL,
+		CredentialSecretID: item.CredentialSecretID,
+		Enabled:            item.Enabled,
+		CreatedAt:          item.CreatedAt,
+		UpdatedAt:          item.UpdatedAt,
+	}
+}
+
+// instanceWriteResult maps instance service errors onto the REST surface. A
+// foreign or missing ID is one indistinguishable 404; failures map to 500.
+func instanceWriteResult(c *gin.Context, err error) {
+	if errors.Is(err, instances.ErrInstanceNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{errKey: "instance not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{errKey: "instance operation failed"})
+	}
+}
+
+func listInstancesRoute(svc *instances.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		items, err := svc.ListInstances(c.Request.Context(), instanceCallerUserID(c))
+		if err != nil {
+			instanceWriteResult(c, err)
+			return
+		}
+		out := make([]instanceAPI, 0, len(items))
+		for _, item := range items {
+			out = append(out, instanceToAPI(item))
+		}
+		c.JSON(http.StatusOK, out)
+	}
+}
+
+type instanceCreateRequest struct {
+	Name               string `json:"name"`
+	BaseURL            string `json:"base_url"`
+	CredentialSecretID string `json:"credential_secret_id"`
+	Enabled            *bool  `json:"enabled"`
+}
+
+func createInstanceRoute(svc *instances.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body instanceCreateRequest
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{errKey: "invalid instance payload"})
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.BaseURL) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{errKey: "instance name and base URL are required"})
+			return
+		}
+		enabled := true
+		if body.Enabled != nil {
+			enabled = *body.Enabled
+		}
+		item, err := svc.CreateInstance(
+			c.Request.Context(), instanceCallerUserID(c),
+			body.Name, body.BaseURL, body.CredentialSecretID, enabled)
+		if err != nil {
+			instanceWriteResult(c, err)
+			return
+		}
+		c.JSON(http.StatusCreated, instanceToAPI(item))
+	}
+}
+
+type instanceUpdateRequest struct {
+	Name               *string `json:"name"`
+	BaseURL            *string `json:"base_url"`
+	CredentialSecretID *string `json:"credential_secret_id"`
+	Enabled            *bool   `json:"enabled"`
+}
+
+func updateInstanceRoute(svc *instances.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body instanceUpdateRequest
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{errKey: "invalid instance payload"})
+			return
+		}
+		if (body.Name != nil && strings.TrimSpace(*body.Name) == "") ||
+			(body.BaseURL != nil && strings.TrimSpace(*body.BaseURL) == "") {
+			c.JSON(http.StatusBadRequest, gin.H{errKey: "instance name and base URL are required"})
+			return
+		}
+		item, err := svc.UpdateInstance(
+			c.Request.Context(), instanceCallerUserID(c), c.Param("id"), instances.InstanceUpdate{
+				Name:               body.Name,
+				BaseURL:            body.BaseURL,
+				CredentialSecretID: body.CredentialSecretID,
+				Enabled:            body.Enabled,
+			})
+		if err != nil {
+			instanceWriteResult(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, instanceToAPI(item))
+	}
+}
+
+func deleteInstanceRoute(svc *instances.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := svc.DeleteInstance(c.Request.Context(), instanceCallerUserID(c), c.Param("id")); err != nil {
+			instanceWriteResult(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true})
+	}
+}
+
+func instanceHealthRoute(svc *instances.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		report, err := svc.GetHealth(c.Request.Context(), instanceCallerUserID(c), c.Param("id"))
+		if err != nil {
+			instanceWriteResult(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, instanceHealthAPI{
+			Reachable:     report.Reachable,
+			Version:       report.Version,
+			Error:         report.Error,
+			Supported:     report.Supported,
+			LastCheckedAt: report.LastCheckedAt,
+		})
+	}
+}
+
+// visibleInstance returns the caller's instance record for id, or nil when id
+// names no instance visible to that owner. The service owns the registry and
+// its per-owner reads, so foreign IDs read exactly like missing ones.
+func visibleInstance(ctx context.Context, svc *instances.Service, owner, id string) *instances.Instance {
+	items, err := svc.ListInstances(ctx, owner)
+	if err != nil {
+		return nil
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item
+		}
+	}
+	return nil
+}
+
+// selectInstanceRoute implements the switch contract: it verifies the instance
+// is visible to the caller, records the selection in the kandev_instance
+// cookie the shell re-reads on the next full-page load, mints the bridge
+// capability cookie through the live proxy server, and returns the reload
+// target. The bridge mint happens only after both checks above it.
+func selectInstanceRoute(svc *instances.Service, proxies *ProxyManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		if visibleInstance(c.Request.Context(), svc, instanceCallerUserID(c), id) == nil {
+			c.JSON(http.StatusNotFound, gin.H{errKey: "instance not found"})
+			return
+		}
+		http.SetCookie(c.Writer, &http.Cookie{
+			Name:     webapp.InstanceCookieName,
+			Value:    id,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   c.Request.TLS != nil || strings.EqualFold(c.Request.Header.Get("X-Forwarded-Proto"), "https"),
+			SameSite: http.SameSiteLaxMode,
+		})
+		if proxies != nil {
+			if server := proxies.Server(id); server != nil {
+				server.SetCapabilityCookie(c.Writer, c.Request)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"href": "/"})
+	}
+}
+
+// startInstanceHealthPoller launches the remote-instance health poller and
+// registers its Stop, mirroring the integration poller wiring alongside it in
+// startServices. A no-op when the instance registry is not assembled (flag
+// off), so the disabled registry stays inert.
+func startInstanceHealthPoller(ctx context.Context, services *Services, log *logger.Logger, addCleanup func(func() error)) {
+	if services == nil || services.Instances == nil {
+		return
+	}
+	poller := instances.NewHealthPoller(services.Instances, log)
+	startup.AfterReady(ctx, func() { poller.Start(ctx) })
+	addCleanup(func() error { poller.Stop(); return nil })
 }
 
 // registerHealthRoutes sets up the system health endpoint with all health checkers.

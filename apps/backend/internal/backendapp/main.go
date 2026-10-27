@@ -467,6 +467,10 @@ func startServices( //nolint:cyclop
 	}
 	stopInstanceProxies := initInstanceProxies(ctx, cfg, repos, services, log)
 	addCleanup(func() error { stopInstanceProxies(); return nil })
+	// Start the instance health poller: probes every registered remote on the
+	// shared healthpoll cadence so the settings surface has a status without a
+	// request-driven probe. Inert (no-op) unless the flag assembled the registry.
+	startInstanceHealthPoller(ctx, services, log, addCleanup)
 	warnIfExposedWithoutAuth(cfg, services.Auth, log)
 	taskservice.SetTenancyEnforced(cfg.Features.MultiTenancy)
 	if services.Org != nil && services.Org.Enabled() {

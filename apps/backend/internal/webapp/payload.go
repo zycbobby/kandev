@@ -26,6 +26,16 @@ type BootPayload struct {
 	// plugin service failed to initialize or nothing active declares a
 	// bundle; the frontend boots whatever it finds here unconditionally.
 	Plugins []ActivePluginPayload `json:"plugins,omitempty"`
+	// APIPort is the local bridge port of the selected remote instance. The
+	// SPA points its API and WebSocket base at it, so every call reaches the
+	// remote instance through the local proxy. Only meaningful together with
+	// OmitBootData.
+	APIPort int `json:"apiPort,omitempty"`
+	// OmitBootData switches the injected script from the boot payload global
+	// to an API-port-only assignment, so the SPA re-hydrates through its
+	// /api/v1/app-state fallback instead of local boot data. It is a shell
+	// rendering instruction, never serialized payload data.
+	OmitBootData bool `json:"-"`
 }
 
 // BootEntityGraph stores each task and session once. State and route data use

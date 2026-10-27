@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"html"
 	"io/fs"
+	"strconv"
 	"strings"
 
 	"github.com/kandev/kandev/internal/i18n"
 )
 
 const bootPayloadGlobal = "window.__KANDEV_BOOT_PAYLOAD__"
+const apiPortGlobal = "window.__KANDEV_API_PORT"
 const debugGlobalAssignment = "window.__KANDEV_DEBUG=true;"
 const maxInt = int(^uint(0) >> 1)
 
@@ -164,13 +166,18 @@ func replaceLangInTag(tag []byte, locale string, langAttr []byte) []byte {
 // HTML. encoding/json escapes '<', '>', and '&', which prevents a state value
 // from closing the script tag.
 func BootPayloadScript(payload BootPayload) ([]byte, error) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal boot payload: %w", err)
-	}
 	debugPrefix := ""
 	if payload.Runtime.Debug {
 		debugPrefix = debugGlobalAssignment
+	}
+	// A remote-instance boot carries no local state: only the proxy port is
+	// assigned and the SPA re-hydrates through /api/v1/app-state.
+	if payload.OmitBootData {
+		return apiPortScript(payload.APIPort, debugPrefix), nil
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal boot payload: %w", err)
 	}
 	script := make([]byte, 0, bytesCapacity(len(data), len(debugPrefix), len(bootPayloadGlobal), 32))
 	script = append(script, "<script>"...)
@@ -180,6 +187,20 @@ func BootPayloadScript(payload BootPayload) ([]byte, error) {
 	script = append(script, data...)
 	script = append(script, ";</script>"...)
 	return script, nil
+}
+
+// apiPortScript builds the OmitBootData boot script: the quoted port matches
+// the window.__KANDEV_API_PORT global type the SPA reads in lib/config.ts.
+func apiPortScript(port int, debugPrefix string) []byte {
+	script := make([]byte, 0, bytesCapacity(len(debugPrefix), len(apiPortGlobal), 16))
+	script = append(script, "<script>"...)
+	script = append(script, debugPrefix...)
+	script = append(script, apiPortGlobal...)
+	script = append(script, `="`...)
+	script = append(script, strconv.Itoa(port)...)
+	script = append(script, `";`...)
+	script = append(script, "</script>"...)
+	return script
 }
 
 func injectBeforeHeadClose(indexHTML, script []byte) []byte {
