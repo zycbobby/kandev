@@ -9,6 +9,8 @@ If you run more than one Kandev instance, each instance's `/stats` page only cou
 
 LOCAL runs current Kandev code and owns all configuration. REMOTE needs no code or configuration change beyond one scheduled automation.
 
+Stats sync only merges statistics. To operate remote instances and receive their notifications from one panel, see the experimental [Multi-Instance Federation](multi-instance.md) guide.
+
 ## How it works
 
 - REMOTE runs `scripts/statsync/push.py` on a schedule. The script reads REMOTE's own SQLite database read-only, extracts rows newer than its watermark, and POSTs them to LOCAL.

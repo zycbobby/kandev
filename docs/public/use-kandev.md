@@ -79,7 +79,7 @@ The launcher selects the platform runtime, starts the Go backend and agent runti
 
 By default, persistent state is under `~/.kandev`, including the SQLite database, repository materializations, sessions, logs, and backups. `KANDEV_HOME_DIR` relocates that root. `KANDEV_DATABASE_PATH` overrides the database file and moves System snapshots to `backups/` beside that file. Kandev creates its data directory with owner-only permissions and rejects symlinked components in that path, but file permissions do not replace host access controls. Kandev does not move snapshots from another directory automatically.
 
-See the [CLI reference](cli.md) for commands, port and logging flags, data paths, environment variables, and update behavior. Other supported entry points are the [desktop app](desktop-app.md), [service](run-as-a-service.md), and [Docker deployment](docker.md). Follow [Mobile Remote Access](mobile-remote-access.md) for a private phone connection. Read [Security and trust](security.md) before making any installation remotely reachable.
+See the [CLI reference](cli.md) for commands, port and logging flags, data paths, environment variables, and update behavior. Other supported entry points are the [desktop app](desktop-app.md), [service](run-as-a-service.md), and [Docker deployment](docker.md). Follow [Mobile Remote Access](mobile-remote-access.md) for a private phone connection. If you run Kandev on more than one machine, the experimental [Multi-Instance Federation](multi-instance.md) guide covers registering the other instances and switching this panel between them. Read [Security and trust](security.md) before making any installation remotely reachable.
 
 <details>
 <summary>First-run records and onboarding details</summary>
