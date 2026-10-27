@@ -21,6 +21,7 @@ import {
   IconShieldLock,
   IconTerminal2,
   IconSitemap,
+  IconStack2,
   IconUsers,
   IconWand,
 } from "@tabler/icons-react";
@@ -39,6 +40,7 @@ import {
   SECRETS_SETTINGS_HREF,
   SYSTEM_ABOUT_SETTINGS_HREF,
   SYSTEM_DATA_STORAGE_SETTINGS_HREF,
+  SYSTEM_INSTANCES_SETTINGS_HREF,
   SYSTEM_STORAGE_SETTINGS_HREF,
   SYSTEM_STATUS_SETTINGS_HREF,
   TASK_BEHAVIOR_SETTINGS_HREF,
@@ -72,7 +74,7 @@ export type SettingsMenuItem = {
    * the page that owns them.
    */
   activePrefixes?: string[];
-  requires?: "account" | "users" | "organizations";
+  requires?: "account" | "users" | "organizations" | "multiInstance";
   /** Rows whose page owns a list show its size as a trailing badge. */
   countKey?: MenuCountKey;
 };
@@ -226,6 +228,12 @@ export const SETTINGS_MENU_SECTIONS: SettingsMenuSection[] = [
         href: "/settings/system/feature-toggles",
         labelKey: "system:navFeatureToggles",
         icon: IconFlask,
+      },
+      {
+        href: SYSTEM_INSTANCES_SETTINGS_HREF,
+        labelKey: "instances:navInstances",
+        icon: IconStack2,
+        requires: "multiInstance",
       },
       { href: "/settings/system/updates", labelKey: "system:navUpdates", icon: IconRefresh },
       { href: SYSTEM_ABOUT_SETTINGS_HREF, labelKey: "system:navAbout", icon: IconInfoCircle },

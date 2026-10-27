@@ -111,6 +111,7 @@ describe("settings menu shape", () => {
       "/settings/system/data-storage",
       "/settings/system/storage",
       "/settings/system/feature-toggles",
+      "/settings/system/instances",
       "/settings/system/updates",
       "/settings/system/about",
     ]);

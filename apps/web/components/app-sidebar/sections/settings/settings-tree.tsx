@@ -171,6 +171,7 @@ export function SettingsTree({
   const { t } = useTranslation();
   const authEnabled = useFeature("auth");
   const multiTenancyEnabled = useFeature("multiTenancy");
+  const multiInstanceEnabled = useFeature("multiInstance");
   const authMode = useAppStore((s) => s.auth.mode);
   const isAdmin = useIsAdmin();
   const showAccountItems = authEnabled && authMode === "enabled";
@@ -192,6 +193,7 @@ export function SettingsTree({
     if (item.requires === "account") return showAccountItems;
     if (item.requires === "users") return showUsersItem;
     if (item.requires === "organizations") return showOrganizationsItem;
+    if (item.requires === "multiInstance") return multiInstanceEnabled;
     return true;
   };
 

@@ -7,6 +7,7 @@ const SYSTEM_STORAGE_DISCOVERY_ID = "system-storage";
 export const SYSTEM_DATA_STORAGE_SETTINGS_HREF = `${SYSTEM_SETTINGS_HREF}/data-storage`;
 export const SYSTEM_STORAGE_SETTINGS_HREF = `${SYSTEM_SETTINGS_HREF}/storage`;
 export const SYSTEM_ABOUT_SETTINGS_HREF = `${SYSTEM_SETTINGS_HREF}/about`;
+export const SYSTEM_INSTANCES_SETTINGS_HREF = `${SYSTEM_SETTINGS_HREF}/instances`;
 export const SYSTEM_SETTINGS_TARGETS = {
   database: "setting-system-database",
   retention: "setting-system-retention",
@@ -176,6 +177,15 @@ export const SYSTEM_DISCOVERY_DEFINITIONS: SettingsDiscoveryDefinition[] = [
     groupId: "system",
     href: "/settings/system/feature-toggles",
     order: 640,
+  },
+  {
+    id: "system-instances",
+    kind: "page",
+    labelKey: "instances:navInstances",
+    groupId: "system",
+    href: SYSTEM_INSTANCES_SETTINGS_HREF,
+    order: 641,
+    requires: "multiInstance",
   },
   {
     id: "system-updates",

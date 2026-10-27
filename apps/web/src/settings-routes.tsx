@@ -54,6 +54,7 @@ import { OrganizationsPage } from "@/components/settings/system/organizations/or
 import { UnitsPage } from "@/components/settings/units/units-page";
 import { HealthIssuesCard } from "@/components/settings/system/health-issues-card";
 import { SystemPageShell } from "@/components/settings/system/system-page-shell";
+import { InstancesSettings } from "@/components/settings/instances/instances-settings";
 import { SystemRouteShell } from "@/components/settings/system/system-route-shell";
 import { StorageSettings } from "@/components/settings/system/storage-settings";
 import { UIStateCard } from "@/components/settings/system/ui-state-card";
@@ -200,6 +201,11 @@ const SETTINGS_ROUTES: Record<string, RouteRenderer> = {
   "/settings/system/organizations": () => (
     <SystemRouteShell titleKey="orgs:navOrganizations" descriptionKey="orgs:description">
       <OrganizationsPage />
+    </SystemRouteShell>
+  ),
+  "/settings/system/instances": () => (
+    <SystemRouteShell titleKey="instances:navInstances" descriptionKey="instances:pageDescription">
+      <InstancesSettings />
     </SystemRouteShell>
   ),
   "/settings/system/feature-toggles": () => (

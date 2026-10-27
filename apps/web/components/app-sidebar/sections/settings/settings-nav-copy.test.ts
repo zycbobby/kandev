@@ -22,6 +22,7 @@ const NAV_LABELS: Array<[key: string, english: string]> = [
   ["settings:accessControl", "Access Control"],
   ["settings:terminalAndEditors", "Terminal & Editors"],
   ["settings:taskBehavior", "Task Behavior"],
+  ["instances:navInstances", "Instances"],
   ["system:navDataStorage", "Data & Logs"],
   ["system:storageTitle", "Storage"],
   ["common:prompts", "Prompts"],

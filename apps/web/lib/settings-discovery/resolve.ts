@@ -206,6 +206,7 @@ function isVisible(entry: SettingsDiscoveryDefinition, context: SettingsDiscover
   if (entry.requires === "users") return context.showUsers;
   if (entry.requires === "organizations") return context.showOrganizations;
   if (entry.requires === "workspace") return context.workspaces.length > 0;
+  if (entry.requires === "multiInstance") return context.multiInstanceEnabled ?? false;
   return true;
 }
 
