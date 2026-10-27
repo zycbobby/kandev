@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ToolCallMetadata } from "@/components/task/chat/types";
-import { isSubagentEffectivelyActive } from "./subagent-status";
+import type { SubagentTaskPayload, ToolCallMetadata } from "@/components/task/chat/types";
+import {
+  isSubagentBackgroundRunning,
+  isSubagentEffectivelyActive,
+  resolveSubagentDisplayStatus,
+} from "./subagent-status";
 
 const COMPLETE = "complete";
 const STARTED = "started";
@@ -186,4 +190,114 @@ describe("isSubagentEffectivelyActive", () => {
       ).toBe(expected);
     },
   );
+});
+
+function subagentMetadataWith(
+  status: ToolCallMetadata["status"] | undefined,
+  payload: SubagentTaskPayload,
+): ToolCallMetadata {
+  const metadata: ToolCallMetadata = {
+    status,
+    normalized: { kind: "subagent_task", subagent_task: payload },
+  };
+  if (status === undefined) delete metadata.status;
+  return metadata;
+}
+
+describe("isSubagentBackgroundRunning", () => {
+  it.each([
+    { name: "async_launched", payload: { status: "async_launched" }, expected: true },
+    { name: "is_async without status (Cursor)", payload: { is_async: true }, expected: true },
+    {
+      name: "async_launched regardless of is_async flag",
+      payload: { status: "async_launched", is_async: false },
+      expected: true,
+    },
+    {
+      name: "is_async with terminal completed settles",
+      payload: { is_async: true, status: "completed" },
+      expected: false,
+    },
+    {
+      name: "is_async with terminal failed settles",
+      payload: { is_async: true, status: "failed" },
+      expected: false,
+    },
+    { name: "sync started is not background", payload: { status: "started" }, expected: false },
+    { name: "undefined payload is not background", payload: undefined, expected: false },
+  ])("$name", ({ payload, expected }) => {
+    expect(isSubagentBackgroundRunning(payload)).toBe(expected);
+  });
+});
+
+describe("resolveSubagentDisplayStatus", () => {
+  it.each([
+    {
+      name: "async + tool complete + turn inactive → background",
+      metadataStatus: "complete",
+      payload: { status: "async_launched" },
+      turnActive: false,
+      expected: { kind: "background" },
+    },
+    {
+      name: "async + turn active → background (统一标签)",
+      metadataStatus: "complete",
+      payload: { status: "async_launched" },
+      turnActive: true,
+      expected: { kind: "background" },
+    },
+    {
+      name: "is_async Cursor shape + turn inactive → background",
+      metadataStatus: "complete",
+      payload: { is_async: true },
+      turnActive: false,
+      expected: { kind: "background" },
+    },
+    {
+      name: "tool error while payload async_launched → background 优先",
+      metadataStatus: "error",
+      payload: { status: "async_launched" },
+      turnActive: false,
+      expected: { kind: "background" },
+    },
+    {
+      name: "is_async + terminal completed → terminal complete",
+      metadataStatus: "complete",
+      payload: { is_async: true, status: "completed" },
+      turnActive: false,
+      expected: { kind: "terminal", terminal: "complete" },
+    },
+    {
+      name: "sync in active turn → working",
+      metadataStatus: "in_progress",
+      payload: { status: "started" },
+      turnActive: true,
+      expected: { kind: "working" },
+    },
+    {
+      name: "settled sync → terminal complete",
+      metadataStatus: "complete",
+      payload: { status: "completed" },
+      turnActive: false,
+      expected: { kind: "terminal", terminal: "complete" },
+    },
+    {
+      name: "terminal failed payload → terminal error",
+      metadataStatus: "complete",
+      payload: { status: "failed" },
+      turnActive: true,
+      expected: { kind: "terminal", terminal: "error" },
+    },
+    {
+      name: "undefined metadata → terminal complete 兜底不崩溃",
+      metadataStatus: undefined,
+      payload: undefined,
+      turnActive: false,
+      expected: { kind: "terminal", terminal: "complete" },
+    },
+  ])("$name", ({ metadataStatus, payload, turnActive, expected }) => {
+    const metadata =
+      payload === undefined ? undefined : subagentMetadataWith(metadataStatus, payload);
+    expect(resolveSubagentDisplayStatus(metadata, turnActive)).toEqual(expected);
+  });
 });
