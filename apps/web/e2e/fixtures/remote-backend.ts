@@ -200,14 +200,12 @@ export async function bootRemoteBackend(
     KANDEV_DATABASE_PATH: dbPath,
     KANDEV_E2E_SYSTEM_TEMP_ROOT: systemTemporaryRoot,
     KANDEV_E2E_MOCK: "true",
-    // The SPA hydrates its feature flags from the ACTIVE instance's
-    // app-state, and the federation UI (instance picker, notifications
-    // module) gates on them. A remote with the flag off therefore hides the
-    // picker while being viewed, stranding the panel on the remote with no
-    // switch-back affordance. A same-release federated remote runs the flag
-    // on, so the fixture does too; B's own registry stays empty, so its
-    // proxy/relay managers are inert.
-    KANDEV_FEATURES_MULTI_INSTANCE: "true",
+    // The remote deliberately does NOT enable features.multiInstance: a
+    // remote needs no flag to be a valid federation target, and the default
+    // state of a fresh remote install is flag-off. The SPA's hydrated feature
+    // flags come from the active instance's app-state, so the spec's flows
+    // double as the regression pin that the federation UI (picker,
+    // notifications module) follows the LOCAL backend's flag instead.
     KANDEV_DOCKER_ENABLED: "false",
     KANDEV_WORKTREE_ENABLED: "true",
     KANDEV_WORKTREE_BASEPATH: worktreeBase,

@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useAppStore, useAppStoreApi } from "@/components/state-provider";
-import { useFeature } from "@/hooks/domains/features/use-feature";
+import { useLocalFeatureFlag } from "@/hooks/domains/features/use-local-feature-flag";
 import { getInstanceHealth, listInstances } from "@/lib/api/domains/instances-api";
 import type { InstancesSlice, InstancesSliceState } from "@/lib/state/slices/instances/types";
 
@@ -14,7 +14,7 @@ import type { InstancesSlice, InstancesSliceState } from "@/lib/state/slices/ins
  * backend poller keeps the reports fresh; a reload re-reads them.
  */
 export function useInstances(): InstancesSliceState["instances"] {
-  const enabled = useFeature("multiInstance");
+  const enabled = useLocalFeatureFlag("multiInstance");
   const instances = useAppStore((s) => s.instances);
   const storeApi = useAppStoreApi();
 

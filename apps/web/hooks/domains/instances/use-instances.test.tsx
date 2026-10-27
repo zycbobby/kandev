@@ -20,8 +20,8 @@ vi.mock("@/lib/api/domains/instances-api", () => ({
 
 const feature = vi.hoisted(() => ({ enabled: true }));
 
-vi.mock("@/hooks/domains/features/use-feature", () => ({
-  useFeature: (name: string) => name === "multiInstance" && feature.enabled,
+vi.mock("@/hooks/domains/features/use-local-feature-flag", () => ({
+  useLocalFeatureFlag: (name: string) => name === "multiInstance" && feature.enabled,
 }));
 
 const holder: { store: StoreApi<InstancesSlice> | null } = vi.hoisted(() => ({ store: null }));

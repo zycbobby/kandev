@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@kandev/ui/dropdown-menu";
-import { useFeature } from "@/hooks/domains/features/use-feature";
+import { useLocalFeatureFlag } from "@/hooks/domains/features/use-local-feature-flag";
 import { useInstances } from "@/hooks/domains/instances/use-instances";
 import { useRemoteNotificationUnreadByInstance } from "@/hooks/domains/remote-notifications/use-remote-notifications";
 import { switchInstance } from "@/lib/instances/switch-instance";
@@ -39,7 +39,7 @@ export function AppSidebarInstancePicker({
   healthTestIdPrefix = "sidebar-instance-health",
 }: AppSidebarInstancePickerProps = {}) {
   const { t } = useTranslation();
-  const enabled = useFeature("multiInstance");
+  const enabled = useLocalFeatureFlag("multiInstance");
   const { items, activeId, health } = useInstances();
   const unreadByInstance = useRemoteNotificationUnreadByInstance();
 

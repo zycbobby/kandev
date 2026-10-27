@@ -7,8 +7,8 @@ const feature = vi.hoisted(() => ({ enabled: true }));
 const instances = vi.hoisted(() => ({ state: null as InstancesSliceState["instances"] | null }));
 const unread = vi.hoisted(() => ({ byInstance: {} as Record<string, number> }));
 
-vi.mock("@/hooks/domains/features/use-feature", () => ({
-  useFeature: (name: string) => name === "multiInstance" && feature.enabled,
+vi.mock("@/hooks/domains/features/use-local-feature-flag", () => ({
+  useLocalFeatureFlag: (name: string) => name === "multiInstance" && feature.enabled,
 }));
 
 vi.mock("@/hooks/domains/instances/use-instances", () => ({

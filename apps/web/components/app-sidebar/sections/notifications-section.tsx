@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { IconBell, IconCheck, IconX } from "@tabler/icons-react";
 import { Badge } from "@kandev/ui/badge";
 import { useAppStore } from "@/components/state-provider";
-import { useFeature } from "@/hooks/domains/features/use-feature";
+import { useLocalFeatureFlag } from "@/hooks/domains/features/use-local-feature-flag";
 import type { RemoteNotificationsController } from "@/hooks/domains/remote-notifications/use-remote-notifications";
 import { useRemoteNotifications } from "@/hooks/domains/remote-notifications/use-remote-notifications";
 import { switchInstance } from "@/lib/instances/switch-instance";
@@ -28,7 +28,7 @@ type NotificationsSectionProps = {
  * local instance's own notification behavior stays untouched.
  */
 export function NotificationsSection({ collapsed }: NotificationsSectionProps) {
-  const enabled = useFeature("multiInstance");
+  const enabled = useLocalFeatureFlag("multiInstance");
   const { entries, status, markRead, dismiss, markAllRead } = useRemoteNotifications();
   const instanceItems = useAppStore((s) => s.instances.items);
   const { t } = useTranslation();

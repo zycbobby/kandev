@@ -25,8 +25,8 @@ vi.mock("@/hooks/domains/remote-notifications/use-remote-notifications", () => (
   useRemoteNotifications: () => mocks.controller,
 }));
 
-vi.mock("@/hooks/domains/features/use-feature", () => ({
-  useFeature: (name: string) => name === "multiInstance" && mocks.featureOn,
+vi.mock("@/hooks/domains/features/use-local-feature-flag", () => ({
+  useLocalFeatureFlag: (name: string) => name === "multiInstance" && mocks.featureOn,
 }));
 
 vi.mock("@/components/state-provider", () => ({

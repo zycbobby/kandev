@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect } from "react";
 import { useAppStore, useAppStoreApi } from "@/components/state-provider";
-import { useFeature } from "@/hooks/domains/features/use-feature";
+import { useLocalFeatureFlag } from "@/hooks/domains/features/use-local-feature-flag";
 import {
   dismissRemoteNotification,
   listRemoteNotifications,
@@ -35,7 +35,7 @@ export type RemoteNotificationsController = {
  * frames arrive through the `remote_notification` WS handler, not this hook.
  */
 export function useRemoteNotifications(): RemoteNotificationsController {
-  const enabled = useFeature("multiInstance");
+  const enabled = useLocalFeatureFlag("multiInstance");
   const entries = useAppStore((s) => s.remoteNotifications.entries);
   const status = useAppStore((s) => s.remoteNotifications.status);
   const storeApi = useAppStoreApi();

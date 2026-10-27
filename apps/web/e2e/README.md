@@ -456,11 +456,12 @@ Three mechanisms are worth knowing before touching the spec:
 - **Feature flag.** The local backend runs with
   `KANDEV_FEATURES_MULTI_INSTANCE=true` via `backend.useEnv` (scoped for the
   whole file so every later restart keeps it, released by the flag-off test
-  or `afterAll`). The remote backend runs with the flag on as well: the SPA
-  hydrates its feature flags from the ACTIVE instance's app-state, so a
-  remote with the flag off would hide the instance picker while being
-  viewed — the only switch-back affordance. The remote's own registry stays
-  empty, so its proxy and relay managers are inert.
+  or `afterAll`). The remote backend runs with the flag OFF — the default
+  state of a fresh remote install, which needs no flag to be a valid
+  federation target. The SPA hydrates its feature flags from the ACTIVE
+  instance's app-state, so the spec's flows pin the regression that the
+  federation UI (instance picker, notifications module) follows the LOCAL
+  backend's flag (`useLocalFeatureFlag`) instead of the hydrated one.
 - **Health poller cadence.** Instance health shares the 90s `healthpoll`
   cadence, so a just-registered (or just-killed) remote is otherwise first
   probed on the next pass. The spec restarts the local backend at those two
