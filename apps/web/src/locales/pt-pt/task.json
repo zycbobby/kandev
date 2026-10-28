@@ -1815,6 +1815,7 @@
   "statusInReview": "Em revisão",
   "statusTodo": "Por fazer",
   "statusUpdate": "Atualização de estado",
+  "statusBackgroundRunning": "A correr em segundo plano",
   "statusWorking": "A trabalhar",
   "stepCount_one": "{{count}} passo",
   "stepCount_other": "{{count}} passos",

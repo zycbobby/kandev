@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { sessionId as toSessionId, taskId as toTaskId, type Message } from "@/lib/types/http";
 import { TurnGroupMessage } from "./turn-group-message";
 
+const LOADING_INDICATOR = 'aria-label="Loading"';
+
 function toolExecute(
   id: string,
   output: Record<string, unknown> = {},
@@ -89,6 +91,49 @@ function renderCodexSubagentGroup(isTurnActive: boolean): string {
   );
 }
 
+function claudeSubagent(payloadStatus: string): Message {
+  return {
+    id: "claude-subagent",
+    session_id: toSessionId("s1"),
+    task_id: toTaskId("t1"),
+    author_type: "agent",
+    content: "background probe",
+    type: "tool_call",
+    turn_id: "turn-claude",
+    created_at: "2026-07-23T12:00:00Z",
+    metadata: {
+      status: "complete",
+      tool_call_id: "claude-subagent-tool",
+      normalized: {
+        kind: "subagent_task",
+        subagent_task: {
+          description: "background probe",
+          subagent_type: "subagent",
+          status: payloadStatus,
+          child_session_id: "child-session",
+        },
+      },
+    },
+  };
+}
+
+function renderClaudeSubagentGroup(payloadStatus: string, isTurnActive: boolean): string {
+  return renderToStaticMarkup(
+    <TurnGroupMessage
+      group={{
+        type: "turn_group",
+        id: "turn-group-claude",
+        turnId: "turn-claude",
+        messages: [claudeSubagent(payloadStatus)],
+      }}
+      sessionId="s1"
+      permissionsByToolCallId={new Map()}
+      isLastGroup
+      isTurnActive={isTurnActive}
+    />,
+  );
+}
+
 describe("TurnGroupMessage repeated tool compaction", () => {
   it("summarizes the middle of a long run of identical terminal commands", () => {
     const messages = Array.from({ length: 6 }, (_, i) => toolExecute(`tool-${i + 1}`));
@@ -149,7 +194,7 @@ describe("TurnGroupMessage repeated tool compaction", () => {
       />,
     );
 
-    expect(html).not.toContain('aria-label="Loading"');
+    expect(html).not.toContain(LOADING_INDICATOR);
   });
 });
 
@@ -158,10 +203,24 @@ describe("TurnGroupMessage Codex subagent activity", () => {
     const activeHtml = renderCodexSubagentGroup(true);
     const settledHtml = renderCodexSubagentGroup(false);
 
-    expect(activeHtml).toContain('aria-label="Loading"');
+    expect(activeHtml).toContain(LOADING_INDICATOR);
     expect(activeHtml).toContain("Working...");
-    expect(settledHtml).not.toContain('aria-label="Loading"');
+    expect(settledHtml).not.toContain(LOADING_INDICATOR);
     expect(settledHtml).not.toContain("Working...");
+  });
+});
+
+describe("TurnGroupMessage background subagent activity", () => {
+  it("keeps the group running indicator while a background subagent runs after the turn ends", () => {
+    const html = renderClaudeSubagentGroup("async_launched", false);
+
+    expect(html).toContain(LOADING_INDICATOR);
+  });
+
+  it("does not show a running indicator for a group of settled subagents", () => {
+    const html = renderClaudeSubagentGroup("completed", false);
+
+    expect(html).not.toContain(LOADING_INDICATOR);
   });
 });
 

@@ -1870,6 +1870,7 @@
   "statusInReview": "리뷰 중",
   "statusTodo": "할 일",
   "statusUpdate": "상태 업데이트",
+  "statusBackgroundRunning": "백그라운드 실행 중",
   "statusWorking": "작업 중",
   "stepCount_one": "단계 {{count}}개",
   "stepCount_other": "단계 {{count}}개",
