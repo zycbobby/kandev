@@ -55,3 +55,13 @@ describe("switchInstance", () => {
     expect(assign).toHaveBeenCalledWith("/t/task-7");
   });
 });
+
+// ---- remote deep-link query joining (cross-instance inbox) ----
+
+it("appends the instance pin with & when the target path already carries a query", async () => {
+  select.mockResolvedValue({ href: "/" });
+
+  await switchInstance("inst-1", "/t/task-7?sessionId=s1");
+
+  expect(assign).toHaveBeenCalledWith("/t/task-7?sessionId=s1&kandev_instance=inst-1");
+});

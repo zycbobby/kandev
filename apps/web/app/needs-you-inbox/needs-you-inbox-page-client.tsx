@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { TabsContent } from "@kandev/ui/tabs";
 import { PageShell } from "@/components/page-shell";
@@ -15,7 +15,6 @@ import {
   selectNeedsYouInboxLastAppliedOk,
   selectNeedsYouInboxRevision,
   selectNeedsYouInboxStatus,
-  selectRemoteInboxInstances,
 } from "@/lib/state/slices/needs-you-inbox/selectors";
 import {
   selectFailedInboxCount,
@@ -132,7 +131,14 @@ function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
   const failedCountKnown = useAppStore(selectFailedInboxCountIsKnown);
   const lastAppliedOk = useAppStore(selectNeedsYouInboxLastAppliedOk);
   const hasActiveWorkspace = useAppStore((s) => s.workspaces.activeId !== null);
-  const remoteInstances = useAppStore(selectRemoteInboxInstances);
+  // Subscribe to the stable map and derive the array with useMemo: a
+  // selector returning Object.values() allocates a fresh array per snapshot
+  // and useSyncExternalStore re-renders forever on the unstable reference.
+  const remoteByInstanceId = useAppStore((s) => s.needsYouInbox.remoteByInstanceId);
+  const remoteInstances = useMemo(
+    () => Object.values(remoteByInstanceId ?? {}),
+    [remoteByInstanceId],
+  );
 
   const viewMode = resolveViewMode(
     status,

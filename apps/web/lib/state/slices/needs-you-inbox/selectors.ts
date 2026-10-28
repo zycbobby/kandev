@@ -64,7 +64,12 @@ export function selectNeedsYouInboxNextSnoozeExpiry(state: AppState): string | n
 // ---- composed cross-instance badge (cross-instance-inbox design) ----
 
 /** Every remote instance state the controller has created, for section
- * rendering. Order follows insertion; sections key by instanceId. */
+ * rendering. Order follows insertion; sections key by instanceId.
+ *
+ * NOT for `useAppStore` subscriptions: Object.values() allocates a fresh
+ * array per call, and useSyncExternalStore re-renders forever on the unstable
+ * reference. Subscribe to `state.needsYouInbox.remoteByInstanceId` (stable per
+ * store state) and derive the array with useMemo instead. */
 export function selectRemoteInboxInstances(state: AppState): RemoteInboxInstanceState[] {
   return Object.values(state.needsYouInbox.remoteByInstanceId ?? {});
 }

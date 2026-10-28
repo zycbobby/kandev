@@ -20,5 +20,9 @@ export async function switchInstance(instanceId: string, targetPath?: string): P
 }
 
 function instanceHref(path: string, instanceId: string): string {
-  return `${path}?kandev_instance=${encodeURIComponent(instanceId)}`;
+  // A deep link may already carry its own query (a task route with a session
+  // pin, for example); join with the correct separator so the instance pin
+  // stays a distinct parameter.
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}kandev_instance=${encodeURIComponent(instanceId)}`;
 }
