@@ -34,6 +34,10 @@ export type RemoteBackendContext = {
   pid: () => number | undefined;
   /** Kill the remote process group; persisted state and tmpDir survive. */
   kill: () => Promise<void>;
+  /** Respawn the same stamped binary and env on the same port band; persisted
+   * state (database, tmpDir) survives, so a killed-and-restarted remote keeps
+   * its seeded graph for degradation-recovery flows. */
+  restart: () => Promise<void>;
   /** Kill (if still running) and remove the disposable tmpDir. */
   dispose: () => Promise<void>;
 };
@@ -54,6 +58,10 @@ export type BootRemoteBackendOptions = {
   /** The local fixture's port-offset/slot inputs, derived via remoteBackendPortInputs. */
   portOffset: number;
   parallelSlot: number;
+  /** Extra env layered over the fixed remote environment, scoped per boot
+   * (for example KANDEV_FEATURES_NEEDS_YOU_INBOX=false to pin the remote's
+   * inbox-disabled degradation reason). */
+  envOverrides?: Record<string, string>;
 };
 
 /**
@@ -165,7 +173,7 @@ function stampVersionedBinary(
 export async function bootRemoteBackend(
   options: BootRemoteBackendOptions,
 ): Promise<RemoteBackendContext> {
-  const { localBaseUrl, portOffset, parallelSlot } = options;
+  const { localBaseUrl, portOffset, parallelSlot, envOverrides } = options;
   const ports = remoteBackendPorts(portOffset, parallelSlot);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `kandev-e2e-remote-${parallelSlot}-`));
   const homeDir = path.join(tmpDir, ".kandev");
@@ -219,23 +227,24 @@ export async function bootRemoteBackend(
     GIT_AUTHOR_EMAIL: "e2e-remote@test.local",
     GIT_COMMITTER_NAME: "E2E Remote",
     GIT_COMMITTER_EMAIL: "e2e-remote@test.local",
+    ...(envOverrides ?? {}),
   } as Record<string, string>;
 
   const debug = !!process.env.E2E_DEBUG;
   const baseUrl = `http://localhost:${ports.backendPort}`;
+
+  const version = await readLocalBackendVersion(localBaseUrl);
+  const binaryPath = path.join(tmpDir, "kandev-remote");
+  stampVersionedBinary(KANDEV_BIN, binaryPath, version);
+  // The agent registry resolves the mock-agent command to the directory of
+  // the RUNNING binary (configureMockAgent uses filepath.Dir(os.Executable())),
+  // not PATH, so the remote copy needs its own mock-agent beside it.
+  fs.copyFileSync(path.join(BACKEND_DIR, "bin", "mock-agent"), path.join(tmpDir, "mock-agent"));
+
   let proc: ChildProcess | undefined;
   let disposed = false;
-
-  try {
-    const version = await readLocalBackendVersion(localBaseUrl);
-    const binaryPath = path.join(tmpDir, "kandev-remote");
-    stampVersionedBinary(KANDEV_BIN, binaryPath, version);
-    // The agent registry resolves the mock-agent command to the directory of
-    // the RUNNING binary (configureMockAgent uses filepath.Dir(os.Executable())),
-    // not PATH, so the remote copy needs its own mock-agent beside it.
-    fs.copyFileSync(path.join(BACKEND_DIR, "bin", "mock-agent"), path.join(tmpDir, "mock-agent"));
-
-    proc = spawn(binaryPath, ["__backend"], {
+  const spawnRemote = () => {
+    const child = spawn(binaryPath, ["__backend"], {
       env: backendEnv,
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
@@ -244,18 +253,22 @@ export async function bootRemoteBackend(
     const closeLogFile = () => {
       if (!logFile.writableEnded) logFile.end();
     };
-    proc.once("close", closeLogFile);
-    proc.once("error", closeLogFile);
-    proc.stderr?.on("data", (chunk: Buffer) => {
+    child.once("close", closeLogFile);
+    child.once("error", closeLogFile);
+    child.stderr?.on("data", (chunk: Buffer) => {
       logFile.write(chunk);
       if (debug) process.stderr.write(`[remote-backend:${ports.backendPort}] ${chunk.toString()}`);
     });
-    proc.stdout?.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       logFile.write(chunk);
       if (debug)
         process.stderr.write(`[remote-backend-log:${ports.backendPort}] ${chunk.toString()}`);
     });
+    return child;
+  };
 
+  try {
+    proc = spawnRemote();
     await waitForHealth(`${baseUrl}/ready`, HEALTH_TIMEOUT_MS, proc);
   } catch (error) {
     if (proc && proc.exitCode === null && proc.signalCode === null) {
@@ -265,12 +278,16 @@ export async function bootRemoteBackend(
     throw error;
   }
 
-  const runningProcess = proc;
   const kill = async () => {
-    if (!runningProcess) return;
-    if (runningProcess.exitCode === null && runningProcess.signalCode === null) {
-      await killProcessGroup(runningProcess);
+    if (proc && proc.exitCode === null && proc.signalCode === null) {
+      await killProcessGroup(proc);
     }
+  };
+  const restart = async () => {
+    if (disposed) throw new Error("remote backend fixture: restart after dispose");
+    await kill().catch(() => undefined);
+    proc = spawnRemote();
+    await waitForHealth(`${baseUrl}/ready`, HEALTH_TIMEOUT_MS, proc);
   };
   const dispose = async () => {
     if (disposed) return;
@@ -283,8 +300,9 @@ export async function bootRemoteBackend(
     port: ports.backendPort,
     baseUrl,
     tmpDir,
-    pid: () => runningProcess?.pid,
+    pid: () => proc?.pid,
     kill,
+    restart,
     dispose,
   };
 }
