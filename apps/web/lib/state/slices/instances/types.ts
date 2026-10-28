@@ -37,6 +37,8 @@ export type InstancesSliceState = {
 export type InstancesSliceActions = {
   beginInstancesLoad: () => void;
   setInstancesLoaded: (items: RemoteInstance[]) => void;
+  upsertInstance: (item: RemoteInstance) => void;
+  removeInstance: (id: string) => void;
   setInstancesLoadError: () => void;
   setInstanceHealth: (id: string, health: InstanceHealth) => void;
 };

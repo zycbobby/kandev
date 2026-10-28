@@ -73,6 +73,7 @@ export function useRemoteInboxController() {
   // instance, dispose the removed ones, and read on mount / registry change.
   // Disposal on effect cleanup also aborts in-flight reads whose scope ended.
   useEffect(() => {
+    storeApi.getState().retainRemoteInboxInstances(enabled ? instanceIds : []);
     if (!enabled) {
       disposeRemoteCoordinators(coordinatorsRef.current, generationsRef.current);
       return;

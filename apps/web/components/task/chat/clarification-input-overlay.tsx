@@ -58,6 +58,7 @@ type ClarificationInputOverlayProps = {
   onLateAnswer?: (snapshot: LateClarificationSnapshot) => Promise<MessageAdmissionOutcome>;
   /** Restores a late-message draft after its inline form was removed. */
   initialAnswers?: readonly ClarificationAnswer[];
+  onAnswersChange?: (answers: ClarificationAnswer[]) => void;
   /** Shares late-message admission state across transcript and active hosts. */
   lateAnswerState?: LateClarificationState;
   // Additive: replaces the submit URL wholesale (remote Needs-you Inbox rows
@@ -651,6 +652,7 @@ export function ClarificationInputOverlay({
   collapseContentId,
   lateAnswerState,
   respondTarget,
+  onAnswersChange,
 }: ClarificationInputOverlayProps) {
   const { t } = useTranslation();
   const lateMode = mode === "late";
@@ -682,6 +684,7 @@ export function ClarificationInputOverlay({
     ? (lateAnswerState?.snapshot?.answers ?? initialAnswers)
     : initialAnswers;
   const initialAnswersKey = JSON.stringify(restoredAnswers ?? []);
+  const restoringDraft = useRef(Boolean(initialAnswers?.length));
   useEffect(() => {
     if (!restoredAnswers || restoredAnswers.length === 0) return;
     for (const answer of restoredAnswers) {
@@ -695,6 +698,12 @@ export function ClarificationInputOverlay({
       return next;
     });
   }, [group.recordAnswer, initialAnswersKey, restoredAnswers]);
+  useEffect(() => {
+    const answers = Object.values(group.answers);
+    if (restoringDraft.current && answers.length === 0) return;
+    restoringDraft.current = false;
+    onAnswersChange?.(answers);
+  }, [group.answers, onAnswersChange]);
   // Clamp the active index to the current bundle size so late-arriving
   // messages or shrunk bundles never put us out of range.
   const total = sortedMessages.length;

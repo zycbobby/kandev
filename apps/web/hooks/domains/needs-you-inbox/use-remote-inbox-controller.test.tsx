@@ -182,6 +182,28 @@ describe("useRemoteInboxController — gating", () => {
     });
     expect(listRemoteClarificationInboxMock).not.toHaveBeenCalled();
   });
+
+  it("removes disabled or deleted instances and ignores their late responses", async () => {
+    const slowRead = deferred<RemoteInboxPage>();
+    listRemoteClarificationInboxMock.mockImplementation((id: string) =>
+      id === "i1" ? slowRead.promise : Promise.resolve(remotePage({ instance_id: id, count: 1 })),
+    );
+    const { result } = renderController();
+    await waitFor(() =>
+      expect(result.current.getState().needsYouInbox.remoteByInstanceId.i2?.status).toBe("ready"),
+    );
+    act(() => loadInstances(result.current, [{ id: "i1", enabled: false }]));
+    await waitFor(() =>
+      expect(Object.keys(result.current.getState().needsYouInbox.remoteByInstanceId)).toHaveLength(
+        0,
+      ),
+    );
+    await act(async () => {
+      slowRead.resolve(remotePage({ count: 3 }));
+      await slowRead.promise;
+    });
+    expect(Object.keys(result.current.getState().needsYouInbox.remoteByInstanceId)).toHaveLength(0);
+  });
 });
 
 describe("useRemoteInboxController — trigger set", () => {

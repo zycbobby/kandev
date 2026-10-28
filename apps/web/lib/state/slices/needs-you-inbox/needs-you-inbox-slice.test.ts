@@ -332,6 +332,21 @@ describe("needs-you-inbox slice — remote instance pages", () => {
     expect(remote.remoteRetryTickByInstanceId.i1).toBe(1);
     expect(remote.remoteRetryTickByInstanceId.i2).toBeUndefined();
   });
+
+  it("keeps answer drafts through degradation and isolates identical pending ids", () => {
+    const store = newStore();
+    const answer = { question_id: "q1", selected_options: ["postgres"] };
+    store.getState().setRemoteInboxDraft("i1", "p1", [answer]);
+    store.getState().setRemoteInboxDraft("i2", "p1", [{ ...answer, selected_options: ["mysql"] }]);
+    const generation = store.getState().beginRemoteInboxRead("i1");
+    store.getState().setRemoteInboxDegraded("i1", generation, "unreachable");
+    expect(store.getState().needsYouInbox.remoteDraftsByInstanceId.i1.p1).toEqual([answer]);
+    store.getState().setRemoteInboxDraft("i1", "p1", []);
+    expect(store.getState().needsYouInbox.remoteDraftsByInstanceId.i1.p1).toBeUndefined();
+    expect(
+      store.getState().needsYouInbox.remoteDraftsByInstanceId.i2.p1[0].selected_options,
+    ).toEqual(["mysql"]);
+  });
 });
 
 const DEGRADED_INSTANCE = "i-degraded";
@@ -403,6 +418,17 @@ describe("needs-you-inbox composed badge selectors", () => {
     const degradedGeneration = fresh.getState().beginRemoteInboxRead("i-x");
     fresh.getState().setRemoteInboxDegraded("i-x", degradedGeneration, "unreachable");
     expect(selectComposedNeedsYouHasMore(composedView(fresh))).toBe(false);
+  });
+
+  it("keeps a landed page in the badge during a refresh until replacement lands", () => {
+    const store = newStore();
+    readyRemote(store, "i-ready", 3, true);
+    const generation = store.getState().beginRemoteInboxRead("i-ready");
+    expect(selectComposedNeedsYouCount(composedView(store))).toBe(3);
+    expect(selectComposedNeedsYouHasMore(composedView(store))).toBe(true);
+    store.getState().setRemoteInboxDegraded("i-ready", generation, "unreachable");
+    expect(selectComposedNeedsYouCount(composedView(store))).toBe(0);
+    expect(selectComposedNeedsYouHasMore(composedView(store))).toBe(false);
   });
 
   it("enumerates remote instance states for section rendering", () => {

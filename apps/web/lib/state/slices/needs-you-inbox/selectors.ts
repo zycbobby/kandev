@@ -78,7 +78,7 @@ function selectLandedRemoteInstances(state: AppState): RemoteInboxInstanceState[
   // count-known semantics (failed-inbox precedent): only an instance whose
   // page actually landed contributes rows, so the badge never reports rows
   // the composed view does not list.
-  return selectRemoteInboxInstances(state).filter((instance) => instance.status === "ready");
+  return selectRemoteInboxInstances(state).filter((instance) => instance.lastAppliedOk);
 }
 
 /** The sidebar badge count for the active workspace plus every landed remote

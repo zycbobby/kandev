@@ -8,7 +8,7 @@ import { ClarificationInputOverlay } from "./clarification-input-overlay";
 import { useComposerDisclosureContext } from "./composer-disclosure";
 import { ResizeHandle } from "./resize-handle";
 import { useResizableClarificationOverlay } from "@/hooks/use-resizable-clarification-overlay";
-import type { ClarificationRequestMetadata, Message } from "@/lib/types/http";
+import type { ClarificationAnswer, ClarificationRequestMetadata, Message } from "@/lib/types/http";
 import type { ClarificationOutcome } from "@/hooks/domains/session/use-clarification-group";
 import type {
   LateClarificationSnapshot,
@@ -42,6 +42,8 @@ type ClarificationPanelSectionProps = {
   // answer through the local backend's instance forward route). Hosts that
   // omit it keep today's URL and behavior byte-for-byte.
   respondTarget?: (pendingId: string) => string;
+  initialAnswers?: readonly ClarificationAnswer[];
+  onAnswersChange?: (answers: ClarificationAnswer[]) => void;
 };
 function pendingIdFromMessages(messages: readonly Message[] | null | undefined): string | null {
   const first = messages?.[0];
@@ -82,6 +84,8 @@ export function ClarificationPanelSection({
   onLateAnswer,
   lateAnswerState,
   respondTarget,
+  initialAnswers,
+  onAnswersChange,
 }: ClarificationPanelSectionProps) {
   const { t } = useTranslation();
   const disclosure = useComposerDisclosureContext();
@@ -129,6 +133,8 @@ export function ClarificationPanelSection({
       questionCount={questionCount}
       resizeHandleProps={resizeHandleProps}
       respondTarget={respondTarget}
+      initialAnswers={initialAnswers}
+      onAnswersChange={onAnswersChange}
       shortcutScopeRef={shortcutScopeRef}
     />
   );
@@ -153,8 +159,28 @@ type ClarificationPanelContentProps = {
   questionCount: number;
   resizeHandleProps: Parameters<typeof ResizeHandle>[0];
   respondTarget?: (pendingId: string) => string;
+  initialAnswers?: readonly ClarificationAnswer[];
+  onAnswersChange?: (answers: ClarificationAnswer[]) => void;
   shortcutScopeRef: RefObject<HTMLElement | null>;
 };
+
+function CompactPanelTitle({ questionCount }: { questionCount: number }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+      <IconMessageQuestion className="h-4 w-4 flex-shrink-0 text-blue-500" />
+      <span className="truncate">{t("chat:clarificationNeeded")}</span>
+      {questionCount > 0 && (
+        <span
+          data-testid="clarification-question-count"
+          className="truncate text-xs font-normal text-muted-foreground"
+        >
+          {t("task:questionCount", { count: questionCount })}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function ClarificationPanelContent({
   actionLabel,
@@ -175,9 +201,10 @@ function ClarificationPanelContent({
   questionCount,
   resizeHandleProps,
   respondTarget,
+  initialAnswers,
+  onAnswersChange,
   shortcutScopeRef,
 }: ClarificationPanelContentProps) {
-  const { t } = useTranslation();
   const compact = collapsed || questionCount === 0;
 
   return (
@@ -202,18 +229,7 @@ function ClarificationPanelContent({
       >
         {compact && (
           <div className="flex h-11 flex-shrink-0 items-center justify-between gap-2 pl-4">
-            <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-              <IconMessageQuestion className="h-4 w-4 flex-shrink-0 text-blue-500" />
-              <span className="truncate">{t("chat:clarificationNeeded")}</span>
-              {questionCount > 0 && (
-                <span
-                  data-testid="clarification-question-count"
-                  className="truncate text-xs font-normal text-muted-foreground"
-                >
-                  {t("task:questionCount", { count: questionCount })}
-                </span>
-              )}
-            </div>
+            <CompactPanelTitle questionCount={questionCount} />
             <Button
               type="button"
               variant="ghost"
@@ -241,6 +257,8 @@ function ClarificationPanelContent({
         >
           <ClarificationInputOverlay
             messages={messages}
+            initialAnswers={initialAnswers}
+            onAnswersChange={onAnswersChange}
             onResolved={onResolved}
             onOutcome={onOutcome}
             onLateAnswer={onLateAnswer}

@@ -51,6 +51,17 @@ export const createInstancesSlice = (set: ImmerSet): InstancesSlice => ({
       draft.instances.items = [localInstanceItem, ...items.map(toListItem)];
       draft.instances.status = "ready";
     }),
+  upsertInstance: (item) =>
+    set((draft) => {
+      const index = draft.instances.items.findIndex((entry) => entry.id === item.id);
+      if (index < 0) draft.instances.items.push(toListItem(item));
+      else draft.instances.items[index] = toListItem(item);
+    }),
+  removeInstance: (id) =>
+    set((draft) => {
+      draft.instances.items = draft.instances.items.filter((entry) => entry.id !== id);
+      delete draft.instances.health[id];
+    }),
   setInstancesLoadError: () =>
     set((draft) => {
       // Keep whatever list was last rendered; only the status regresses so

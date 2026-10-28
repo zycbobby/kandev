@@ -15,6 +15,7 @@ export const defaultNeedsYouInboxState: NeedsYouInboxSliceState = {
     refreshTick: 0,
     manualRetryTick: 0,
     remoteByInstanceId: {},
+    remoteDraftsByInstanceId: {},
     generationByInstanceId: {},
     remoteRefreshTick: 0,
     remoteRefreshTickByInstanceId: {},
@@ -60,6 +61,32 @@ type ImmerSet = Parameters<
  */
 function createRemoteInboxActions(set: ImmerSet) {
   return {
+    retainRemoteInboxInstances: (instanceIds: string[]) =>
+      set((draft) => {
+        const remote = draft.needsYouInbox;
+        const wanted = new Set(instanceIds);
+        for (const instanceId of Object.keys(remote.remoteByInstanceId)) {
+          if (wanted.has(instanceId)) continue;
+          delete remote.remoteByInstanceId[instanceId];
+          delete remote.remoteDraftsByInstanceId[instanceId];
+          remote.generationByInstanceId[instanceId] =
+            (remote.generationByInstanceId[instanceId] ?? 0) + 1;
+        }
+      }),
+    setRemoteInboxDraft: (
+      instanceId: string,
+      pendingId: string,
+      answers: Parameters<NeedsYouInboxSlice["setRemoteInboxDraft"]>[2],
+    ) =>
+      set((draft) => {
+        const drafts = draft.needsYouInbox.remoteDraftsByInstanceId;
+        if (!answers.length) {
+          if (drafts[instanceId]) delete drafts[instanceId][pendingId];
+          return;
+        }
+        drafts[instanceId] ??= {};
+        drafts[instanceId][pendingId] = answers;
+      }),
     beginRemoteInboxRead: (instanceId: string) => {
       let generation = 0;
       set((draft) => {

@@ -6,6 +6,7 @@ import type { TFunction } from "i18next";
 import { Button } from "@kandev/ui/button";
 import { useFeature } from "@/hooks/domains/features/use-feature";
 import { useToast } from "@/components/toast-provider";
+import { useAppStoreApi } from "@/components/state-provider";
 import { settingsActionClassName } from "@/components/settings/settings-control";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPageTemplate } from "@/components/settings/settings-page-template";
@@ -60,6 +61,7 @@ type InstancesRegistry = {
 /** Loads the registry plus each instance's last health report. */
 function useInstancesRegistry(t: TFunction): InstancesRegistry {
   const { toast } = useToast();
+  const storeApi = useAppStoreApi();
   const [items, setItems] = useState<RemoteInstance[]>([]);
   const [healthById, setHealthById] = useState<Record<string, InstanceHealth>>({});
   const [loading, setLoading] = useState(true);
@@ -79,6 +81,7 @@ function useInstancesRegistry(t: TFunction): InstancesRegistry {
     try {
       const loaded = await listInstances(NO_STORE);
       setItems(loaded);
+      storeApi.getState().setInstancesLoaded(loaded);
       setHealthById({});
       await Promise.all(loaded.map((item) => refreshHealth(item.id)));
     } catch (err) {
@@ -86,31 +89,40 @@ function useInstancesRegistry(t: TFunction): InstancesRegistry {
     } finally {
       setLoading(false);
     }
-  }, [refreshHealth, t, toast]);
+  }, [refreshHealth, storeApi, t, toast]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const applyItem = useCallback((item: RemoteInstance) => {
-    setItems((prev) => {
-      const index = prev.findIndex((candidate) => candidate.id === item.id);
-      if (index === -1) return [...prev, item];
-      const next = [...prev];
-      next[index] = item;
-      return next;
-    });
-  }, []);
+  const applyItem = useCallback(
+    (item: RemoteInstance) => {
+      storeApi.getState().upsertInstance(item);
+      if (item.enabled) storeApi.getState().bumpRemoteInboxRefreshTick(item.id);
+      setItems((prev) => {
+        const index = prev.findIndex((candidate) => candidate.id === item.id);
+        if (index === -1) return [...prev, item];
+        const next = [...prev];
+        next[index] = item;
+        return next;
+      });
+    },
+    [storeApi],
+  );
 
-  const removeItem = useCallback((id: string) => {
-    setItems((prev) => prev.filter((candidate) => candidate.id !== id));
-    setHealthById((prev) => {
-      if (!(id in prev)) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  }, []);
+  const removeItem = useCallback(
+    (id: string) => {
+      storeApi.getState().removeInstance(id);
+      setItems((prev) => prev.filter((candidate) => candidate.id !== id));
+      setHealthById((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    },
+    [storeApi],
+  );
 
   return { items, healthById, loading, load, applyItem, removeItem, refreshHealth };
 }

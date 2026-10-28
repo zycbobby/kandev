@@ -282,7 +282,14 @@ test.describe("remote needs-you inbox", () => {
       await expect(overlay.getByTestId("clarification-submit-error")).toBeVisible();
       await expect(option).toHaveAttribute("data-selected", "true");
       await expect(overlay.getByTestId("clarification-retry")).toBeEnabled();
+      await testPage.evaluate(() => window.dispatchEvent(new Event("online")));
+      await expect(section.getByTestId("remote-inbox-degraded")).toBeVisible({ timeout: 30_000 });
+      await expect(section.getByTestId("clarification-overlay")).toHaveCount(0);
       await remote.restart();
+      await section.getByTestId("remote-inbox-retry").click();
+      await expect(retryRow).toBeVisible({ timeout: 30_000 });
+      await retryRow.getByTestId("needs-you-inbox-row-toggle").click();
+      await expect(option).toHaveAttribute("data-selected", "true");
 
       const raceTask = await seedRemoteClarification(seed, "Remote competing answer");
       await testPage.goto("/needs-you-inbox");

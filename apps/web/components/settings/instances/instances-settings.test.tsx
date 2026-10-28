@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSaveProvider } from "@/components/settings/settings-save-provider";
+import { StateProvider, useAppStore } from "@/components/state-provider";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
@@ -42,6 +43,7 @@ const EDIT_OK_BUTTON = `Edit instance ${OK_NAME}`;
 const REMOVE_OK_BUTTON = `Remove instance ${OK_NAME}`;
 const CREATED_BASE_URL = "http://192.168.1.9:43110";
 const CREATED_NAME = "Rack server";
+const RENAMED_NAME = "Studio workstation 2";
 
 function healthState(id: string): string | null {
   return screen.getByTestId(`instance-health-${id}`).getAttribute("data-state");
@@ -83,11 +85,19 @@ const HEALTH_BY_ID: Record<string, unknown> = {
   "inst-new": { reachable: false, supported: false, lastCheckedAt: "0001-01-01T00:00:00Z" },
 };
 
+function RegistryObserver() {
+  const items = useAppStore((state) => state.instances.items);
+  return <output data-testid="shared-registry">{JSON.stringify(items)}</output>;
+}
+
 function renderSettings() {
   return render(
-    <SettingsSaveProvider>
-      <InstancesSettings />
-    </SettingsSaveProvider>,
+    <StateProvider>
+      <SettingsSaveProvider>
+        <InstancesSettings />
+        <RegistryObserver />
+      </SettingsSaveProvider>
+    </StateProvider>,
   );
 }
 
@@ -119,7 +129,7 @@ describe("InstancesSettings feature gate", () => {
     multiInstanceFeature = false;
     const { container } = renderSettings();
 
-    expect(container.textContent).toBe("");
+    expect(container.querySelector("[data-testid='instance-row-inst-ok']")).toBeNull();
     await waitFor(() => expect(mocks.list).not.toHaveBeenCalled());
   });
 });
@@ -157,14 +167,14 @@ describe("InstancesSettings health banners", () => {
 
 describe("InstancesSettings save flow", () => {
   it("stages an edit and saves it through the shared save contributor", async () => {
-    mocks.update.mockResolvedValue({ ...OK_ROW, name: "Studio workstation 2" });
+    mocks.update.mockResolvedValue({ ...OK_ROW, name: RENAMED_NAME });
     renderSettings();
 
     fireEvent.click(await screen.findByRole("button", { name: EDIT_OK_BUTTON }));
 
     const nameInput = screen.getByLabelText(NAME_LABEL);
     expect((nameInput as HTMLInputElement).value).toBe(OK_NAME);
-    fireEvent.change(nameInput, { target: { value: "Studio workstation 2" } });
+    fireEvent.change(nameInput, { target: { value: RENAMED_NAME } });
 
     // The draft is staged: the shared floating bar owns the save action.
     expect(mocks.update).not.toHaveBeenCalled();
@@ -180,7 +190,7 @@ describe("InstancesSettings save flow", () => {
     expect(mocks.update).toHaveBeenCalledWith(
       "inst-ok",
       {
-        name: "Studio workstation 2",
+        name: RENAMED_NAME,
         base_url: OK_ROW.base_url,
         credential_secret_id: "",
         enabled: true,
@@ -189,6 +199,7 @@ describe("InstancesSettings save flow", () => {
     );
     await waitFor(() => expect(screen.queryByLabelText("Name")).toBeNull());
     await screen.findByText(`${OK_NAME} 2`);
+    expect(screen.getByTestId("shared-registry").textContent).toContain(RENAMED_NAME);
   });
 
   it("discards a staged edit back to the saved baseline", async () => {
@@ -232,6 +243,7 @@ describe("InstancesSettings save flow", () => {
       { cache: "no-store" },
     );
     await screen.findByText(CREATED_NAME);
+    expect(screen.getByTestId("shared-registry").textContent).toContain("inst-created");
     await waitFor(() => expect(screen.queryByLabelText("Name")).toBeNull());
   });
 });
@@ -249,6 +261,7 @@ describe("InstancesSettings removal", () => {
       expect(mocks.remove).toHaveBeenCalledWith("inst-ok", { cache: "no-store" }),
     );
     await waitFor(() => expect(screen.queryByText(OK_NAME)).toBeNull());
+    expect(screen.getByTestId("shared-registry").textContent).not.toContain("inst-ok");
     expect(screen.getByText("Renderer")).toBeTruthy();
   });
 

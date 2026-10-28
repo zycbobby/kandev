@@ -48,7 +48,7 @@ import {
 } from "@/lib/needs-you-inbox/row-presentation";
 import { resolveThreadSessionStatus } from "@/lib/threads/thread-session-status";
 import { linkToTask } from "@/lib/links";
-import type { TaskSessionState } from "@/lib/types/http";
+import type { ClarificationAnswer, TaskSessionState } from "@/lib/types/http";
 import type {
   LateClarificationSnapshot,
   LateClarificationState,
@@ -242,6 +242,8 @@ function RowExpandedPanel({
   onLateAnswer,
   lateAnswerState,
   shortcutScopeRef,
+  initialAnswers,
+  onAnswersChange,
 }: {
   source?: { instanceId: string; instanceName: string };
   bundle: ClarificationInboxBundle;
@@ -249,7 +251,10 @@ function RowExpandedPanel({
   onLateAnswer?: (snapshot: LateClarificationSnapshot) => Promise<MessageAdmissionOutcome>;
   lateAnswerState?: LateClarificationState;
   shortcutScopeRef: React.RefObject<HTMLDivElement | null>;
+  initialAnswers?: readonly ClarificationAnswer[];
+  onAnswersChange?: (answers: ClarificationAnswer[]) => void;
 }) {
+  const initialAnswersRef = useRef(initialAnswers);
   if (source) {
     return (
       <ClarificationPanelSection
@@ -258,6 +263,8 @@ function RowExpandedPanel({
         onResolved={() => {}}
         onOutcome={onOutcome}
         respondTarget={remoteClarificationRespondTarget(source.instanceId)}
+        initialAnswers={initialAnswersRef.current}
+        onAnswersChange={onAnswersChange}
         shortcutScopeRef={shortcutScopeRef}
         maxHeightVh={50}
       />
@@ -275,6 +282,54 @@ function RowExpandedPanel({
       maxHeightVh={50}
     />
   );
+}
+
+/** Picks the dismiss/snooze/open-task targets: remote rows forward through
+ * the instance routes, local rows call the workspace-local sidecar APIs. */
+function rowSidecarActions(
+  source: { instanceId: string; instanceName: string } | undefined,
+  bundle: ClarificationInboxBundle,
+  taskHref: string,
+) {
+  const pendingId = bundle.pending_id;
+  if (!source) {
+    return {
+      dismiss: () => dismissClarificationInboxBundle(pendingId),
+      snooze: (duration: ClarificationInboxSnoozeDuration) =>
+        snoozeClarificationInboxBundle(pendingId, duration),
+      openTask: undefined as (() => void) | undefined,
+    };
+  }
+  return {
+    dismiss: () => dismissRemoteClarificationBundle(source.instanceId, pendingId),
+    snooze: (duration: ClarificationInboxSnoozeDuration) =>
+      snoozeRemoteClarificationBundle(source.instanceId, pendingId, duration),
+    openTask: () => void switchInstance(source.instanceId, taskHref),
+  };
+}
+
+function useRemoteAnswerDraft(
+  instanceId: string | undefined,
+  pendingId: string,
+  notify: (outcome: ClarificationOutcome) => void,
+) {
+  const setDraft = useAppStore((s) => s.setRemoteInboxDraft);
+  const savedDraft = useAppStore((s) =>
+    instanceId ? s.needsYouInbox?.remoteDraftsByInstanceId?.[instanceId]?.[pendingId] : undefined,
+  );
+  const onAnswersChange = useCallback(
+    (answers: ClarificationAnswer[]) => {
+      if (instanceId) setDraft(instanceId, pendingId, answers);
+    },
+    [instanceId, pendingId, setDraft],
+  );
+  const handleOutcome = (outcome: ClarificationOutcome) => {
+    if (instanceId && (outcome.kind === "resolved" || outcome.kind === "no_longer_active")) {
+      setDraft(instanceId, pendingId, []);
+    }
+    notify(outcome);
+  };
+  return { savedDraft, onAnswersChange, handleOutcome };
 }
 
 // eslint-disable-next-line max-lines-per-function -- the row keeps its responsive actions and inline panel together.
@@ -318,16 +373,17 @@ export function NeedsYouInboxRow({
   const { busy: snoozing, run: runSnooze } = useSidecarAction(bundle.pending_id, bumpTick, () =>
     toast.error(t("needsYouInbox:snoozeFailed")),
   );
-  const handleOutcome = useRowOutcomeNotice(primaryText, bumpTick);
-  const dismissAction = source
-    ? () => dismissRemoteClarificationBundle(source.instanceId, bundle.pending_id)
-    : () => dismissClarificationInboxBundle(bundle.pending_id);
-  const snoozeAction = source
-    ? (duration: ClarificationInboxSnoozeDuration) =>
-        snoozeRemoteClarificationBundle(source.instanceId, bundle.pending_id, duration)
-    : (duration: ClarificationInboxSnoozeDuration) =>
-        snoozeClarificationInboxBundle(bundle.pending_id, duration);
-  const openTask = source ? () => void switchInstance(source.instanceId, taskHref) : undefined;
+  const notifyOutcome = useRowOutcomeNotice(primaryText, bumpTick);
+  const { savedDraft, onAnswersChange, handleOutcome } = useRemoteAnswerDraft(
+    source?.instanceId,
+    bundle.pending_id,
+    notifyOutcome,
+  );
+  const {
+    dismiss: dismissAction,
+    snooze: snoozeAction,
+    openTask,
+  } = rowSidecarActions(source, bundle, taskHref);
 
   return (
     <div ref={rowRef} data-testid="needs-you-inbox-row" data-pending-id={bundle.pending_id}>
@@ -399,6 +455,8 @@ export function NeedsYouInboxRow({
           onLateAnswer={onLateAnswer}
           lateAnswerState={lateAnswerState}
           shortcutScopeRef={rowRef}
+          initialAnswers={savedDraft}
+          onAnswersChange={onAnswersChange}
         />
       )}
     </div>

@@ -1,5 +1,6 @@
 import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
 import type { RemoteInboxBundle, RemoteInboxDegradedReason } from "@/lib/types/remote-inbox";
+import type { ClarificationAnswer } from "@/lib/types/http";
 
 export type NeedsYouInboxReadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -65,6 +66,7 @@ export type NeedsYouInboxSliceState = {
     // Remote instance pages (cross-instance-inbox): same per-key generation
     // discipline as the local rows, keyed by instance id.
     remoteByInstanceId: Record<string, RemoteInboxInstanceState>;
+    remoteDraftsByInstanceId: Record<string, Record<string, ClarificationAnswer[]>>;
     generationByInstanceId: Record<string, number>;
     // Global remote refresh trigger (mount, instance-list change, foreground
     // resume) and the per-instance variant a relay notification bumps.
@@ -107,6 +109,13 @@ export type NeedsYouInboxSliceActions = {
 
   /** Bumps and returns the new request generation for one instance read. */
   beginRemoteInboxRead: (instanceId: string) => number;
+  /** Remove pages outside the current enabled registry and fence older reads. */
+  retainRemoteInboxInstances: (instanceIds: string[]) => void;
+  setRemoteInboxDraft: (
+    instanceId: string,
+    pendingId: string,
+    answers: ClarificationAnswer[],
+  ) => void;
   /** Applies a successful instance page if its generation is still current. */
   setRemoteInboxPage: (
     instanceId: string,

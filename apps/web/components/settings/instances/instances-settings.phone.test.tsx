@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { SettingsSaveProvider } from "@/components/settings/settings-save-provider";
+import { StateProvider } from "@/components/state-provider";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
@@ -61,9 +62,11 @@ it("removes an instance through a phone bottom sheet at 390px", async () => {
   mocks.remove.mockResolvedValue({ success: true });
 
   render(
-    <SettingsSaveProvider>
-      <InstancesSettings />
-    </SettingsSaveProvider>,
+    <StateProvider>
+      <SettingsSaveProvider>
+        <InstancesSettings />
+      </SettingsSaveProvider>
+    </StateProvider>,
   );
 
   const trigger = await screen.findByTestId("instance-delete-button");

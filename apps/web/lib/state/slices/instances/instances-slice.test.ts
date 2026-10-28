@@ -58,6 +58,21 @@ describe("instances slice", () => {
     expect(store.getState().instances.health["inst-1"]).toEqual(HEALTH);
   });
 
+  it("applies registry mutations to the shared list", () => {
+    const store = makeStore();
+    store.getState().setInstancesLoaded([registryRow()]);
+    store.getState().upsertInstance(registryRow({ enabled: false, name: "Renamed" }));
+    expect(store.getState().instances.items[1]).toMatchObject({ enabled: false, name: "Renamed" });
+    store.getState().upsertInstance(registryRow({ id: "inst-2" }));
+    expect(store.getState().instances.items.map((item) => item.id)).toEqual([
+      "local",
+      "inst-1",
+      "inst-2",
+    ]);
+    store.getState().removeInstance("inst-1");
+    expect(store.getState().instances.items.map((item) => item.id)).toEqual(["local", "inst-2"]);
+  });
+
   it("keeps the last rendered list when the registry read fails", () => {
     const store = makeStore();
     store.getState().setInstancesLoaded([registryRow()]);
