@@ -53,6 +53,22 @@ func (m *ProxyManager) Server(id string) *proxy.Server {
 	return m.servers[id].server
 }
 
+// Credential returns the per-request credential resolver for direct fan-out
+// dials to inst, the same closure shape the proxy server dials with: no
+// registered secret means headerless dialing, otherwise the stored secret is
+// revealed per call so rotations take effect immediately.
+func (m *ProxyManager) Credential(inst instances.Instance) func() (string, error) {
+	return func() (string, error) {
+		if inst.CredentialSecretID == "" {
+			return "", nil
+		}
+		if m.secrets == nil {
+			return "", instances.ErrInstanceNotFound
+		}
+		return m.secrets.Reveal(m.ctx, inst.CredentialSecretID)
+	}
+}
+
 // Reconcile applies the current registry snapshot synchronously after committed writes.
 func (m *ProxyManager) Reconcile() {
 	m.mu.Lock()

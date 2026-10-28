@@ -86,7 +86,7 @@ func instanceToAPI(item *instances.Instance) instanceAPI {
 // foreign or missing ID is one indistinguishable 404; failures map to 500.
 func instanceWriteResult(c *gin.Context, err error) {
 	if errors.Is(err, instances.ErrInstanceNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{errKey: "instance not found"})
+		c.JSON(http.StatusNotFound, gin.H{errKey: errInstanceNotFoundMessage})
 		return
 	}
 	if err != nil {
@@ -239,7 +239,7 @@ func selectInstanceRoute(svc *instances.Service, proxies *ProxyManager) gin.Hand
 			return
 		}
 		if visibleInstance(c.Request.Context(), svc, instanceCallerUserID(c), id) == nil {
-			c.JSON(http.StatusNotFound, gin.H{errKey: "instance not found"})
+			c.JSON(http.StatusNotFound, gin.H{errKey: errInstanceNotFoundMessage})
 			return
 		}
 		http.SetCookie(c.Writer, &http.Cookie{

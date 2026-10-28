@@ -1912,6 +1912,7 @@ func registerSecondaryRoutes(
 	notificationhandlers.RegisterRoutes(p.router, p.notificationCtrl, p.log)
 	registerRemoteNotificationRoutes(p.router, p.services)
 	registerInstanceRoutes(p)
+	registerInstanceInboxRoutes(p)
 	p.log.Debug("Registered Notification handlers (HTTP)")
 
 	editorhandlers.RegisterRoutes(p.router, p.editorCtrl, p.log)
