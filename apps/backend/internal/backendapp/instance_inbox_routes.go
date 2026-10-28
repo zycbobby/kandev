@@ -115,9 +115,13 @@ func (h *instanceInboxHandlers) pageRoute(hidden bool) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{errKey: "limit must be a positive integer"})
 			return
 		}
-		result := forwarder.ReadInbox(c.Request.Context(), limit)
+		// One fan-out per request: a hidden-page read must not also pay for
+		// the inbox read it discards (design bounds reads at 1+W per request).
+		var result remoteinbox.ReadResult
 		if hidden {
 			result = forwarder.ReadHidden(c.Request.Context(), limit)
+		} else {
+			result = forwarder.ReadInbox(c.Request.Context(), limit)
 		}
 		h.respondPage(c, *inst, result)
 	}

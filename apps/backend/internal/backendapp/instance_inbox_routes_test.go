@@ -19,27 +19,35 @@ import (
 // fakeInstanceInboxForwarder stands in for the remote fan-out client so route
 // tests never touch the network.
 type fakeInstanceInboxForwarder struct {
-	mu            sync.Mutex
-	inboxResult   remoteinbox.ReadResult
-	hiddenResult  remoteinbox.ReadResult
-	respondCalls  []string
-	respondStatus int
-	respondBody   []byte
-	respondErr    error
-	upsertCalls   []string
-	upsertBody    string
-	upsertStatus  int
-	upsertErr     error
-	deleteCalls   []string
-	deleteStatus  int
-	deleteErr     error
+	mu              sync.Mutex
+	inboxResult     remoteinbox.ReadResult
+	hiddenResult    remoteinbox.ReadResult
+	readInboxCalls  int
+	readHiddenCalls int
+	respondCalls    []string
+	respondStatus   int
+	respondBody     []byte
+	respondErr      error
+	upsertCalls     []string
+	upsertBody      string
+	upsertStatus    int
+	upsertErr       error
+	deleteCalls     []string
+	deleteStatus    int
+	deleteErr       error
 }
 
 func (f *fakeInstanceInboxForwarder) ReadInbox(ctx context.Context, limit int) remoteinbox.ReadResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readInboxCalls++
 	return f.inboxResult
 }
 
 func (f *fakeInstanceInboxForwarder) ReadHidden(ctx context.Context, limit int) remoteinbox.ReadResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readHiddenCalls++
 	return f.hiddenResult
 }
 
@@ -70,6 +78,12 @@ func (f *fakeInstanceInboxForwarder) calls() (responds, upserts, deletes []strin
 	defer f.mu.Unlock()
 	return append([]string(nil), f.respondCalls...), append([]string(nil), f.upsertCalls...),
 		append([]string(nil), f.deleteCalls...), f.upsertBody
+}
+
+func (f *fakeInstanceInboxForwarder) readCounts() (inbox, hidden int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readInboxCalls, f.readHiddenCalls
 }
 
 // inboxForwarderFixture wires the routes over per-instance fakes. The
@@ -225,6 +239,29 @@ func TestInstanceInboxPageEnvelope(t *testing.T) {
 			"/api/v1/instances/"+item.ID+"/clarification-inbox?limit=zero", nil))
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
+}
+
+func TestInstanceInboxPageRouteIssuesSingleFanOut(t *testing.T) {
+	router, services, register := inboxForwarderFixture(t)
+	item := createOwnedInstance(t, services, "Remote A", "http://localhost:1", true)
+	fake := &fakeInstanceInboxForwarder{}
+	register(item.ID, fake)
+
+	get := func(path string) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	get("/api/v1/instances/" + item.ID + "/clarification-inbox")
+	inbox, hidden := fake.readCounts()
+	require.Equal(t, 1, inbox)
+	require.Equal(t, 0, hidden)
+
+	get("/api/v1/instances/" + item.ID + "/clarification-inbox/hidden")
+	inbox, hidden = fake.readCounts()
+	require.Equal(t, 1, inbox)
+	require.Equal(t, 1, hidden)
 }
 
 func TestInstanceInboxRespondForwarding(t *testing.T) {
