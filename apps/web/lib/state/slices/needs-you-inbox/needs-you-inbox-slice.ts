@@ -4,7 +4,9 @@ import type {
   NeedsYouInboxSlice,
   NeedsYouInboxSliceState,
   NeedsYouInboxWorkspaceState,
+  RemoteInboxInstanceState,
 } from "./types";
+import type { RemoteInboxDegradedReason } from "@/lib/types/remote-inbox";
 
 export const defaultNeedsYouInboxState: NeedsYouInboxSliceState = {
   needsYouInbox: {
@@ -12,10 +14,27 @@ export const defaultNeedsYouInboxState: NeedsYouInboxSliceState = {
     generationByWorkspaceId: {},
     refreshTick: 0,
     manualRetryTick: 0,
+    remoteByInstanceId: {},
+    generationByInstanceId: {},
+    remoteRefreshTick: 0,
+    remoteRefreshTickByInstanceId: {},
+    remoteRetryTickByInstanceId: {},
   },
 };
 
 const emptyWorkspaceState = (): NeedsYouInboxWorkspaceState => ({
+  bundles: [],
+  count: 0,
+  hiddenCount: 0,
+  nextSnoozeExpiry: null,
+  hasMore: false,
+  status: "idle",
+  appliedGeneration: 0,
+  lastAppliedOk: false,
+});
+
+const emptyRemoteInstanceState = (instanceId: string): RemoteInboxInstanceState => ({
+  instanceId,
   bundles: [],
   count: 0,
   hiddenCount: 0,
@@ -33,6 +52,82 @@ const emptyWorkspaceState = (): NeedsYouInboxWorkspaceState => ({
 type ImmerSet = Parameters<
   StateCreator<AppState, [["zustand/immer", never]], [], NeedsYouInboxSlice>
 >[0];
+
+/**
+ * Remote instance-page actions, extracted only to keep the composed slice
+ * factory under the function-line limit; they share the single `set` seam
+ * and the same per-key stale-response discipline as the local rows.
+ */
+function createRemoteInboxActions(set: ImmerSet) {
+  return {
+    beginRemoteInboxRead: (instanceId: string) => {
+      let generation = 0;
+      set((draft) => {
+        const remote = draft.needsYouInbox;
+        const next = (remote.generationByInstanceId[instanceId] ?? 0) + 1;
+        remote.generationByInstanceId[instanceId] = next;
+        const instance =
+          remote.remoteByInstanceId[instanceId] ?? emptyRemoteInstanceState(instanceId);
+        instance.status = "loading";
+        delete instance.degradedReason;
+        remote.remoteByInstanceId[instanceId] = instance;
+        generation = next;
+      });
+      return generation;
+    },
+    setRemoteInboxPage: (
+      instanceId: string,
+      generation: number,
+      page: Parameters<NeedsYouInboxSlice["setRemoteInboxPage"]>[2],
+    ) =>
+      set((draft) => {
+        const remote = draft.needsYouInbox;
+        if (remote.generationByInstanceId[instanceId] !== generation) return;
+        remote.remoteByInstanceId[instanceId] = {
+          instanceId,
+          bundles: page.bundles,
+          count: page.count,
+          hiddenCount: page.hiddenCount,
+          nextSnoozeExpiry: page.nextSnoozeExpiry,
+          hasMore: page.hasMore,
+          status: "ready",
+          appliedGeneration: generation,
+          lastAppliedOk: true,
+        };
+      }),
+    setRemoteInboxDegraded: (
+      instanceId: string,
+      generation: number,
+      reason: RemoteInboxDegradedReason,
+    ) =>
+      set((draft) => {
+        const remote = draft.needsYouInbox;
+        if (remote.generationByInstanceId[instanceId] !== generation) return;
+        remote.remoteByInstanceId[instanceId] = {
+          ...emptyRemoteInstanceState(instanceId),
+          status: "error",
+          degradedReason: reason,
+          appliedGeneration: generation,
+        };
+      }),
+    bumpRemoteInboxRefreshTick: (instanceId?: string) =>
+      set((draft) => {
+        const remote = draft.needsYouInbox;
+        if (instanceId === undefined) {
+          remote.remoteRefreshTick += 1;
+          return;
+        }
+        remote.remoteRefreshTickByInstanceId[instanceId] =
+          (remote.remoteRefreshTickByInstanceId[instanceId] ?? 0) + 1;
+      }),
+    bumpRemoteInboxRetryTick: (instanceId: string) =>
+      set((draft) => {
+        const remote = draft.needsYouInbox;
+        remote.remoteRetryTickByInstanceId[instanceId] =
+          (remote.remoteRetryTickByInstanceId[instanceId] ?? 0) + 1;
+      }),
+  };
+}
 
 /**
  * Typed as a plain factory over `set` (mirrors the review slice): every
@@ -109,4 +204,6 @@ export const createNeedsYouInboxSlice = (set: ImmerSet): NeedsYouInboxSlice => (
     set((draft) => {
       draft.needsYouInbox.manualRetryTick += 1;
     }),
+
+  ...createRemoteInboxActions(set),
 });

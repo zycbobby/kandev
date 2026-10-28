@@ -221,3 +221,195 @@ describe("needs-you-inbox slice — boot seeding", () => {
     expect(store.getState().needsYouInbox.byWorkspaceId.w1.status).toBe("loading");
   });
 });
+
+// ---- remote instance pages (cross-instance-inbox) ----
+
+import type { RemoteInboxBundle } from "@/lib/types/remote-inbox";
+import type { AppState } from "@/lib/state/store";
+import {
+  selectComposedNeedsYouCount,
+  selectComposedNeedsYouHasMore,
+  selectRemoteInboxInstances,
+} from "./selectors";
+
+function remoteBundle(overrides: Partial<RemoteInboxBundle> = {}): RemoteInboxBundle {
+  return {
+    ...bundle(),
+    instance_id: "i1",
+    workspace_id: "ws-r",
+    ...overrides,
+  };
+}
+
+function composedView(store: ReturnType<typeof newStore>, activeWorkspaceId?: string): AppState {
+  return {
+    workspaces: { activeId: activeWorkspaceId },
+    needsYouInbox: store.getState().needsYouInbox,
+  } as unknown as AppState;
+}
+
+describe("needs-you-inbox slice — remote instance pages", () => {
+  it("applies a remote page with per-instance generation fencing", () => {
+    const store = newStore();
+    const generation = store.getState().beginRemoteInboxRead("i1");
+
+    store.getState().setRemoteInboxPage("i1", generation, {
+      bundles: [remoteBundle()],
+      count: 1,
+      hiddenCount: 1,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+
+    const instance = store.getState().needsYouInbox.remoteByInstanceId.i1;
+    expect(instance.status).toBe("ready");
+    expect(instance.count).toBe(1);
+    expect(instance.bundles).toHaveLength(1);
+    expect(instance.bundles[0]?.instance_id).toBe("i1");
+  });
+
+  it("drops a stale remote response; instance generations never cross", () => {
+    const store = newStore();
+    const stale = store.getState().beginRemoteInboxRead("i1");
+    const fresh = store.getState().beginRemoteInboxRead("i1");
+    expect(fresh).not.toBe(stale);
+
+    store.getState().setRemoteInboxPage("i1", stale, {
+      bundles: [remoteBundle()],
+      count: 1,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+    const dropped = store.getState().needsYouInbox.remoteByInstanceId.i1;
+    expect(dropped?.count).toBe(0);
+    expect(dropped?.bundles).toHaveLength(0);
+    expect(dropped?.status).not.toBe("ready");
+
+    // A read of another instance does not fence i1's fresh generation.
+    store.getState().beginRemoteInboxRead("i2");
+    store.getState().setRemoteInboxPage("i1", fresh, {
+      bundles: [],
+      count: 0,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+    expect(store.getState().needsYouInbox.remoteByInstanceId.i1?.status).toBe("ready");
+  });
+
+  it("applies a degraded read by clearing rows in the same update", () => {
+    const store = newStore();
+    const generation = store.getState().beginRemoteInboxRead("i1");
+    store.getState().setRemoteInboxPage("i1", generation, {
+      bundles: [remoteBundle()],
+      count: 1,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+
+    const next = store.getState().beginRemoteInboxRead("i1");
+    store.getState().setRemoteInboxDegraded("i1", next, "unreachable");
+
+    const instance = store.getState().needsYouInbox.remoteByInstanceId.i1;
+    expect(instance.status).toBe("error");
+    expect(instance.degradedReason).toBe("unreachable");
+    expect(instance.bundles).toHaveLength(0);
+    expect(instance.count).toBe(0);
+    expect(instance.lastAppliedOk).toBe(false);
+  });
+
+  it("bumps refresh ticks globally or per instance, and retries per instance", () => {
+    const store = newStore();
+    store.getState().bumpRemoteInboxRefreshTick();
+    store.getState().bumpRemoteInboxRefreshTick("i1");
+    store.getState().bumpRemoteInboxRetryTick("i1");
+
+    const remote = store.getState().needsYouInbox;
+    expect(remote.remoteRefreshTick).toBe(1);
+    expect(remote.remoteRefreshTickByInstanceId.i1).toBe(1);
+    expect(remote.remoteRetryTickByInstanceId.i1).toBe(1);
+    expect(remote.remoteRetryTickByInstanceId.i2).toBeUndefined();
+  });
+});
+
+const DEGRADED_INSTANCE = "i-degraded";
+
+describe("needs-you-inbox composed badge selectors", () => {
+  function readyRemote(
+    store: ReturnType<typeof newStore>,
+    instanceId: string,
+    count: number,
+    hasMore = false,
+  ) {
+    const generation = store.getState().beginRemoteInboxRead(instanceId);
+    store.getState().setRemoteInboxPage(instanceId, generation, {
+      bundles: [],
+      count,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore,
+    });
+  }
+
+  it("local only: the composed count is the local page count", () => {
+    const store = newStore();
+    const generation = store.getState().beginNeedsYouInboxRead("w1");
+    store.getState().setNeedsYouInboxPage("w1", generation, {
+      bundles: [],
+      count: 2,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+    expect(selectComposedNeedsYouCount(composedView(store, "w1"))).toBe(2);
+  });
+
+  it("local plus landed remote pages sum; loading and degraded instances contribute zero", () => {
+    const store = newStore();
+    const generation = store.getState().beginNeedsYouInboxRead("w1");
+    store.getState().setNeedsYouInboxPage("w1", generation, {
+      bundles: [],
+      count: 2,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+    readyRemote(store, "i-ready", 3);
+
+    store.getState().beginRemoteInboxRead("i-loading");
+
+    const degradedGeneration = store.getState().beginRemoteInboxRead(DEGRADED_INSTANCE);
+    store.getState().setRemoteInboxPage(DEGRADED_INSTANCE, degradedGeneration, {
+      bundles: [],
+      count: 7,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+    const nextDegraded = store.getState().beginRemoteInboxRead(DEGRADED_INSTANCE);
+    store.getState().setRemoteInboxDegraded(DEGRADED_INSTANCE, nextDegraded, "error");
+
+    expect(selectComposedNeedsYouCount(composedView(store, "w1"))).toBe(5);
+  });
+
+  it("composed has_more is the disjunction of local and landed remote pages", () => {
+    const store = newStore();
+    readyRemote(store, "i-ready", 1, true);
+    expect(selectComposedNeedsYouHasMore(composedView(store))).toBe(true);
+
+    const fresh = newStore();
+    const degradedGeneration = fresh.getState().beginRemoteInboxRead("i-x");
+    fresh.getState().setRemoteInboxDegraded("i-x", degradedGeneration, "unreachable");
+    expect(selectComposedNeedsYouHasMore(composedView(fresh))).toBe(false);
+  });
+
+  it("enumerates remote instance states for section rendering", () => {
+    const store = newStore();
+    readyRemote(store, "i-1", 1);
+    const instances = selectRemoteInboxInstances(composedView(store));
+    expect(instances).toHaveLength(1);
+    expect(instances[0]?.instanceId).toBe("i-1");
+  });
+});

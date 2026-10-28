@@ -1,4 +1,5 @@
 import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
+import type { RemoteInboxBundle, RemoteInboxDegradedReason } from "@/lib/types/remote-inbox";
 
 export type NeedsYouInboxReadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -32,6 +33,22 @@ export type NeedsYouInboxWorkspaceState = {
   lastAppliedOk: boolean;
 };
 
+/** One remote instance's aggregated page, under the same stale-response
+ * discipline as the local workspace rows but keyed by instance. */
+export type RemoteInboxInstanceState = {
+  instanceId: string;
+  status: NeedsYouInboxReadStatus;
+  /** Present only on a degraded read (status "error"). */
+  degradedReason?: RemoteInboxDegradedReason;
+  bundles: RemoteInboxBundle[];
+  count: number;
+  hiddenCount: number;
+  nextSnoozeExpiry: string | null;
+  hasMore: boolean;
+  appliedGeneration: number;
+  lastAppliedOk: boolean;
+};
+
 export type NeedsYouInboxSliceState = {
   needsYouInbox: {
     byWorkspaceId: Record<string, NeedsYouInboxWorkspaceState>;
@@ -45,6 +62,15 @@ export type NeedsYouInboxSliceState = {
     // when it fires, never the one the event happened to name.
     refreshTick: number;
     manualRetryTick: number;
+    // Remote instance pages (cross-instance-inbox): same per-key generation
+    // discipline as the local rows, keyed by instance id.
+    remoteByInstanceId: Record<string, RemoteInboxInstanceState>;
+    generationByInstanceId: Record<string, number>;
+    // Global remote refresh trigger (mount, instance-list change, foreground
+    // resume) and the per-instance variant a relay notification bumps.
+    remoteRefreshTick: number;
+    remoteRefreshTickByInstanceId: Record<string, number>;
+    remoteRetryTickByInstanceId: Record<string, number>;
   };
 };
 
@@ -76,6 +102,35 @@ export type NeedsYouInboxSliceActions = {
   bumpNeedsYouInboxRefreshTick: () => void;
   /** Requests an explicit retry even after automatic refreshes are suspended. */
   requestNeedsYouInboxRetry: () => void;
+
+  // ---- remote instance pages (cross-instance-inbox) ----
+
+  /** Bumps and returns the new request generation for one instance read. */
+  beginRemoteInboxRead: (instanceId: string) => number;
+  /** Applies a successful instance page if its generation is still current. */
+  setRemoteInboxPage: (
+    instanceId: string,
+    generation: number,
+    page: {
+      bundles: RemoteInboxBundle[];
+      count: number;
+      hiddenCount: number;
+      nextSnoozeExpiry: string | null;
+      hasMore: boolean;
+    },
+  ) => void;
+  /** Applies a degraded instance read if its generation is still current --
+   * rows and count clear in the same update so the section renders the
+   * degraded state, never stale rows over a zero badge. */
+  setRemoteInboxDegraded: (
+    instanceId: string,
+    generation: number,
+    reason: RemoteInboxDegradedReason,
+  ) => void;
+  /** Bumps the remote refresh trigger globally, or for one instance only. */
+  bumpRemoteInboxRefreshTick: (instanceId?: string) => void;
+  /** Records an explicit per-instance retry. */
+  bumpRemoteInboxRetryTick: (instanceId: string) => void;
 };
 
 export type NeedsYouInboxSlice = NeedsYouInboxSliceState & NeedsYouInboxSliceActions;

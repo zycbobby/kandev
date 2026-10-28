@@ -1,6 +1,6 @@
 import type { AppState } from "@/lib/state/store";
 import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
-import type { NeedsYouInboxWorkspaceState } from "./types";
+import type { NeedsYouInboxWorkspaceState, RemoteInboxInstanceState } from "./types";
 
 const EMPTY_BUNDLES: ClarificationInboxBundle[] = [];
 
@@ -59,4 +59,35 @@ export function selectNeedsYouInboxHasMore(state: AppState): boolean {
 
 export function selectNeedsYouInboxNextSnoozeExpiry(state: AppState): string | null {
   return selectActiveWorkspaceState(state).nextSnoozeExpiry;
+}
+
+// ---- composed cross-instance badge (cross-instance-inbox design) ----
+
+/** Every remote instance state the controller has created, for section
+ * rendering. Order follows insertion; sections key by instanceId. */
+export function selectRemoteInboxInstances(state: AppState): RemoteInboxInstanceState[] {
+  return Object.values(state.needsYouInbox.remoteByInstanceId ?? {});
+}
+
+function selectLandedRemoteInstances(state: AppState): RemoteInboxInstanceState[] {
+  // count-known semantics (failed-inbox precedent): only an instance whose
+  // page actually landed contributes rows, so the badge never reports rows
+  // the composed view does not list.
+  return selectRemoteInboxInstances(state).filter((instance) => instance.status === "ready");
+}
+
+/** The sidebar badge count for the active workspace plus every landed remote
+ * instance page. Unloaded and degraded instances contribute zero. */
+export function selectComposedNeedsYouCount(state: AppState): number {
+  const remoteTotal = selectLandedRemoteInstances(state).reduce(
+    (sum, instance) => sum + instance.count,
+    0,
+  );
+  return selectNeedsYouInboxCount(state) + remoteTotal;
+}
+
+/** Truncation flag of the composed view: local or any landed remote page. */
+export function selectComposedNeedsYouHasMore(state: AppState): boolean {
+  if (selectNeedsYouInboxHasMore(state)) return true;
+  return selectLandedRemoteInstances(state).some((instance) => instance.hasMore);
 }
