@@ -25,8 +25,8 @@ import {
 } from "@/components/app-sidebar/shortcut-section-actions";
 import { workspaceSettingsHref } from "@/lib/settings/workspace-settings-tabs";
 import {
-  selectNeedsYouInboxCount,
-  selectNeedsYouInboxHasMore,
+  selectComposedNeedsYouCount,
+  selectComposedNeedsYouHasMore,
 } from "@/lib/state/slices/needs-you-inbox/selectors";
 import { selectOfficeInboxCount } from "@/lib/state/slices/office/selectors";
 import { NEEDS_YOU_INBOX_HREF } from "@/lib/navigation/needs-you-inbox-destination";
@@ -181,8 +181,8 @@ function MobileInboxRow({
   const workspaceId = useAppStore((state) => state.workspaces.activeId);
   const mode = useOfficeModeState();
   const enabled = useFeature("needsYouInbox");
-  const count = useAppStore(selectNeedsYouInboxCount);
-  const hasMore = useAppStore(selectNeedsYouInboxHasMore);
+  const count = useAppStore(selectComposedNeedsYouCount);
+  const hasMore = useAppStore(selectComposedNeedsYouHasMore);
   const officeCount = useAppStore(selectOfficeInboxCount);
   const office = kind === "office";
   if (office && mode !== "office") return null;

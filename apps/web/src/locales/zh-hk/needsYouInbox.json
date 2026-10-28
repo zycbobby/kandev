@@ -35,5 +35,10 @@
   "tabLabel": "需要你處理",
   "failedClauseSome_one": "此列表不計入失敗的任務。{{count}} 個任務也失敗了,請查看失敗標籤頁。",
   "failedClauseSome_other": "此列表不計入失敗的任務。{{count}} 個任務也失敗了,請查看失敗標籤頁。",
-  "failedClauseNone": "此列表不計入失敗的任務。此工作區目前沒有失敗的任務,您可以隨時查看失敗標籤頁。"
+  "failedClauseNone": "此列表不計入失敗的任務。此工作區目前沒有失敗的任務,您可以隨時查看失敗標籤頁。",
+  "remoteEmpty": "該實例上沒有等待回答的阻塞問題。",
+  "remoteDegradedUnreachable": "暫時無法連接 {{instance}}。",
+  "remoteDegradedUnauthorized": "請為 {{instance}} 登記個人存取權杖，才能在這裏回答它的問題。",
+  "remoteDegradedInboxDisabled": "{{instance}} 未開放其待辦收件箱。",
+  "remoteDegradedError": "無法讀取 {{instance}}。"
 }

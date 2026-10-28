@@ -35,5 +35,10 @@
   "tabLabel": "Needs you",
   "failedClauseSome_one": "This list does not count failed tasks. {{count}} task has also failed. See the Failed tab.",
   "failedClauseSome_other": "This list does not count failed tasks. {{count}} tasks have also failed. See the Failed tab.",
-  "failedClauseNone": "This list does not count failed tasks. None have failed in this workspace right now; check the Failed tab any time."
+  "failedClauseNone": "This list does not count failed tasks. None have failed in this workspace right now; check the Failed tab any time.",
+  "remoteEmpty": "No blocked questions are waiting on this instance.",
+  "remoteDegradedUnreachable": "{{instance}} cannot be reached right now.",
+  "remoteDegradedUnauthorized": "Register a personal access token for {{instance}} to answer its questions here.",
+  "remoteDegradedInboxDisabled": "{{instance}} does not expose its needs-you inbox.",
+  "remoteDegradedError": "{{instance}} could not be read."
 }

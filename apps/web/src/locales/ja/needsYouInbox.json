@@ -35,5 +35,10 @@
   "tabLabel": "必要事項",
   "failedClauseSome_one": "この一覧は失敗した task を数えない。{{count}}件の task も失敗済み。Failed タブを見ろ。",
   "failedClauseSome_other": "この一覧は失敗した task を数えない。{{count}}件の task も失敗済み。Failed タブを見ろ。",
-  "failedClauseNone": "この一覧には失敗タスクは含まれない。今このワークスペースで失敗はない。Failed タブをいつでも確認して。"
+  "failedClauseNone": "この一覧には失敗タスクは含まれない。今このワークスペースで失敗はない。Failed タブをいつでも確認して。",
+  "remoteEmpty": "このインスタンスで回答待ちの質問はありません。",
+  "remoteDegradedUnreachable": "{{instance}} に現在接続できません。",
+  "remoteDegradedUnauthorized": "{{instance}} の質問にここで回答するには、個人アクセストークンを登録してください。",
+  "remoteDegradedInboxDisabled": "{{instance}} はネズドユー受信箱を公開していません。",
+  "remoteDegradedError": "{{instance}} を読み込めませんでした。"
 }

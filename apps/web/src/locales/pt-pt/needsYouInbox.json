@@ -35,5 +35,10 @@
   "tabLabel": "Precisa de si",
   "failedClauseSome_one": "Esta lista não conta tarefas falhadas. {{count}} tarefa também falhou. Consulte o separador Falhadas.",
   "failedClauseSome_other": "Esta lista não conta tarefas falhadas. {{count}} tarefas também falharam. Consulte o separador Falhadas.",
-  "failedClauseNone": "Esta lista não conta tarefas falhadas. Nenhuma falhou neste espaço de trabalho neste momento; pode consultar o separador Falhadas a qualquer momento."
+  "failedClauseNone": "Esta lista não conta tarefas falhadas. Nenhuma falhou neste espaço de trabalho neste momento; pode consultar o separador Falhadas a qualquer momento.",
+  "remoteEmpty": "Nenhuma pergunta bloqueada está a aguardar nesta instância.",
+  "remoteDegradedUnreachable": "Não é possível contactar {{instance}} neste momento.",
+  "remoteDegradedUnauthorized": "Registe um token de acesso pessoal para {{instance}} para responder às suas perguntas aqui.",
+  "remoteDegradedInboxDisabled": "{{instance}} não expõe a sua caixa de entrada de necessidades.",
+  "remoteDegradedError": "Não foi possível ler {{instance}}."
 }

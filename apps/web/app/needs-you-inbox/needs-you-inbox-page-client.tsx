@@ -7,13 +7,15 @@ import { PageShell } from "@/components/page-shell";
 import { useAppStore } from "@/components/state-provider";
 import { usePathname, useRouter, useSearchParams } from "@/lib/routing/client-router";
 import {
+  selectComposedNeedsYouCount,
+  selectComposedNeedsYouHasMore,
   selectNeedsYouInboxBundles,
-  selectNeedsYouInboxCount,
   selectNeedsYouInboxHasMore,
   selectNeedsYouInboxHiddenCount,
   selectNeedsYouInboxLastAppliedOk,
   selectNeedsYouInboxRevision,
   selectNeedsYouInboxStatus,
+  selectRemoteInboxInstances,
 } from "@/lib/state/slices/needs-you-inbox/selectors";
 import {
   selectFailedInboxCount,
@@ -44,6 +46,7 @@ import { InboxHistoryList } from "@/components/inbox-history/inbox-history-list"
 import { InboxHistoryEmptyState } from "@/components/inbox-history/inbox-history-empty-state";
 import { InboxHistoryErrorState } from "@/components/inbox-history/inbox-history-error-state";
 import { useLateClarificationMessage } from "@/hooks/use-late-clarification-message";
+import { RemoteInboxSection } from "@/components/needs-you-inbox/remote-inbox-section";
 
 type ViewMode = "error" | "loading" | "empty" | "list";
 
@@ -115,7 +118,9 @@ function NeedsYouInboxRowWithLateAnswer({ bundle }: { bundle: ClarificationInbox
 }
 
 // "Needs you" is the tab strip's default-selected tab, and this content,
-// count and behavior are unchanged by the strip's presence.
+// count and behavior are unchanged by the strip's presence. Remote instance
+// sections render after the local content in every local view mode: one
+// instance's failure or emptiness never hides the others' rows.
 function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
   const { t } = useTranslation();
   const status = useAppStore(selectNeedsYouInboxStatus);
@@ -127,6 +132,7 @@ function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
   const failedCountKnown = useAppStore(selectFailedInboxCountIsKnown);
   const lastAppliedOk = useAppStore(selectNeedsYouInboxLastAppliedOk);
   const hasActiveWorkspace = useAppStore((s) => s.workspaces.activeId !== null);
+  const remoteInstances = useAppStore(selectRemoteInboxInstances);
 
   const viewMode = resolveViewMode(
     status,
@@ -160,6 +166,9 @@ function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
           listRevision={listRevision}
         />
       )}
+      {remoteInstances.map((instance) => (
+        <RemoteInboxSection key={instance.instanceId} instance={instance} />
+      ))}
     </>
   );
 }
@@ -226,8 +235,10 @@ function InboxHistoryTabContent({ controller }: { controller: InboxHistoryContro
 export function NeedsYouInboxPageClient() {
   const { t } = useTranslation();
   const requestRetry = useAppStore((s) => s.requestNeedsYouInboxRetry);
-  const needsYouCount = useAppStore(selectNeedsYouInboxCount);
-  const needsYouHasMore = useAppStore(selectNeedsYouInboxHasMore);
+  // The tab strip's Needs-you count and truncation flag are the composed
+  // cross-instance values: local page plus every landed remote instance page.
+  const needsYouCount = useAppStore(selectComposedNeedsYouCount);
+  const needsYouHasMore = useAppStore(selectComposedNeedsYouHasMore);
   const failedCount = useAppStore(selectFailedInboxCount);
   const failedCountKnown = useAppStore(selectFailedInboxCountIsKnown);
   const failedTruncated = useAppStore(selectFailedInboxTruncated);

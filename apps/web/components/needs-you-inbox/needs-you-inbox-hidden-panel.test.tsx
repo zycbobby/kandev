@@ -5,7 +5,10 @@ import type { ClarificationInboxHiddenBundle } from "@/lib/types/clarification-i
 const mocks = vi.hoisted(() => ({
   listHidden: vi.fn(),
   restore: vi.fn(),
+  listRemoteHidden: vi.fn(),
+  restoreRemote: vi.fn(),
   bumpRefreshTick: vi.fn(),
+  bumpRemoteRefreshTick: vi.fn(),
   toastError: vi.fn(),
   activeWorkspaceId: "w1",
 }));
@@ -13,6 +16,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/api/domains/clarification-inbox-api", () => ({
   listHiddenClarificationInbox: (...args: unknown[]) => mocks.listHidden(...args),
   restoreClarificationInboxBundle: (...args: unknown[]) => mocks.restore(...args),
+}));
+
+vi.mock("@/lib/api/domains/remote-inbox-api", () => ({
+  listRemoteHiddenClarificationInbox: (...args: unknown[]) => mocks.listRemoteHidden(...args),
+  restoreRemoteClarificationBundle: (...args: unknown[]) => mocks.restoreRemote(...args),
 }));
 
 vi.mock("@/lib/toast/sonner", () => ({
@@ -25,6 +33,7 @@ vi.mock("@/components/state-provider", () => ({
     selector({
       workspaces: { activeId: mocks.activeWorkspaceId },
       bumpNeedsYouInboxRefreshTick: mocks.bumpRefreshTick,
+      bumpRemoteInboxRefreshTick: mocks.bumpRemoteRefreshTick,
     }),
 }));
 
@@ -281,5 +290,36 @@ describe("NeedsYouInboxHiddenPanel staleness guards", () => {
     expect(await screen.findByText("Second")).not.toBeNull();
     expect(screen.queryByText("First")).toBeNull();
     expect(mocks.listHidden).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---- remote source routing (cross-instance-inbox) ----
+
+describe("NeedsYouInboxHiddenPanel — remote source", () => {
+  beforeEach(() => {
+    mocks.listRemoteHidden.mockReset();
+    mocks.restoreRemote.mockReset().mockResolvedValue(undefined);
+    mocks.bumpRemoteRefreshTick.mockReset();
+  });
+
+  it("enumerates and restores through the forward routes", async () => {
+    mocks.listRemoteHidden.mockResolvedValue({
+      bundles: [hiddenBundle({ pending_id: "p9", context: "Remote hidden" })],
+      count: 1,
+      total: 1,
+    });
+    render(<NeedsYouInboxHiddenPanel hiddenCount={1} source={{ instanceId: "i1" }} />);
+
+    fireEvent.click(screen.getByText(SHOW_HIDDEN));
+    expect(await screen.findByText("Remote hidden")).not.toBeNull();
+    expect(mocks.listRemoteHidden).toHaveBeenCalledWith("i1");
+    expect(mocks.listHidden).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Restore"));
+    });
+    expect(mocks.restoreRemote).toHaveBeenCalledWith("i1", "p9");
+    expect(mocks.bumpRemoteRefreshTick).toHaveBeenCalledWith("i1");
+    expect(mocks.bumpRefreshTick).not.toHaveBeenCalled();
   });
 });

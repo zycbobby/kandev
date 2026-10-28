@@ -6,8 +6,8 @@ import { usePathname } from "@/lib/routing/client-router";
 import { useAppStore } from "@/components/state-provider";
 import { selectOfficeInboxCount } from "@/lib/state/slices/office/selectors";
 import {
-  selectNeedsYouInboxCount,
-  selectNeedsYouInboxHasMore,
+  selectComposedNeedsYouCount,
+  selectComposedNeedsYouHasMore,
 } from "@/lib/state/slices/needs-you-inbox/selectors";
 import { useFeature } from "@/hooks/domains/features/use-feature";
 import { useOfficeModeState } from "@/hooks/use-in-office";
@@ -64,8 +64,8 @@ export function AppSidebarFixedNav({
   const workspaceId = useAppStore((s) => s.workspaces.activeId);
   const inboxCount = useAppStore(selectOfficeInboxCount);
   const needsYouInboxEnabled = useFeature("needsYouInbox");
-  const needsYouInboxCount = useAppStore(selectNeedsYouInboxCount);
-  const needsYouInboxHasMore = useAppStore(selectNeedsYouInboxHasMore);
+  const needsYouInboxCount = useAppStore(selectComposedNeedsYouCount);
+  const needsYouInboxHasMore = useAppStore(selectComposedNeedsYouHasMore);
   const mode = useOfficeModeState();
   const inOffice = mode === "office";
   const handleOpenQuickChat = useQuickChatLauncher(workspaceId);

@@ -10,6 +10,10 @@ import {
   listHiddenClarificationInbox,
   restoreClarificationInboxBundle,
 } from "@/lib/api/domains/clarification-inbox-api";
+import {
+  listRemoteHiddenClarificationInbox,
+  restoreRemoteClarificationBundle,
+} from "@/lib/api/domains/remote-inbox-api";
 import type { ClarificationInboxHiddenBundle } from "@/lib/types/clarification-inbox";
 import { rowPrimaryText } from "@/lib/needs-you-inbox/row-presentation";
 
@@ -52,52 +56,55 @@ function HiddenRow({
 }
 
 function useHiddenList(
-  workspaceId: string | null,
+  scopeKey: string | null,
   open: boolean,
   hiddenCount: number,
   listRevision: number,
+  source?: { instanceId: string },
 ) {
   const [status, setStatus] = useState<HiddenListStatus>("idle");
   const [bundles, setBundles] = useState<ClarificationInboxHiddenBundle[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const generationRef = useRef(0);
-  // Read inside `load` instead of `workspaceId` itself: a restore captures
-  // this closure while its DELETE is in flight, and a workspace switch during
-  // that wait must not let the stale continuation apply workspace A's read to
-  // workspace B's panel (or bump the shared generation past B's own request).
-  const currentWorkspaceIdRef = useRef(workspaceId);
-  currentWorkspaceIdRef.current = workspaceId;
+  // Read inside `load` instead of `scopeKey` itself: a restore captures this
+  // closure while its DELETE is in flight, and a scope switch during that
+  // wait must not let the stale continuation apply scope A's read to scope
+  // B's panel (or bump the shared generation past B's own request).
+  const currentScopeRef = useRef(scopeKey);
+  currentScopeRef.current = scopeKey;
 
   const load = useCallback(async () => {
-    if (!workspaceId || currentWorkspaceIdRef.current !== workspaceId) return;
+    if (!scopeKey || currentScopeRef.current !== scopeKey) return;
     const generation = ++generationRef.current;
     setStatus("loading");
     try {
-      const page = await listHiddenClarificationInbox(workspaceId);
-      if (generationRef.current !== generation || currentWorkspaceIdRef.current !== workspaceId) {
+      const page = source
+        ? await listRemoteHiddenClarificationInbox(source.instanceId)
+        : await listHiddenClarificationInbox(scopeKey);
+      if (generationRef.current !== generation || currentScopeRef.current !== scopeKey) {
         return;
       }
       setBundles(page.bundles);
       setTotal(page.total);
       setStatus("ready");
     } catch {
-      if (generationRef.current !== generation || currentWorkspaceIdRef.current !== workspaceId) {
+      if (generationRef.current !== generation || currentScopeRef.current !== scopeKey) {
         return;
       }
       setStatus("error");
     }
-  }, [workspaceId]);
+  }, [scopeKey, source]);
 
-  const previousWorkspaceId = useRef(workspaceId);
+  const previousScopeRef = useRef(scopeKey);
   useEffect(() => {
-    if (previousWorkspaceId.current === workspaceId) return;
-    previousWorkspaceId.current = workspaceId;
+    if (previousScopeRef.current === scopeKey) return;
+    previousScopeRef.current = scopeKey;
     generationRef.current += 1;
     setBundles([]);
     setTotal(null);
     setStatus("idle");
     if (open) void load();
-  }, [workspaceId, open, load]);
+  }, [scopeKey, open, load]);
 
   // The main list's hidden count is the only signal this panel gets that the
   // hidden set changed elsewhere (another row dismissed/snoozed, or a snooze
@@ -115,23 +122,30 @@ function useHiddenList(
 }
 
 // Discloses how many answerable bundles this operator's own dismiss or
-// snooze is hiding, and lets them enumerate and restore one.
+// snooze is hiding, and lets them enumerate and restore one. With `source`
+// the panel enumerates and restores one remote instance's hidden set through
+// the local backend's forward routes instead of the local sidecar.
 export function NeedsYouInboxHiddenPanel({
   hiddenCount,
   listRevision = 0,
+  source,
 }: {
   hiddenCount: number;
   listRevision?: number;
+  source?: { instanceId: string };
 }) {
   const { t } = useTranslation();
   const workspaceId = useAppStore((s) => s.workspaces.activeId);
   const bumpRefreshTick = useAppStore((s) => s.bumpNeedsYouInboxRefreshTick);
+  const bumpRemoteRefreshTick = useAppStore((s) => s.bumpRemoteInboxRefreshTick);
+  const scopeKey = source ? source.instanceId : workspaceId;
   const [open, setOpen] = useState(false);
   const { status, bundles, total, load } = useHiddenList(
-    workspaceId,
+    scopeKey,
     open,
     hiddenCount,
     listRevision,
+    source,
   );
   const displayCount = total ?? hiddenCount;
 
@@ -146,14 +160,19 @@ export function NeedsYouInboxHiddenPanel({
   const handleRestore = useCallback(
     async (pendingId: string) => {
       try {
-        await restoreClarificationInboxBundle(pendingId);
-        bumpRefreshTick();
+        if (source) {
+          await restoreRemoteClarificationBundle(source.instanceId, pendingId);
+          bumpRemoteRefreshTick(source.instanceId);
+        } else {
+          await restoreClarificationInboxBundle(pendingId);
+          bumpRefreshTick();
+        }
         void load();
       } catch {
         toast.error(t("needsYouInbox:restoreFailed"));
       }
     },
-    [bumpRefreshTick, load, t],
+    [bumpRefreshTick, bumpRemoteRefreshTick, load, source, t],
   );
 
   return (
