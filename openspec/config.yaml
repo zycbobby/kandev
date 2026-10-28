@@ -1,5 +1,9 @@
 schema: superpowers-bridge
 
+# Decision log location used by openspec-archive-change (post-archive ADR step).
+archive:
+  decisions_dir: docs/decisions
+
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.

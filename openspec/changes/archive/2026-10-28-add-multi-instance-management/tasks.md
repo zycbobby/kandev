@@ -154,9 +154,9 @@ fixture：`bootRemoteBackend()`（spawn 第二个后端二进制：独立 home�
 - Consumes: Task 1/2 REST（`/api/v1/instances` CRUD+health、Task 6 select）。
 - Produces: `instances-api.ts` 导出 `listInstances/createInstance/updateInstance/deleteInstance/selectInstance/getInstanceHealth`；页面组件遵循 `SettingsGroup/SettingsRow/SettingsInfo` 与 `useSettingsSaveContributor` 约定。
 
-- [ ] 步骤 1：失败测试（vitest）：api client 请求形状与错误映射；组件渲染/保存/丢弃/健康横幅（含 390px 视口断言）
-- [ ] 步骤 2：实现 + i18n 键（`settings`/`instances` 命名空间；zh-hant 走脚本）
-- [ ] 步骤 3：`pnpm --filter @kandev/web test -- instances`、`pnpm run i18n:check`（apps/web）绿 → 提交（`feat: add instance management settings page`）
+- [x] 步骤 1：失败测试（vitest）：api client 请求形状与错误映射；组件渲染/保存/丢弃/健康横幅（含 390px 视口断言）
+- [x] 步骤 2：实现 + i18n 键（`settings`/`instances` 命名空间；zh-hant 走脚本）
+- [x] 步骤 3：`pnpm --filter @kandev/web test -- instances`、`pnpm run i18n:check`（apps/web）绿 → 提交（`feat: add instance management settings page`）
 
 ### Task 8: 侧边栏实例选择器 + 切换
 
