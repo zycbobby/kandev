@@ -238,15 +238,22 @@ async function classifyConflictResult(res: Response): Promise<ClarificationRespo
 // "include" matches the shared client (lib/api/client.ts) — without it,
 // split-origin dev mode drops the session cookie and an auth-enabled backend
 // rejects the request before ever reaching the resolver (W1).
+// respondTarget, when supplied, replaces the default URL wholesale: the
+// Needs-you Inbox's remote rows submit through the local backend's forward
+// route instead of the local resolver.
 async function postClarification(
   pendingId: string,
   body: Record<string, unknown>,
+  respondTarget?: (pendingId: string) => string,
 ): Promise<ClarificationRespondResult> {
   const { apiBaseUrl } = getBackendConfig();
+  const target = respondTarget
+    ? respondTarget(pendingId)
+    : `${apiBaseUrl}/api/v1/clarification/${pendingId}/respond`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), CLARIFICATION_RESPONSE_TIMEOUT_MS);
   try {
-    const res = await fetch(`${apiBaseUrl}/api/v1/clarification/${pendingId}/respond`, {
+    const res = await fetch(target, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -280,15 +287,17 @@ async function postClarification(
 function postClarificationBatch(
   pendingId: string,
   answers: ClarificationAnswer[],
+  respondTarget?: (pendingId: string) => string,
 ): Promise<ClarificationRespondResult> {
-  return postClarification(pendingId, { answers, rejected: false });
+  return postClarification(pendingId, { answers, rejected: false }, respondTarget);
 }
 
 function postClarificationSkip(
   pendingId: string,
   reason: string,
+  respondTarget?: (pendingId: string) => string,
 ): Promise<ClarificationRespondResult> {
-  return postClarification(pendingId, { rejected: true, reject_reason: reason });
+  return postClarification(pendingId, { rejected: true, reject_reason: reason }, respondTarget);
 }
 
 // resolveOptimisticUpdate picks which status/answers the optimistic update
@@ -576,6 +585,9 @@ type UseClarificationSubmissionArgs = {
   getLatestMessage: (sessionId: string, messageId: string) => Message | undefined;
   updateMessage: (message: Message) => void;
   defaultSkipReason: string;
+  // Additive submission-target override (remote Inbox rows); absent = the
+  // default local clarification respond URL, byte-identical to today.
+  respondTarget?: (pendingId: string) => string;
 };
 
 // Factors out the request-plumbing fields shared by submitCollected and
@@ -628,6 +640,7 @@ function useClarificationSubmission(args: UseClarificationSubmissionArgs) {
     getLatestMessage,
     updateMessage,
     defaultSkipReason,
+    respondTarget,
   } = args;
   const lastActionRef = useRef<{ kind: "submit" } | { kind: "skip"; reason: string } | null>(null);
 
@@ -649,7 +662,7 @@ function useClarificationSubmission(args: UseClarificationSubmissionArgs) {
       setAnswers(current);
       lastActionRef.current = { kind: "submit" };
       await runClarificationRequest({
-        post: () => postClarificationBatch(pendingId, ordered),
+        post: () => postClarificationBatch(pendingId, ordered, respondTarget),
         ownStatus: "answered",
         ownAnswers: current,
         ...baseClarificationRequestArgs(pendingId, args),
@@ -659,6 +672,7 @@ function useClarificationSubmission(args: UseClarificationSubmissionArgs) {
       pendingId,
       questionIds,
       answersRef,
+      respondTarget,
       submitBundleRef,
       activePendingIdRef,
       requestGenerationRef,
@@ -684,7 +698,7 @@ function useClarificationSubmission(args: UseClarificationSubmissionArgs) {
       const effectiveReason = reason ?? defaultSkipReason;
       lastActionRef.current = { kind: "skip", reason: effectiveReason };
       await runClarificationRequest({
-        post: () => postClarificationSkip(pendingId, effectiveReason),
+        post: () => postClarificationSkip(pendingId, effectiveReason, respondTarget),
         ownStatus: "rejected",
         ownAnswers: {},
         ...baseClarificationRequestArgs(pendingId, args),
@@ -692,6 +706,7 @@ function useClarificationSubmission(args: UseClarificationSubmissionArgs) {
     },
     [
       pendingId,
+      respondTarget,
       submitBundleRef,
       activePendingIdRef,
       requestGenerationRef,
@@ -726,6 +741,14 @@ function useClarificationSubmission(args: UseClarificationSubmissionArgs) {
   return { submitCollected, skipAll, retry, resetLastAction };
 }
 
+// Options for useClarificationGroup's additive hosts. respondTarget replaces
+// the submit URL wholesale: the remote Needs-you Inbox rows answer through the
+// local backend's instance forward route. Hosts that omit it keep today's
+// URL and behavior byte-for-byte.
+export type ClarificationGroupOptions = {
+  respondTarget?: (pendingId: string) => string;
+};
+
 // useClarificationGroup tracks the per-question answers for a multi-question
 // clarification bundle. The carousel UI owns navigation; this hook just stores
 // the local answer state and exposes:
@@ -741,6 +764,7 @@ export function useClarificationGroup(
   messages: readonly Message[] | null | undefined,
   onOutcome?: (outcome: ClarificationOutcome) => void,
   onLateAnswer?: (snapshot: LateClarificationSnapshot) => Promise<LateAnswerDelivery>,
+  options?: ClarificationGroupOptions,
 ): ClarificationGroupApi {
   const { t } = useTranslation();
   const storeApi = useAppStoreApi();
@@ -832,6 +856,7 @@ export function useClarificationGroup(
     getLatestMessage,
     updateMessage: storeApi.getState().updateMessage,
     defaultSkipReason: t("task:userSkippedClarification"),
+    respondTarget: options?.respondTarget,
   });
 
   const retryLateAnswer = useCallback(async () => {

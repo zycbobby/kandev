@@ -90,6 +90,7 @@ afterEach(async () => {
 });
 
 const SCROLL_REGION_TESTID = "clarification-scroll-region";
+const SKIP_TESTID = "clarification-skip";
 const OPTION_TESTID = "clarification-option";
 const CONTAINER_TESTID = "clarification-overlay-container";
 const QUESTION_COUNT_TESTID = "clarification-question-count";
@@ -137,7 +138,7 @@ describe("ClarificationPanelSection — collapse affordance", () => {
     ];
     renderSection(true, messages);
 
-    fireEvent.click(screen.getByTestId("clarification-skip"));
+    fireEvent.click(screen.getByTestId(SKIP_TESTID));
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   });
@@ -206,7 +207,7 @@ describe("ClarificationPanelSection — submitting feedback", () => {
       fireEvent.click(screen.getByTestId(OPTION_TESTID));
 
       const status = await screen.findByTestId(SUBMITTING_STATUS_TESTID);
-      const skip = screen.getByTestId("clarification-skip");
+      const skip = screen.getByTestId(SKIP_TESTID);
       expect(status.getAttribute("aria-label")).toBe(i18n.t("task:submitting"));
       expect(status.getAttribute("aria-hidden")).toBeNull();
       expect(status.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -247,9 +248,7 @@ describe("ClarificationPanelSection — submitting feedback", () => {
       rejectResponse(new Error("network"));
       await vi.waitFor(() => {
         expect(screen.queryByTestId(SUBMITTING_STATUS_TESTID)).toBeNull();
-        expect((screen.getByTestId("clarification-skip") as HTMLButtonElement).disabled).toBe(
-          false,
-        );
+        expect((screen.getByTestId(SKIP_TESTID) as HTMLButtonElement).disabled).toBe(false);
       });
     } finally {
       rejectResponse(new Error("network"));
@@ -414,5 +413,47 @@ describe("ClarificationPanelSection — onOutcome forwarding (AC .39)", () => {
     fireEvent.click(screen.getByTestId(OPTION_TESTID));
 
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("ClarificationPanelSection — respondTarget passthrough", () => {
+  it("forwards the prop down to the answer chain's POST target", async () => {
+    const messages = [
+      clarMessage({ pendingId: "p1", id: "m1", questionId: "q1", index: 0, total: 1 }),
+    ];
+    const scopeRef = createRef<HTMLDivElement>();
+    render(
+      <div ref={scopeRef} tabIndex={-1}>
+        <ClarificationPanelSection
+          pending={true}
+          messages={messages}
+          onResolved={vi.fn()}
+          shortcutScopeRef={scopeRef}
+          maxHeightVh={50}
+          respondTarget={(pendingId) =>
+            `https://api.test/api/v1/instances/inst-9/clarification/${pendingId}/respond`
+          }
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByTestId(SKIP_TESTID));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.test/api/v1/instances/inst-9/clarification/p1/respond");
+  });
+
+  it("without the prop the default URL is byte-identical to today", async () => {
+    const messages = [
+      clarMessage({ pendingId: "p1", id: "m1", questionId: "q1", index: 0, total: 1 }),
+    ];
+    renderSection(true, messages);
+
+    fireEvent.click(screen.getByTestId(SKIP_TESTID));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.test/api/v1/clarification/p1/respond");
   });
 });

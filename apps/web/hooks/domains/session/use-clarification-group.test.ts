@@ -852,3 +852,98 @@ describe("useClarificationGroup — inflight guard", () => {
     expect(result.current.submitState).toBe("ok");
   });
 });
+
+describe("useClarificationGroup — respondTarget override", () => {
+  beforeEach(setupFetchMock);
+
+  it("posts to the override URL and keeps the batch body shape", async () => {
+    const msgs = [clarMessage({ id: "m1", pendingId: "p1", questionId: "q1", index: 0, total: 1 })];
+    const { result } = renderHook(() =>
+      useClarificationGroup(msgs, undefined, undefined, {
+        respondTarget: (pendingId) =>
+          `https://api.test/api/v1/instances/inst-9/clarification/${pendingId}/respond`,
+      }),
+    );
+
+    await act(async () => {
+      result.current.recordAnswer("q1", { question_id: "q1", selected_options: ["o1"] });
+    });
+    await act(async () => {
+      await result.current.submitCollected();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.test/api/v1/instances/inst-9/clarification/p1/respond");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      answers: [{ question_id: "q1", selected_options: ["o1"] }],
+      rejected: false,
+    });
+    expect(result.current.submitState).toBe("ok");
+  });
+
+  it("skips through the override URL too", async () => {
+    const msgs = [clarMessage({ id: "m1", pendingId: "p1", questionId: "q1", index: 0, total: 1 })];
+    const { result } = renderHook(() =>
+      useClarificationGroup(msgs, undefined, undefined, {
+        respondTarget: (pendingId) => `https://fwd.test/${pendingId}`,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.skipAll();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://fwd.test/p1");
+  });
+
+  it("keeps win/loss and 409 parsing identical through the override", async () => {
+    const msgs = [clarMessage({ id: "m1", pendingId: "p1", questionId: "q1", index: 0, total: 1 })];
+    const { result, rerender } = renderHook(
+      ({ options }) => useClarificationGroup(msgs, undefined, undefined, options),
+      {
+        initialProps: {
+          options: { respondTarget: (pendingId: string) => `https://fwd.test/${pendingId}` },
+        },
+      },
+    );
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          success: true,
+          claimed: false,
+          status: "answered",
+          response: { answers: [{ question_id: "q1", custom_text: "winner" }] },
+        }),
+        { status: 200 },
+      ),
+    );
+    await act(async () => {
+      result.current.recordAnswer("q1", { question_id: "q1", custom_text: "mine" });
+    });
+    await act(async () => {
+      await result.current.submitCollected();
+    });
+    expect(result.current.submitState).toBe("ok");
+    expect(result.current.lastResult?.claimed).toBe(false);
+    expect(result.current.lastResult?.status).toBe("answered");
+
+    // A second submission to the now-resolved bundle parses a 409 not_active.
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ code: "not_active" }), {
+        status: 409,
+      }),
+    );
+    rerender({
+      options: { respondTarget: (pendingId: string) => `https://fwd.test/${pendingId}` },
+    });
+    await act(async () => {
+      await result.current.skipAll();
+    });
+    expect(result.current.submitState).toBe("expired");
+  });
+});

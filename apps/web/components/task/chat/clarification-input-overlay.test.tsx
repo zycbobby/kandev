@@ -822,3 +822,27 @@ describe("ClarificationInputOverlay — onOutcome (AC .39)", () => {
     await vi.waitFor(() => expect(onOutcome).toHaveBeenCalledWith({ kind: "submission_failed" }));
   });
 });
+
+describe("ClarificationInputOverlay — respondTarget passthrough", () => {
+  it("routes the skip submission through the override URL", async () => {
+    const messages = [clarMessage({ id: "m1", questionId: "q1", index: 0, total: 1 })];
+    const scopeRef = createRef<HTMLDivElement>();
+    render(
+      <div ref={scopeRef} tabIndex={-1}>
+        <ClarificationInputOverlay
+          messages={messages}
+          onResolved={vi.fn()}
+          onDismiss={vi.fn()}
+          shortcutScopeRef={scopeRef}
+          respondTarget={(pendingId) => `https://fwd.test/${pendingId}`}
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByTestId(TESTID_SKIP));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://fwd.test/p1");
+  });
+});

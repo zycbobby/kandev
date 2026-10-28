@@ -38,6 +38,10 @@ type ClarificationPanelSectionProps = {
   onOutcome?: (outcome: ClarificationOutcome) => void;
   onLateAnswer?: (snapshot: LateClarificationSnapshot) => Promise<MessageAdmissionOutcome>;
   lateAnswerState?: LateClarificationState;
+  // Additive: replaces the submit URL wholesale (remote Needs-you Inbox rows
+  // answer through the local backend's instance forward route). Hosts that
+  // omit it keep today's URL and behavior byte-for-byte.
+  respondTarget?: (pendingId: string) => string;
 };
 function pendingIdFromMessages(messages: readonly Message[] | null | undefined): string | null {
   const first = messages?.[0];
@@ -77,6 +81,7 @@ export function ClarificationPanelSection({
   onOutcome,
   onLateAnswer,
   lateAnswerState,
+  respondTarget,
 }: ClarificationPanelSectionProps) {
   const { t } = useTranslation();
   const disclosure = useComposerDisclosureContext();
@@ -123,6 +128,7 @@ export function ClarificationPanelSection({
       onToggleCollapse={() => setCollapsed((current) => !current)}
       questionCount={questionCount}
       resizeHandleProps={resizeHandleProps}
+      respondTarget={respondTarget}
       shortcutScopeRef={shortcutScopeRef}
     />
   );
@@ -146,6 +152,7 @@ type ClarificationPanelContentProps = {
   onToggleCollapse: () => void;
   questionCount: number;
   resizeHandleProps: Parameters<typeof ResizeHandle>[0];
+  respondTarget?: (pendingId: string) => string;
   shortcutScopeRef: RefObject<HTMLElement | null>;
 };
 
@@ -167,6 +174,7 @@ function ClarificationPanelContent({
   onToggleCollapse,
   questionCount,
   resizeHandleProps,
+  respondTarget,
   shortcutScopeRef,
 }: ClarificationPanelContentProps) {
   const { t } = useTranslation();
@@ -243,6 +251,7 @@ function ClarificationPanelContent({
             onDismiss={onCollapse}
             onCollapse={onCollapse}
             collapseContentId={contentId}
+            respondTarget={respondTarget}
           />
         </div>
       </div>

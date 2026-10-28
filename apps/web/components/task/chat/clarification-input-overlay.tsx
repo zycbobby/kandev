@@ -60,6 +60,10 @@ type ClarificationInputOverlayProps = {
   initialAnswers?: readonly ClarificationAnswer[];
   /** Shares late-message admission state across transcript and active hosts. */
   lateAnswerState?: LateClarificationState;
+  // Additive: replaces the submit URL wholesale (remote Needs-you Inbox rows
+  // answer through the local backend's instance forward route). Hosts that
+  // omit it keep today's URL and behavior byte-for-byte.
+  respondTarget?: (pendingId: string) => string;
 };
 
 type SingleQuestionMeta = {
@@ -646,6 +650,7 @@ export function ClarificationInputOverlay({
   onCollapse,
   collapseContentId,
   lateAnswerState,
+  respondTarget,
 }: ClarificationInputOverlayProps) {
   const { t } = useTranslation();
   const lateMode = mode === "late";
@@ -653,7 +658,9 @@ export function ClarificationInputOverlay({
     () => sortMessagesByQuestionIndex(resolveQuestionMessages(messages)),
     [messages],
   );
-  const group = useClarificationGroup(sortedMessages, onOutcome, onLateAnswer);
+  const group = useClarificationGroup(sortedMessages, onOutcome, onLateAnswer, {
+    respondTarget,
+  });
   const [lateStatus, setLateStatus] = useState<"idle" | "sending" | "sent" | "queued" | "error">(
     "idle",
   );
