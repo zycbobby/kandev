@@ -72,6 +72,21 @@ Some actions bind to the machine serving the panel. While a remote instance is a
 
 Arbitrary TCP port proxying across instances is not provided.
 
+## Remote questions in your Inbox
+
+With both **Multi-instance federation** and the needs-you inbox enabled, your
+local Inbox also lists the blocked questions of every enabled registered
+remote instance: one section per instance, answerable right there without
+switching panels. Answering forwards your answer to that instance through your
+local backend, the remote task resumes, and the row disappears on the next
+read. Dismissing, snoozing, and restoring a remote row are stored on that
+instance, not locally, and each row's open-task control switches the panel to
+the instance and opens the task. An unreachable remote, one that needs a
+personal access token, or one with its own inbox disabled shows a named,
+retryable state in that section instead of rows, and never affects your local
+rows or the other sections. The sidebar count includes the remote rows that
+have loaded.
+
 ## Limits
 
 - No cross-instance task view or task migration: one active instance at a time, and remote data never enters the local instance's task tables.

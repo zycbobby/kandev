@@ -527,3 +527,7 @@ same `:pendingID`.
   disclosed "3 hidden" over an enumeration of zero; the newer read wins, so the
   restore surface replaces `hidden_count` with this response's `total`. AC .37's
   equality is an identity within one response, not across two.
+
+The cross-instance instance-page contract (remote inbox fan-out envelope,
+degraded-reason closed set, and forwarding semantics) lives in
+[`cross-instance-inbox-01.md`](cross-instance-inbox-01.md).

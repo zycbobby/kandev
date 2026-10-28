@@ -1,6 +1,6 @@
 # ADR-2026-10-28-multi-instance-federation: Local backend as the multi-instance federation client
 
-**Status:** accepted
+**Status:** accepted (amended 2026-10-28)
 **Date:** 2026-10-28
 **Area:** backend
 
@@ -13,6 +13,22 @@ Users run several Kandev instances (for example one on the local machine, one on
 1. **The local backend is the federation client.** All cross-instance traffic flows through the local backend: it owns the per-owner instance registry, dials remote instances itself, and re-publishes remote events to local browser clients. The browser never talks to a remote instance directly; it talks to a local per-instance proxy port that the backend owns.
 2. **Proxy form is one dedicated local port per enabled instance** (same hostname, dynamically allocated, persisted for rebinding, falling back to `:0` on conflict). This passes the existing `httpmw.AllowedOrigin` policy unchanged — it compares hostnames only, so the same host on a different port is already allowed — and reuses the SPA's existing port-separation mechanism (`__KANDEV_API_PORT`, `resolveUrl(path, baseUrl)`, WS URL derived from the API base), so no API call site or origin/CORS policy changes. The proxy port deliberately skips the global auth middleware and self-checks the local session via the short-lived HMAC bridge capability cookie when auth is on.
 3. **Remote data isolation invariant:** remote task/session rows never enter local task tables or board caches, and every cross-instance ID, key, and dedup tuple carries instance identity — the relay dedup key is (instance, event, occurrence), following the stats-sync precedent. Remote semantic notifications are re-published only into the dedicated sidebar module (no toast, browser-native notification, or sound; local notification behavior unchanged).
+
+  **Amendment (2026-10-28, cross-instance inbox):** Decision 3's "only into the
+  dedicated sidebar module" wording is amended to also allow the local
+  Needs-you Inbox to compose answerable clarification state read from a
+  registered remote instance: the local backend fans out to the remote's own
+  clarification-inbox endpoints (the same direct-dial, PAT-injected trust face
+  as the relay), aggregates one instance page per enabled remote, and the Inbox
+  renders one answerable section per instance whose submissions forward back to
+  the remote. The notification rule itself is unchanged: remote clarification
+  occurrences still re-publish only into the sidebar notifications module with
+  no toast, browser-native notification, or sound; the relay frame is
+  additionally consumed as a re-read bump for that instance's page and nothing
+  else. The isolation invariant is unchanged and still binding: remote rows
+  never enter local task tables, board caches, or clarification sidecar tables;
+  the composed remote page is a computed view (change `surface-remote-inbox-bundles`,
+  capability `cross-instance-inbox`).
 
 ## Consequences
 

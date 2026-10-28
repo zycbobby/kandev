@@ -187,6 +187,28 @@ the caller-self filter in the MCP path does not apply to it: an operator sees
 every answerable bundle in the workspace, including ones raised by the agent
 they are watching.
 
+### Remote instance-page triggers (REQ-UI-NEEDS-YOU-INBOX-002)
+
+The remote surface reuses the same "re-read is the contract" discipline, gated
+to `needsYouInbox && multiInstance && activeInstanceId === local`: mount or
+instance-registry change, a relayed `session.clarification_requested`
+occurrence (bumps only `payload.instance_id`), foreground resume, the bounded
+60s re-read while the tab is visible, per-instance manual retry, and each
+instance's own snooze-expiry timer (same 5s floor + 1s buffer). One
+`NeedsYouInboxRefreshCoordinator` per instance (scopeKey carries the instance
+id) keeps failure isolation per remote; a degraded 200 is a successful read of
+instance-scoped state and never feeds the retry ladder. While the panel views
+a remote instance the fan-out is suspended: that instance's own Inbox is the
+local page there.
+
+**Composed count (count-known).** The sidebar badge and the tab strip read the
+composed values: local page count plus the sum over landed remote instance
+pages. An instance contributes only once its page has landed; a loading or
+degraded instance contributes zero (the failed-inbox count-known precedent),
+so the badge never reports rows the composed view does not list. Boot
+hydration continues to seed only the local page; remote contributions arrive
+with their own page responses.
+
 ## Failure and recovery
 
 **Four outcomes, and the Inbox must be able to tell them apart.** Nothing is

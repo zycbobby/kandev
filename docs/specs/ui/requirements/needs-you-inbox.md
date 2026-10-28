@@ -43,6 +43,8 @@ rather than an edge case, and must always name what it is not counting.
 
 ## Requirements
 
+Remote exemptions to AC .5/.12/.20/.40: cross-instance-inbox.md.
+
 ### REQ-UI-NEEDS-YOU-INBOX-001: Needs-you Inbox
 
 **Intent:** Give an operator one workspace-scoped place that names every
@@ -314,6 +316,7 @@ so that a blocked agent is never invisible and I can unblock it in place.
 - **AC-UI-NEEDS-YOU-INBOX-001.30:** An end-to-end specification shall cover
   listing an answerable bundle, expanding it, answering it, and observing the
   row removed and the task resumed without navigation.
+
 
 ## Out of scope
 

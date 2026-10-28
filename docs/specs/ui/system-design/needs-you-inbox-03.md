@@ -95,3 +95,18 @@ requirements under "Out of scope".
 Because the tab strip is gone, the deck's empty-state copy pointing the
 operator at "the other two tabs" has nowhere to point; D2 states the copy for
 the one-bucket world instead.
+
+## Remote section copy (REQ-UI-NEEDS-YOU-INBOX-002)
+
+Each enabled registered instance renders one section below the local list:
+the registry instance name as its heading (domain data, never translated), the
+shared truncation notice when that instance's page is capped, one empty-state
+sentence when a landed page holds no rows, and a degraded state that names the
+instance and maps its closed-set reason to one sentence each: unreachable
+("cannot be reached right now"), unauthorized (points at registering a
+personal access token), inbox-disabled ("does not expose its needs-you
+inbox"), and error ("could not be read"). The degraded state offers the shared
+Retry label and never renders an answer form. Rows carry an instance chip (the
+instance name) and the shared open-task, dismiss, snooze, and restore
+affordances with identical copy to local rows; remote rows never offer the
+late-answer fallback.
