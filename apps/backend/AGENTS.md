@@ -59,9 +59,8 @@ apps/backend/
 │   │   ├── repository/   # Database access (SQLite)
 │   │   └── service/      # Task business logic
 │   ├── runs/             # Generic run queue: models, repository, service, scheduler
-│   ├── office/           # Autonomous agent management (agents, approvals, channels, config, configsync,
-│   │                     # costs, dashboard, infra, labels, onboarding, projects, repository, runtime,
-│   │                     # routines, routing, scheduler, service, shared, skills, workspaces)
+│   ├── office/           # Autonomous agent management (agents, approvals, channels, config, costs,
+│   │                     # dashboards, routines, routing, scheduler, workspaces; see internal/office/AGENTS.md)
 │   ├── events/           # Event bus for internal pub/sub
 │   ├── gateway/          # WebSocket gateway, including task-owned LSP lease lifecycle
 │   ├── github/           # GitHub API integration (PRs, reviews, webhooks)
@@ -71,6 +70,7 @@ apps/backend/
 │   ├── integrations/     # Shared shapes for third-party integrations
 │   │   ├── healthpoll/   # Reusable 90s auth-health Poller (used by jira, linear)
 │   │   └── secretadapter/ # Upsert-style adapter over secrets.SecretStore
+│   ├── instances/        # Multi-instance federation: registry, health poller, per-instance proxy, relay (see its AGENTS.md)
 │   ├── i18n/             # Localization for backend-rendered browser/share artifacts
 │   ├── jira/             # Jira/Atlassian Cloud integration (config, REST client, poller)
 │   ├── kubernetes/       # Task-owned Pod/PVC diagnostics; session stop preserves compute. See docs/specs/executors/system-design/kubernetes-task-pod.md for ownership, credentials, and recovery invariants.

@@ -69,6 +69,10 @@ See [docs/features.md](docs/features.md) for the full feature inventory, includi
 
 **Office mode** is an experimental autonomy layer for persistent agent teams, disabled by default in production. It includes agent roles and permissions, dashboards, inbox/approvals, routines, task delegation, skills, memory, cost tracking, budgets, and workspace config sync. The [Office guide](docs/public/office.md) covers explicit enablement, setup, and evaluation of the current implementation; Office is not yet a stable production contract.
 
+### In progress: Multi-instance federation
+
+**Multi-instance federation** is an experimental capability for operating several Kandev installs from a single panel, disabled by default in every shipped profile. Register remote instances in Settings, switch the panel through the sidebar instance picker (full reload, one active instance at a time), and receive remote session notifications in a sidebar module with unread badges. The [multi-instance guide](docs/public/multi-instance.md) covers enablement, credentials, security prerequisites, and current limits such as degraded host-bound actions on remote tasks.
+
 ## Integrations
 
 <p align="center">
