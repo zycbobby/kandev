@@ -219,6 +219,9 @@ func TestStoresServicesSweepReachesFullTotalAfterStorageAdmission(t *testing.T) 
 	if services.PluginsCleanup != nil {
 		t.Cleanup(func() { _ = services.PluginsCleanup() })
 	}
+	if services.Workflow != nil {
+		t.Cleanup(func() { _ = services.Workflow.Close() })
+	}
 
 	// message-queue and delivery are recorded in production by
 	// provideOrchestrator and startAgentInfrastructure respectively; record
