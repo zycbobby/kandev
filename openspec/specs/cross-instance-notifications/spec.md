@@ -55,6 +55,8 @@ The web UI SHALL surface relayed notifications in a sidebar notifications module
 ### Requirement: 提醒方式限定
 Relayed remote notifications SHALL NOT trigger toasts, browser native notifications, or sound; the local instance's own notification behavior SHALL remain unchanged by this capability.
 
+> **修订预告（2026-10-28）:** 本条描述的是当前已发布行为，不是终态契约。已裁定的新方向是远端与本地事件使用同一套通知逻辑：relay 恢复的 occurrence 携带实例 origin 标签进入与本地事件相同的 shared notification pipeline（`internal/notifications`），按事件类型同规则（订阅了才推送、默认安静、查看抑制、点击走标准 instance-switch 跳转）；侧边栏专用通知模块在终态移除，relay store 只保留 (instance, event, occurrence) 去重与恢复职责。该终态由后续变更 needs-you-inbox-waiting-rows（REQ-UI-NEEDS-YOU-INBOX-002~004）实现并随其修订本条与「侧边栏通知模块」要求；在此之前本条仍约束当前行为。
+
 #### Scenario: 远端事件不弹打扰
 - **WHEN** a relayed remote event arrives while the user is working in the panel
 - **THEN** no toast, browser notification, or sound is produced for it
