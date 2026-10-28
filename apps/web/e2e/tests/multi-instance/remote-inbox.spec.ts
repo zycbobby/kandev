@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "../../fixtures/test-base";
 import type { ApiClient } from "../../helpers/api-client";
 import { waitForAgentMessage, waitForSessionState } from "../../helpers/session";
+import { waitForHttp } from "../../helpers/causal-waits";
 import {
   bootRemoteBackend,
   remoteBackendPortInputs,
@@ -210,6 +211,23 @@ test.describe("remote needs-you inbox", () => {
         "no local sidecar row may exist for a remote bundle",
       ).toHaveLength(0);
 
+      const hiddenPanel = section.getByTestId("needs-you-inbox-hidden-panel");
+      await hiddenPanel.getByRole("button", { name: "Show hidden" }).click();
+      const hiddenRow = hiddenPanel.getByTestId("needs-you-inbox-hidden-row");
+      await expect(hiddenRow).toHaveCount(1);
+      await hiddenRow.getByRole("button", { name: "Restore" }).click();
+      await expect(snoozeRow).toBeVisible({ timeout: 30_000 });
+      await expect
+        .poll(async () => {
+          const response = await seed.client.rawRequest(
+            "GET",
+            `/api/v1/clarification-inbox/hidden?workspace_id=${seed.workspaceId}`,
+          );
+          const body = (await response.json()) as { bundles: Array<{ task_id: string }> };
+          return body.bundles.some((row) => row.task_id === snoozeTask.taskId);
+        })
+        .toBe(false);
+
       // --- 图5: kill B; the section degrades, recovers after restart+Retry ---
       await seedRemoteClarification(seed, RECOVER_TASK_TITLE);
       await testPage.goto("/needs-you-inbox");
@@ -230,6 +248,72 @@ test.describe("remote needs-you inbox", () => {
       await expect(
         section.getByTestId("needs-you-inbox-row").filter({ hasText: RECOVER_TASK_TITLE }),
       ).toBeVisible({ timeout: 30_000 });
+    } finally {
+      await remote?.dispose();
+    }
+  });
+
+  test("remote answer remains retryable after disconnect and converges after a competing answer", async ({
+    testPage,
+    backend,
+    apiClient,
+  }) => {
+    test.setTimeout(240_000);
+    const { portOffset, parallelSlot } = remoteBackendPortInputs(backend.port);
+    let remote: RemoteBackendContext | undefined;
+    try {
+      remote = await bootRemoteBackend({ localBaseUrl: backend.baseUrl, portOffset, parallelSlot });
+      const seed = await seedRemoteBackendTask(remote, "Remote answer recovery fixture");
+      await seedRemoteClarification(seed, "Remote answer to retry");
+      const instanceId = await registerInstance(apiClient, remote.baseUrl);
+      await testPage.goto("/needs-you-inbox");
+      const section = testPage.getByTestId("remote-inbox-section");
+      const retryRow = section.getByTestId("needs-you-inbox-row").filter({
+        hasText: "Remote answer to retry",
+      });
+      await expect(retryRow).toBeVisible({ timeout: 30_000 });
+      await retryRow.getByTestId("needs-you-inbox-row-toggle").click();
+      const overlay = retryRow.getByTestId("clarification-overlay");
+      const option = overlay.getByTestId("clarification-option").filter({ hasText: "PostgreSQL" });
+      await remote.kill();
+      const failedResponse = waitForHttp(testPage, "POST", /\/clarification\/[^/]+\/respond$/);
+      await option.click();
+      expect((await failedResponse).status()).toBe(502);
+      await expect(overlay.getByTestId("clarification-submit-error")).toBeVisible();
+      await expect(option).toHaveAttribute("data-selected", "true");
+      await expect(overlay.getByTestId("clarification-retry")).toBeEnabled();
+      await remote.restart();
+
+      const raceTask = await seedRemoteClarification(seed, "Remote competing answer");
+      await testPage.goto("/needs-you-inbox");
+      const raceRow = section.getByTestId("needs-you-inbox-row").filter({
+        hasText: "Remote competing answer",
+      });
+      await expect(raceRow).toBeVisible({ timeout: 30_000 });
+      await raceRow.getByTestId("needs-you-inbox-row-toggle").click();
+      const routePattern = `**/api/v1/instances/${instanceId}/clarification/*/respond`;
+      await testPage.route(
+        routePattern,
+        async (route) => {
+          const pendingId = new URL(route.request().url()).pathname.split("/").at(-2);
+          const winner = await seed.client.rawRequest(
+            "POST",
+            `/api/v1/clarification/${pendingId}/respond`,
+            route.request().postDataJSON(),
+          );
+          expect(winner.status).toBe(200);
+          await route.continue();
+        },
+        { times: 1 },
+      );
+      const losingResponse = waitForHttp(testPage, "POST", /\/clarification\/[^/]+\/respond$/);
+      await raceRow.getByTestId("clarification-option").filter({ hasText: "PostgreSQL" }).click();
+      const response = await losingResponse;
+      expect([200, 409]).toContain(response.status());
+      if (response.status() === 200) expect((await response.json()).claimed).toBe(false);
+      await expect(raceRow).toHaveCount(0, { timeout: 30_000 });
+      await expect(testPage.getByTestId("clarification-submit-error")).toHaveCount(0);
+      await waitForAgentMessage(seed.client, raceTask.sessionId, "You answered:", 30_000);
     } finally {
       await remote?.dispose();
     }
