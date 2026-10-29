@@ -323,16 +323,21 @@ func (r *Repository) applyEnvelope(ctx context.Context, env *Envelope, reconcile
 	return result, nil
 }
 
-// inventoryChunkSize bounds each NOT IN clause well under both engines'
-// bound-parameter ceilings; categories larger than one chunk chain several
-// clauses.
-const inventoryChunkSize = 500
+// inventoryChunkSize bounds one uid page and one delete batch, so every
+// statement the reconcile executes binds a fixed number of parameters
+// (at most 1+inventoryChunkSize) regardless of how large the inventory is.
+// The limit is per statement, not per clause: chaining clauses inside one
+// statement would still exceed a driver's bound-parameter ceiling.
+var inventoryChunkSize = 500
 
 // deleteOutsideInventory removes, per category, the source's mirror rows the
-// inventory does not list. An empty category inventory deletes the whole
-// category for that source. Cascades inside the mirror set remove children
-// of deleted parents; the per-category passes still run so rows whose
-// parent survived are reconciled too.
+// inventory does not list. The inventory never enters a SQL statement: stored
+// uids are read back in uid-cursor pages, differenced in Go against the
+// inventory set, and deleted in batches, so every statement binds a bounded
+// number of parameters. An empty category inventory deletes the whole category
+// for that source. All statements run in the caller's transaction. Cascades
+// inside the mirror set remove children of deleted parents; the per-category
+// passes still run so rows whose parent survived are reconciled too.
 func deleteOutsideInventory(tx *sqlx.Tx, source string, inv *Inventory) (int64, error) {
 	categories := []struct {
 		table string
@@ -349,25 +354,89 @@ func deleteOutsideInventory(tx *sqlx.Tx, source string, inv *Inventory) (int64, 
 	}
 	var deleted int64
 	for _, category := range categories {
-		query := "DELETE FROM " + category.table + " WHERE source_instance = ?"
-		args := []any{source}
-		for start := 0; start < len(category.uids); start += inventoryChunkSize {
-			end := start + inventoryChunkSize
-			if end > len(category.uids) {
-				end = len(category.uids)
-			}
-			query += " AND uid NOT IN (" + strings.TrimRight(strings.Repeat("?,", end-start), ",") + ")"
-			for _, uid := range category.uids[start:end] {
-				args = append(args, uid)
-			}
-		}
-		result, err := tx.Exec(tx.Rebind(query), args...)
+		count, err := deleteCategoryOutsideInventory(tx, category.table, source, uidSet(category.uids))
 		if err != nil {
-			return 0, fmt.Errorf("reconcile %s: %w", category.table, err)
+			return 0, err
+		}
+		deleted += count
+	}
+	return deleted, nil
+}
+
+// uidSet collapses the inventory list into a lookup set; duplicate uids are
+// idempotent by construction.
+func uidSet(uids []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(uids))
+	for _, uid := range uids {
+		set[uid] = struct{}{}
+	}
+	return set
+}
+
+// deleteCategoryOutsideInventory deletes the source's rows in one category
+// whose uid keep does not list. The uid cursor only moves forward over values
+// already read, so deleting rows from a processed page cannot skip a later
+// page. An empty keep means the inventory lists nothing for this category and
+// the whole category goes.
+func deleteCategoryOutsideInventory(tx *sqlx.Tx, table, source string, keep map[string]struct{}) (int64, error) {
+	if len(keep) == 0 {
+		result, err := tx.Exec(tx.Rebind("DELETE FROM "+table+" WHERE source_instance = ?"), source)
+		if err != nil {
+			return 0, fmt.Errorf("reconcile %s: %w", table, err)
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
-			return 0, fmt.Errorf("reconcile %s rows affected: %w", category.table, err)
+			return 0, fmt.Errorf("reconcile %s rows affected: %w", table, err)
+		}
+		return affected, nil
+	}
+	var deleted int64
+	after := ""
+	for {
+		var page []string
+		query := tx.Rebind("SELECT uid FROM " + table + " WHERE source_instance = ? AND uid > ? ORDER BY uid LIMIT ?")
+		if err := tx.Select(&page, query, source, after, inventoryChunkSize); err != nil {
+			return 0, fmt.Errorf("list %s uids: %w", table, err)
+		}
+		if len(page) == 0 {
+			return deleted, nil
+		}
+		after = page[len(page)-1]
+		stale := make([]string, 0, len(page))
+		for _, uid := range page {
+			if _, ok := keep[uid]; !ok {
+				stale = append(stale, uid)
+			}
+		}
+		count, err := deleteUIDBatches(tx, table, source, stale)
+		if err != nil {
+			return 0, err
+		}
+		deleted += count
+	}
+}
+
+// deleteUIDBatches deletes uids in inventoryChunkSize batches, so each
+// statement binds at most 1+inventoryChunkSize parameters. An empty uid list
+// executes nothing.
+func deleteUIDBatches(tx *sqlx.Tx, table, source string, uids []string) (int64, error) {
+	var deleted int64
+	for start := 0; start < len(uids); start += inventoryChunkSize {
+		end := start + inventoryChunkSize
+		if end > len(uids) {
+			end = len(uids)
+		}
+		query, args, err := sqlx.In("DELETE FROM "+table+" WHERE source_instance = ? AND uid IN (?)", source, uids[start:end])
+		if err != nil {
+			return 0, fmt.Errorf("reconcile %s: %w", table, err)
+		}
+		result, err := tx.Exec(tx.Rebind(query), args...)
+		if err != nil {
+			return 0, fmt.Errorf("reconcile %s: %w", table, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("reconcile %s rows affected: %w", table, err)
 		}
 		deleted += affected
 	}
