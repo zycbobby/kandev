@@ -2,9 +2,13 @@ package statsync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"testing"
+
+	"github.com/kandev/kandev/internal/testutil"
 )
 
 // withInventoryChunkSize injects a small page/delete-batch size so a handful of
@@ -264,6 +268,89 @@ func TestApplyReconcileLeavesOtherSourcesIntact(t *testing.T) {
 	for _, table := range []string{"statsync_tasks", "statsync_sessions"} {
 		if got := countRows(t, db, table); got != 2 {
 			t.Fatalf("%s has %d rows, want 2 (remote-1 and remote-2 rows)", table, got)
+		}
+	}
+}
+
+func TestIngestHandlerAcceptsReconcileAtProductionInventoryScale(t *testing.T) {
+	router := newHandlerTestRouter(t)
+	delta := ingestBody(t, func(env *Envelope) {
+		env.Messages = append(env.Messages, MessageRow{
+			UID: "remote-1:msg-orphan", SessionUID: "remote-1:sess-1",
+			AuthorType: "user", Type: "text", CreatedAt: "2026-10-11T09:05:02Z",
+		})
+	})
+	if rec := postIngest(router, delta, "test-secret"); rec.Code != http.StatusOK {
+		t.Fatalf("delta push status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	reconcile := ingestBody(t, func(env *Envelope) {
+		env.Mode = ModeReconcile
+		inv := inventoryFromEnvelope(env)
+		for i := 0; i < 32766; i++ {
+			inv.Messages = append(inv.Messages, fmt.Sprintf("remote-1:bulk-%d", i))
+		}
+		env.Inventory = inv
+	})
+	rec := postIngest(router, reconcile, "test-secret")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reconcile push status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Deleted int64 `json:"deleted"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Deleted != 1 {
+		t.Fatalf("deleted = %d, want 1 (the orphan)", response.Deleted)
+	}
+}
+
+// TestReconcileDeletesOutsideInventoryPostgres pins the dialect-sensitive
+// paging and IN-expansion path against a real PostgreSQL server; it skips when
+// KANDEV_TEST_POSTGRES_DSN is unset.
+func TestReconcileDeletesOutsideInventoryPostgres(t *testing.T) {
+	dsn := testutil.PostgresDSNFromEnv(t)
+	db := testutil.OpenIsolatedPostgres(t, dsn)
+	seedCoreAnalyticsFixture(t, db)
+	repo := newTestRepository(t, db)
+	withInventoryChunkSize(t, 2)
+	ctx := context.Background()
+
+	env := validEnvelope()
+	for i := range env.Tasks {
+		env.Tasks[i].ResolvedWorkspaceID = "ws-local"
+	}
+	if _, err := repo.ApplyDelta(ctx, env); err != nil {
+		t.Fatalf("apply base payload: %v", err)
+	}
+	orphan := &Envelope{SchemaVersion: SchemaVersion, SourceInstance: "remote-1", Mode: ModeDelta}
+	orphan.Messages = []MessageRow{{
+		UID: "remote-1:msg-orphan", SessionUID: "remote-1:sess-1",
+		AuthorType: "user", Type: "text", CreatedAt: "2026-10-11T09:05:02Z",
+	}}
+	if _, err := repo.ApplyDelta(ctx, orphan); err != nil {
+		t.Fatalf("apply orphan payload: %v", err)
+	}
+
+	reconcile := &Envelope{SchemaVersion: SchemaVersion, SourceInstance: "remote-1",
+		Mode: ModeReconcile, Inventory: inventoryFromEnvelope(env)}
+	result, err := repo.ApplyReconcile(ctx, reconcile)
+	if err != nil {
+		t.Fatalf("apply reconcile: %v", err)
+	}
+	if got := countRows(t, db, "statsync_messages"); got != 1 {
+		t.Fatalf("messages after reconcile = %d, want 1 (inventory row kept, orphan deleted)", got)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("Deleted = %d, want 1 (only the orphan)", result.Deleted)
+	}
+	for _, table := range []string{
+		"statsync_tasks", "statsync_sessions", "statsync_turns", "statsync_commits",
+	} {
+		if got := countRows(t, db, table); got != 1 {
+			t.Fatalf("%s has %d rows, want 1", table, got)
 		}
 	}
 }
