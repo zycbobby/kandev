@@ -101,15 +101,24 @@ The local /stats page SHALL render merged statistics per workspace mapping: anal
 
 ### Requirement: 周期性全量对账处理远端删除
 
-Periodically (every N successful pushes), the sync script SHALL include a full ID inventory of the source; the local instance SHALL delete mirrored rows of that source that are absent from the inventory so remote deletions converge within one reconciliation cycle.
+Periodically (every N successful pushes), the sync script SHALL include a full ID inventory of the source; the local instance SHALL delete mirrored rows of that source that are absent from the inventory so remote deletions converge within one reconciliation cycle. The deletion SHALL complete for any inventory size the ingest endpoint accepts: the local instance MUST NOT fail a reconciliation because the inventory exceeds the database's bound-parameter limit for a single SQL statement, and every statement it executes MUST keep a bounded parameter count that is independent of the inventory length.
 
 #### Scenario: 远端删除在下一个对账周期收敛
 - **WHEN** a task is deleted on the remote instance and the next inventory-bearing push completes
 - **THEN** its mirrored rows are removed locally and merged statistics no longer count it
 
+#### Scenario: 对账清单规模超过单条语句的参数上限
+- **WHEN** the inventory lists more uids than one SQL statement can bind (for example about 186000 message uids against SQLite's 32766-parameter limit)
+- **THEN** the reconcile still deletes exactly the mirrored rows of that source that are absent from the inventory, keeps the rows the inventory lists, and answers 200 with the deletion count
+
+#### Scenario: 空 inventory 删除整个类别
+- **WHEN** a reconcile push carries an empty inventory for one category
+- **THEN** every mirrored row of that source in that category is deleted, and the same applies to categories the inventory omits
 
 ## Known Failure Modes
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Boot fails during another store's table-rebuild migration with `error in view v_stats_tasks: no such table: main.tasks` | Views over core tables created during statsync schema init run before later stores DROP/rebuild their tables, leaving the view referencing a missing table | Create views only after every store schema has migrated; `statsync.EnsureViews` runs at the end of boot and rebuilds them idempotently on each start |
+| 对账返回 500，日志为 `reconcile <table>: too many SQL variables`，远端删除始终不收敛 | 把全部 chunk 分块拼进同一条 DELETE，绑定参数 = 1 + inventory 长度，超过 SQLite 的 32766 上限（PostgreSQL 亦有同类按语句计的限制） | 按有界集合分语句执行删除；不得把整份 inventory 绑定进单条语句 |
+| 分块删除后仍删掉了 inventory 内的行 | 对每个 chunk 单独执行 `uid NOT IN (chunk)`，每条语句看不到其它分段的 uid | 删除条件必须对全量 inventory 成立（临时表或 Go 侧差集），不能简单分块 |
