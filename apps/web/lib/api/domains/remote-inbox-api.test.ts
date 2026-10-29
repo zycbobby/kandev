@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  listRemoteClarificationInbox,
-  listRemoteHiddenClarificationInbox,
+  listRemoteNeedsYouInbox,
+  listRemoteHiddenNeedsYouInbox,
   respondRemoteClarification,
   dismissRemoteClarificationBundle,
   snoozeRemoteClarificationBundle,
@@ -25,34 +25,34 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   fetchMock.mockReset();
-  fetchMock.mockResolvedValue(jsonResponse({ instance_id: "i9", status: "ok", bundles: [] }));
+  fetchMock.mockResolvedValue(jsonResponse({ instance_id: "i9", status: "ok", rows: [] }));
   globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
 });
 
 describe("remote-inbox-api — local base resolution", () => {
-  it("reads the instance page against the local backend base", async () => {
-    await listRemoteClarificationInbox("i9");
+  it("reads the merged instance page against the local backend base", async () => {
+    await listRemoteNeedsYouInbox("i9");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe("https://local.test/api/v1/instances/i9/clarification-inbox");
+    expect(String(url)).toBe("https://local.test/api/v1/instances/i9/needs-you-inbox");
   });
 
-  it("reads the hidden page against the local backend base", async () => {
-    await listRemoteHiddenClarificationInbox("i9");
+  it("reads the merged hidden page against the local backend base", async () => {
+    await listRemoteHiddenNeedsYouInbox("i9");
     const [url] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe("https://local.test/api/v1/instances/i9/clarification-inbox/hidden");
+    expect(String(url)).toBe("https://local.test/api/v1/instances/i9/needs-you-inbox/hidden");
   });
 
   it("an explicit caller baseUrl still wins", async () => {
-    await listRemoteClarificationInbox("i9", { baseUrl: "https://explicit.test" });
+    await listRemoteNeedsYouInbox("i9", { baseUrl: "https://explicit.test" });
     const [url] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe("https://explicit.test/api/v1/instances/i9/clarification-inbox");
+    expect(String(url)).toBe("https://explicit.test/api/v1/instances/i9/needs-you-inbox");
   });
 
-  it("encodes instance and pending identifiers into the path", async () => {
-    await listRemoteClarificationInbox("inst /1");
+  it("encodes instance identifiers into the path", async () => {
+    await listRemoteNeedsYouInbox("inst /1");
     const [url] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe("https://local.test/api/v1/instances/inst%20%2F1/clarification-inbox");
+    expect(String(url)).toBe("https://local.test/api/v1/instances/inst%20%2F1/needs-you-inbox");
   });
 });
 

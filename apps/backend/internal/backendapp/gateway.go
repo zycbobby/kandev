@@ -38,6 +38,50 @@ import (
 	ws "github.com/kandev/kandev/pkg/websocket"
 )
 
+// manualStepWaitNotifier is the notification service surface the manual-step
+// wait wiring needs. A local interface keeps the bus payload mapping testable
+// without constructing the concrete service.
+type manualStepWaitNotifier interface {
+	HandleManualStepWait(ctx context.Context, taskID, sessionID, occurrenceID, actorKind, actorID string)
+}
+
+// manualStepWaitOccurrence maps a task.manual_step_entered bus payload onto
+// the notification service's arguments. A payload missing its task or
+// occurrence identity cannot be deduplicated downstream, so it is dropped
+// rather than delivered.
+func manualStepWaitOccurrence(data map[string]interface{}) (taskID, sessionID, occurrenceID, actorKind, actorID string, ok bool) {
+	taskID, _ = data["task_id"].(string)
+	sessionID, _ = data["session_id"].(string)
+	occurrenceID, _ = data["occurrence_id"].(string)
+	actorKind, _ = data["actor_kind"].(string)
+	actorID, _ = data["actor_id"].(string)
+	if taskID == "" || occurrenceID == "" {
+		return "", "", "", "", "", false
+	}
+	return taskID, sessionID, occurrenceID, actorKind, actorID, true
+}
+
+// subscribeManualStepWaitNotifications routes the orchestrator's manual-step
+// wait episode events into the shared notification pipeline, so a task that
+// begins waiting for the operator notifies exactly like a clarification.
+func subscribeManualStepWaitNotifications(eventBus bus.EventBus, notifier manualStepWaitNotifier, log *logger.Logger) {
+	_, err := eventBus.Subscribe(events.TaskManualStepEntered, func(ctx context.Context, event *bus.Event) error {
+		data, ok := event.Data.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		taskID, sessionID, occurrenceID, actorKind, actorID, eligible := manualStepWaitOccurrence(data)
+		if !eligible {
+			return nil
+		}
+		notifier.HandleManualStepWait(ctx, taskID, sessionID, occurrenceID, actorKind, actorID)
+		return nil
+	})
+	if err != nil {
+		log.Error("Failed to subscribe to manual step wait notifications", zap.Error(err))
+	}
+}
+
 // scriptServiceAdapter adapts the task service to scripts.ScriptService.
 type scriptServiceAdapter struct {
 	taskSvc *taskservice.Service
@@ -482,6 +526,8 @@ func provideGateway(
 		if err != nil {
 			log.Error("Failed to subscribe to office inbox notifications", zap.Error(err))
 		}
+
+		subscribeManualStepWaitNotifications(eventBus, notificationSvc, log)
 	}
 
 	// Wire the task-lifecycle cascade: terminals are PTYs and DB rows;

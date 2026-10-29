@@ -1192,7 +1192,7 @@ func startGatewayAndServe(
 		return false
 	}
 
-	stopInstanceRelays := initInstanceRelays(ctx, cfg, repos, services, gateway.Hub, log)
+	stopInstanceRelays := initInstanceRelays(ctx, cfg, repos, services, notificationSvc, log)
 	addCleanup(func() error { stopInstanceRelays(); return nil })
 	if services.InstanceRelays != nil {
 		services.InstanceRelays.startRetention(maintenance.ForPool(dbPool))

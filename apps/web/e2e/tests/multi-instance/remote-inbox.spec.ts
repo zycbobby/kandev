@@ -116,6 +116,11 @@ test.describe("remote needs-you inbox", () => {
         parallelSlot,
       });
       const seed = await seedRemoteBackendTask(remote, "Remote inbox fixture task");
+      // The fixture task's completed turn parks it in the kanban template's
+      // Review step, itself a manual step: with the merged remote read that
+      // wait would count alongside the spec's own clarification rows, so
+      // complete the fixture task to keep the one-question-row invariant.
+      await seed.client.updateTaskState(seed.task.id, "COMPLETED");
       const answerTask = await seedRemoteClarification(seed, ANSWER_TASK_TITLE);
       const instanceId = await registerInstance(apiClient, remote.baseUrl);
 

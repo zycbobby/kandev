@@ -27,20 +27,24 @@ Users run several Kandev instances (for example one on the local machine, one on
   or clarification sidecar tables; the composed remote page is a computed view
   (change `surface-remote-inbox-bundles`, capability `cross-instance-inbox`).
 
-  **Revision (2026-10-28, unified notifications + live-read question rows):**
+  **Revision (2026-10-28, unified notifications + live-read rows):**
   the "re-published only into the dedicated sidebar module (no toast, browser
   native notification, or sound)" clause no longer describes the terminal
   state. The decided end state is one notification logic for local and relayed
   events: relay-recovered occurrences carry an instance origin tag into the
   same shared notification pipeline as local events (`internal/notifications`),
-  with per-kind subscription, quiet by default, view suppression, and the
-  standard instance-switch click path; the dedicated sidebar notifications
-  module is removed at the end state, and the relay store retains only the
+  with the same per-kind subscriptions, quiet-by-default behavior, view
+  suppression, and provider set as a local event of that kind, and an origin
+  label but no open action on the notification (navigation to a relayed task
+  goes through its Inbox row; informational relayed kinds are reached by
+  manually switching to the origin instance); the dedicated sidebar
+  notifications module is removed, and the relay store retains only the
   (instance, event, occurrence) deduplication and recovery ledger. That end
-  state is realized by the follow-up needs-you-inbox-waiting-rows change
-  (REQ-UI-NEEDS-YOU-INBOX-002 through -004); until it lands, the quiet
-  sidebar-module behavior remains the shipped state, and neither this decision
-  nor the cross-instance-inbox change may be cited as making it permanent. The
+  state is realized by the needs-you-inbox-waiting-rows change
+  (REQ-UI-NEEDS-YOU-INBOX-003 through -005), whose relayed set is v2
+  (`session.turn_finished`, `session.clarification_requested`,
+  `office.inbox_item`, `task.manual_step_entered`); the quiet
+  sidebar-module behavior is retired with it. The
   data-isolation invariant is unchanged: remote rows are read live and never
   enter local task tables.
 
@@ -50,7 +54,7 @@ Users run several Kandev instances (for example one on the local machine, one on
 - Adding the capability required no API-client rewrite; the SPA switches instances by full-page reload with the API/WS base pointed at the instance's proxy port (single active instance model).
 - Costs: one listening port per enabled instance (conflict handling and degraded health state required), and host-bound surfaces (session port previews, desktop-privileged open-in-editor/folder actions) cannot cross instances and degrade with an explicit unavailable-for-remote affordance.
 - The capability ships default-off behind `features.multiInstance` in every shipped profile and is graduated per the runtime-feature-flags procedure. Health probes carry no credentials, so an auth-on remote reports unreachable until probes learn to send the PAT (recorded in the multi-instance-management spec's Known Failure Modes).
-- The durable behavioral contract lives in `openspec/specs/multi-instance-management/spec.md` and `openspec/specs/cross-instance-notifications/spec.md`; no separate `docs/specs/` product system applies, because local notification, board, and auth behaviors are unchanged and the new capabilities are fully owned by the two OpenSpec specs. Revision (2026-10-28): the cross-instance-inbox and needs-you-inbox-waiting-rows extensions each change one local surface, the Inbox row set and the notification presentation path, so their product contracts live in `docs/specs/ui/` (`cross-instance-inbox.md` now; the waiting-rows requirement IDs REQ-UI-NEEDS-YOU-INBOX-002 through -004 arrive with that follow-up change); the two OpenSpec specs remain authoritative for federation transport, dedup, and occurrence recovery.
+- The durable behavioral contract lives in `openspec/specs/multi-instance-management/spec.md` and `openspec/specs/cross-instance-notifications/spec.md`; no separate `docs/specs/` product system applies, because local notification, board, and auth behaviors are unchanged and the new capabilities are fully owned by the two OpenSpec specs. Revision (2026-10-28): the cross-instance-inbox and needs-you-inbox-waiting-rows extensions each change one local surface, the Inbox row set and the notification presentation path, so their product contracts live in `docs/specs/ui/` (`cross-instance-inbox.md` now; the waiting-rows requirements REQ-UI-NEEDS-YOU-INBOX-003 through -005 live in `needs-you-inbox-waiting-rows.md`); the two OpenSpec specs remain authoritative for federation transport, dedup, and occurrence recovery.
 
 ## Alternatives Considered
 

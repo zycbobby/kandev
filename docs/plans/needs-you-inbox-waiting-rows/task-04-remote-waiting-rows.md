@@ -1,7 +1,7 @@
 ---
 id: "04-remote-waiting-rows"
 title: "Remote waiting rows through the landed composition"
-status: pending
+status: done
 wave: 4
 depends_on: ["02-local-waiting-rows", "03-unified-notification-bridge"]
 plan: "plan.md"
@@ -19,11 +19,13 @@ system_design:
 
 ## Summary
 
-Extend the landed per-instance Inbox composition with one more remote read:
+Move the landed per-instance Inbox composition onto the merged remote read:
 the aggregate `needs-you-inbox` endpoint that task 02 introduced locally
 becomes remote API surface, so a remote running this version reports its own
-manual-step waits. Rows render with the origin label, resolve live, and
-degrade per instance when unreachable or too old.
+manual-step waits. The remote controller's question-only read is replaced by
+that merged read (one fan-out per instance page; the question-only client
+functions became dead and were removed), rows render with the origin label,
+resolve live, and degrade per instance when unreachable or too old.
 
 ## In scope
 
@@ -96,4 +98,38 @@ Tasks 02 and 03, and the landed remote-questions change.
 
 ## Results
 
-Pending.
+Done. `remoteinbox.Client.ReadNeedsYou`/`ReadNeedsYouHidden`
+(`apps/backend/internal/instances/remoteinbox/client.go`) discover the
+remote's credential-visible workspaces and read the remote's own aggregated
+endpoint (`/api/v1/needs-you-inbox?workspace_id=<id>&limit=<n>`, plus
+`/hidden`) once per workspace, merging by (reference time, row id), stamping
+instance and origin-workspace identity, and mapping 404 to inbox-disabled
+and 401/403 to unauthorized; the per-workspace fetch skeleton is shared with
+the clarification path so transport behavior cannot drift. The local forward
+routes `GET /api/v1/instances/:id/needs-you-inbox` (+`/hidden`,
+`apps/backend/internal/backendapp/instance_inbox_routes.go`) wrap one
+fan-out per request in `instanceNeedsYouPageEnvelope` with the same limit
+validation and degraded-200 contract.
+
+The SPA's remote controller reads the new forward routes; the remote section
+renders kind-tagged question and waiting rows (waiting rows through
+`NeedsYouWaitingRow` with an origin chip and open-task via `switchInstance`);
+the remote hidden panel enumerates the merged hidden set; dismiss/snooze/
+restore go through the existing sidecar forward routes so `mw:` ids address
+the remote's own sidecar; no remote row is written to any local table. The
+now-dead question-only client functions were removed. `remoteEmpty` copy was
+updated in eight locales.
+
+Verification: `go test ./internal/instances/... ./internal/backendapp/...`
+passes except three `TestWorkspaceSourceMaterializer_*` failures verified
+identical on pristine HEAD (macOS `/var` symlink); targeted vitest, typecheck,
+`i18n:check`, `i18n:ratchet` pass. E2E added
+"remote waiting rows appear, resolve, degrade, and notify without affecting
+other sources" to `multi-instance.spec.ts`; the full `--grep "multi-instance"`
+run exposed one stale badge assertion in the landed
+`remote-inbox.spec.ts` (the fixture task's manual-step wait legitimately
+counts as a second remote row), fixed by completing that fixture task right
+after seeding, with both affected specs re-run green. `ReadNeedsYou` takes
+`(ctx, limit)` rather than the planned `(ctx, workspaceID, limit)`: the
+client performs its own workspace discovery, mirroring the landed
+`ReadInbox` composition, and the forwarding route passes no workspace filter.

@@ -10,6 +10,7 @@ import {
   NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED,
   NOTIFICATION_EVENT_SESSION_TURN_FINISHED,
   NOTIFICATION_EVENT_SYSTEM_UPDATE_AVAILABLE,
+  NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED,
 } from "@/lib/notifications/events";
 import type { NotificationProvider } from "@/lib/types/http";
 
@@ -38,6 +39,10 @@ const EVENT_MESSAGE_KEYS: Record<string, { title: string; description: string }>
   [NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED]: {
     title: "settings:notificationEventClarificationRequested",
     description: "settings:notificationEventClarificationRequestedDescription",
+  },
+  [NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED]: {
+    title: "settings:notificationEventManualStepEntered",
+    description: "settings:notificationEventManualStepEnteredDescription",
   },
   [NOTIFICATION_EVENT_SYSTEM_UPDATE_AVAILABLE]: {
     title: "settings:notificationEventUpdateAvailable",

@@ -297,6 +297,48 @@ func TestEscapePowerShell_NeutralizesSubExpression(t *testing.T) {
 	}
 }
 
+// TestWithOriginLabelFoldsInstanceNameIntoTitle pins the system provider's
+// origin surface: an OS-level notification has no separate label field, so
+// the federating instance's name is folded into the title; local events
+// (no origin) keep their title untouched.
+func TestWithOriginLabelFoldsInstanceNameIntoTitle(t *testing.T) {
+	cases := []struct {
+		name    string
+		message Message
+		title   string
+		want    string
+	}{
+		{
+			name:    "relayed occurrence carries the origin instance name",
+			message: Message{Title: "Agent turn finished", OriginInstanceName: "Remote Studio"},
+			title:   "Agent turn finished",
+			want:    "[Remote Studio] Agent turn finished",
+		},
+		{
+			name:    "local event keeps its title",
+			message: Message{Title: "Agent turn finished"},
+			title:   "Agent turn finished",
+			want:    "Agent turn finished",
+		},
+		{
+			name: "origin identity without a name labels nothing",
+			message: Message{
+				Title:            "Agent turn finished",
+				OriginInstanceID: "inst-1",
+			},
+			title: "Agent turn finished",
+			want:  "Agent turn finished",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := withOriginLabel(tc.message, tc.title); got != tc.want {
+				t.Fatalf("withOriginLabel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLocalizedSystemRuntimeSummaryUsesSystemLocale(t *testing.T) {
 	message := Message{
 		Title: "2 agent runtime updates available",

@@ -70,8 +70,7 @@
         "apps/backend/internal/backendapp/instance_routes.go",
         "apps/backend/internal/webapp/shell.go",
         "apps/web/components/settings/instances/instances-settings.tsx",
-        "apps/web/components/app-sidebar/app-sidebar-instance-picker.tsx",
-        "apps/web/components/app-sidebar/sections/notifications-section.tsx"
+        "apps/web/components/app-sidebar/app-sidebar-instance-picker.tsx"
       ],
       "tests": [
         "apps/backend/internal/instances/service_test.go",
@@ -82,7 +81,6 @@
         "apps/backend/internal/backendapp/instance_shell_test.go",
         "apps/web/components/settings/instances/instances-settings.test.tsx",
         "apps/web/components/app-sidebar/app-sidebar-instance-picker.test.tsx",
-        "apps/web/components/app-sidebar/sections/notifications-section.test.tsx",
         "apps/web/e2e/tests/multi-instance/multi-instance.spec.ts"
       ],
       "settingsRoutes": [

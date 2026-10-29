@@ -2,7 +2,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JSX } from "react";
 import { defaultState } from "@/lib/state/default-state";
-import type { RemoteNotificationEntry } from "@/lib/state/slices/remote-notifications/types";
 import { AppNavSheet } from "./app-nav-sheet";
 import { AppNavSections, useAppNavDialogs } from "./app-nav-sections";
 
@@ -31,7 +30,7 @@ const state = {
   },
   userSettings: { ...defaultState.userSettings },
   // defaultState carries no appSidebar (the UI slice owns it at store
-  // composition); the notifications section reads it, so the mock provides it.
+  // composition); expandable sections read it, so the mock provides it.
   appSidebar: { sectionExpanded: {} as Record<string, boolean> },
   toggleAppSidebarSection: vi.fn(),
   setAppSidebarCollapsed: vi.fn(),
@@ -180,24 +179,6 @@ vi.mock("@/hooks/domains/instances/use-instances", () => ({
 }));
 vi.mock("@/lib/instances/switch-instance", () => ({
   switchInstance: mocks.switchInstance,
-}));
-
-// The remote-notifications module is fed by its domain hook; the mount test
-// pins placement and parity, not load behavior (covered by the hook's suite).
-const remoteNotifications = vi.hoisted(() => ({
-  controller: {
-    entries:
-      [] as import("@/lib/state/slices/remote-notifications/types").RemoteNotificationEntry[],
-    status: "ready" as const,
-    markRead: vi.fn(),
-    dismiss: vi.fn(),
-    markAllRead: vi.fn(),
-  },
-  unreadByInstance: {} as Record<string, number>,
-}));
-vi.mock("@/hooks/domains/remote-notifications/use-remote-notifications", () => ({
-  useRemoteNotifications: () => remoteNotifications.controller,
-  useRemoteNotificationUnreadByInstance: () => remoteNotifications.unreadByInstance,
 }));
 
 type SectionsProps = Parameters<typeof AppNavSections>[0];
@@ -395,93 +376,41 @@ describe("AppNavSheet instance picker", () => {
   });
 });
 
-describe("AppNavSheet remote notifications", () => {
-  const LOCAL_ONLY = [{ id: "local", name: "", enabled: true }];
-  const WITH_STUDIO = [
-    { id: "local", name: "", enabled: true },
-    { id: "inst-1", name: "Studio workstation", enabled: true },
-  ];
-
+describe("AppNavSheet remote notifications module removal", () => {
   afterEach(() => {
     cleanup();
     state.features.multiInstance = false;
     state.instances = { ...defaultState.instances };
-    remoteNotifications.controller = {
-      entries: [],
-      status: "ready",
-      markRead: vi.fn(),
-      dismiss: vi.fn(),
-      markAllRead: vi.fn(),
-    };
-    remoteNotifications.unreadByInstance = {};
+    instances.state = { ...instances.state, items: [{ id: "local", name: "", enabled: true }] };
     vi.clearAllMocks();
   });
 
-  function notificationEntry(overrides: Record<string, unknown> = {}) {
-    return {
-      id: "e1",
-      instanceId: "inst-1",
-      event: "session.turn_finished",
-      occurrenceId: "occ-1",
-      taskId: "task-9",
-      sessionId: "session-9",
-      title: "Turn finished",
-      body: "The agent finished a turn.",
-      createdAt: "2026-10-28T00:00:00Z",
-      read: false,
-      dismissed: false,
-      ...overrides,
-    };
-  }
-
-  function mountWithStudioEntries(entries: RemoteNotificationEntry[]) {
+  // The cross-instance notifications module no longer exists: relayed events
+  // surface through the shared notification pipeline, so the phone
+  // navigation keeps no remote-only module, entry list, or per-instance
+  // unread badge.
+  it("renders no remote-notifications module or entry with federation on", () => {
     state.features.multiInstance = true;
-    state.instances = { ...defaultState.instances, items: WITH_STUDIO };
-    remoteNotifications.controller = {
-      ...remoteNotifications.controller,
-      entries,
+    state.instances = {
+      ...defaultState.instances,
+      items: [
+        { id: "local", name: "", enabled: true },
+        { id: "inst-1", name: "Studio workstation", enabled: true },
+      ],
+    };
+    instances.state = {
+      ...instances.state,
+      items: [
+        { id: "local", name: "", enabled: true },
+        { id: "inst-1", name: "Studio workstation", enabled: true },
+      ],
     };
     render(<AppNavSheet />);
     fireEvent.click(screen.getByTestId(NAV_TRIGGER));
-  }
 
-  it("keeps the notifications module reachable inside the scrolling menu", () => {
-    mountWithStudioEntries([notificationEntry()]);
-
-    const row = screen.getByTestId("sidebar-notification-row-e1");
-    // The pickers sit outside the scroller; the module's entries scroll with
-    // the menu body instead of pinning the sheet open.
-    expect(row.closest("nav")).not.toBeNull();
-    // Coarse-pointer hit target on the entry row.
-    expect(row.tagName).toBe("BUTTON");
-    expect(row.className).toContain("min-h-11");
-  });
-
-  it("carries the same unread state as the instance picker badge", () => {
-    instances.state = { ...instances.state, items: WITH_STUDIO };
-    remoteNotifications.unreadByInstance = { "inst-1": 1 };
-
-    try {
-      mountWithStudioEntries([notificationEntry(), notificationEntry({ id: "e2", read: true })]);
-      // Open the picker so its rows (and their badges) enter the DOM.
-      fireEvent.pointerDown(screen.getByTestId("mobile-instance-trigger"), {
-        button: 0,
-        ctrlKey: false,
-      });
-
-      expect(screen.getByTestId("sidebar-notifications-unread-total").textContent).toBe("1");
-      expect(screen.getByTestId("sidebar-instance-unread-inst-1").textContent).toBe("1");
-    } finally {
-      instances.state = { ...instances.state, items: LOCAL_ONLY };
-    }
-  });
-
-  it("switches instances from a tapped entry", () => {
-    mountWithStudioEntries([notificationEntry()]);
-    fireEvent.click(screen.getByTestId("sidebar-notification-row-e1"));
-
-    expect(mocks.switchInstance).toHaveBeenCalledWith("inst-1", "/t/task-9");
-    expect(remoteNotifications.controller.markRead).toHaveBeenCalledWith("e1");
+    expect(screen.queryByTestId("sidebar-notifications-unread-total")).toBeNull();
+    expect(screen.queryByTestId("sidebar-notification-group-inst-1")).toBeNull();
+    expect(screen.queryByTestId("sidebar-instance-unread-inst-1")).toBeNull();
   });
 });
 

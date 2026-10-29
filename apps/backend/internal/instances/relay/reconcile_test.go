@@ -32,7 +32,7 @@ func TestReconcileRecoversMissedWindow(t *testing.T) {
 	latest.OccurrenceID = "live"
 	latest.CreatedAt = first.CreatedAt.Add(2 * time.Second)
 	rows := []Occurrence{first}
-	r, s, h := fixture(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r, s, n := fixture(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		since, err := time.Parse(time.RFC3339, req.URL.Query().Get("since"))
 		require.NoError(t, err)
 		result := []Occurrence{}
@@ -49,5 +49,5 @@ func TestReconcileRecoversMissedWindow(t *testing.T) {
 	require.NoError(t, r.record(t.Context(), latest))
 	require.NoError(t, r.reconcile(t.Context()))
 	require.Len(t, s.rows, 3)
-	require.Len(t, h.messages, 3)
+	require.Len(t, n.recorded(), 3)
 }

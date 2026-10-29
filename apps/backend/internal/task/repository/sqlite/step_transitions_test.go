@@ -691,3 +691,64 @@ func TestRestoreTaskMessageRollbackWrongSessionStateWritesNoRow(t *testing.T) {
 		t.Fatalf("rows after rejected rollback = %d, want unchanged %d", len(after), len(before))
 	}
 }
+
+// TestStepTransitionReadModelCarriesActorAttribution pins the read model's
+// actor passthrough: both the newest-first list and the per-step latest lookup
+// must surface actor_kind/actor_id exactly as the ledger row stored them, and
+// a task whose latest entry into a step predates a later move into another
+// step still resolves that older entry (episode identity is per-step).
+func TestStepTransitionReadModelCarriesActorAttribution(t *testing.T) {
+	repo := newStepTransitionsTestRepo(t)
+	createStepTransitionsTestTask(t, repo, "task-actor-read", "wf-1", "step-a")
+
+	moveCtx := steptelemetry.WithAttribution(context.Background(), steptelemetry.Attribution{
+		Trigger:   steptelemetry.TriggerEngineTransition,
+		ActorKind: steptelemetry.ActorAgent,
+		ActorID:   "session-actor-read",
+	})
+	task, err := repo.GetTask(context.Background(), "task-actor-read")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	task.WorkflowStepID = "step-b"
+	if err := repo.UpdateTask(moveCtx, task); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+
+	listed, err := repo.ListTaskStepTransitions(context.Background(), "task-actor-read", 0, 10)
+	if err != nil {
+		t.Fatalf("ListTaskStepTransitions: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("listed rows = %d, want 2 (move + genesis)", len(listed))
+	}
+	if listed[0].ActorKind != string(steptelemetry.ActorAgent) || listed[0].ActorID != "session-actor-read" {
+		t.Fatalf("move row actor = (%q, %q), want (agent, session-actor-read)", listed[0].ActorKind, listed[0].ActorID)
+	}
+	if listed[1].ActorKind != string(steptelemetry.ActorSystem) || listed[1].ActorID != "" {
+		t.Fatalf("genesis row actor = (%q, %q), want (system, empty)", listed[1].ActorKind, listed[1].ActorID)
+	}
+
+	latest, err := repo.GetLatestStepTransitionForStep(context.Background(), "task-actor-read", "step-b")
+	if err != nil {
+		t.Fatalf("GetLatestStepTransitionForStep (current step): %v", err)
+	}
+	if latest == nil || latest.ID != listed[0].ID || latest.ActorKind != string(steptelemetry.ActorAgent) || latest.ActorID != "session-actor-read" {
+		t.Fatalf("latest for step-b = %+v, want the agent-attributed move row %+v", latest, listed[0])
+	}
+	previous, err := repo.GetLatestStepTransitionForStep(context.Background(), "task-actor-read", "step-a")
+	if err != nil {
+		t.Fatalf("GetLatestStepTransitionForStep (earlier step): %v", err)
+	}
+	if previous == nil || previous.ID != listed[1].ID {
+		t.Fatalf("latest for step-a = %+v, want the genesis row %+v", previous, listed[1])
+	}
+
+	missing, err := repo.GetLatestStepTransitionForStep(context.Background(), "task-actor-read", "step-never-entered")
+	if err != nil {
+		t.Fatalf("GetLatestStepTransitionForStep (no row): %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("latest for a step never entered = %+v, want nil", missing)
+	}
+}

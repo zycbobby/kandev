@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -15,7 +16,7 @@ import (
 
 // ListTaskStepTransitions reads newest-first ledger rows using immutable IDs.
 func (r *Repository) ListTaskStepTransitions(ctx context.Context, taskID string, beforeID int64, limit int) ([]models.StepTransition, error) {
-	query := `SELECT id, from_workflow_id, from_workflow_step_id, to_workflow_id, to_workflow_step_id, trigger, occurred_at
+	query := `SELECT id, from_workflow_id, from_workflow_step_id, to_workflow_id, to_workflow_step_id, trigger, actor_kind, COALESCE(actor_id, ''), occurred_at
 		FROM task_step_transitions WHERE task_id = ?`
 	args := []any{taskID}
 	if beforeID > 0 {
@@ -33,7 +34,7 @@ func (r *Repository) ListTaskStepTransitions(ctx context.Context, taskID string,
 	for rows.Next() {
 		var item models.StepTransition
 		var fromWorkflow, fromStep, toWorkflow, toStep sql.NullString
-		if err := rows.Scan(&item.ID, &fromWorkflow, &fromStep, &toWorkflow, &toStep, &item.Trigger, &item.OccurredAt); err != nil {
+		if err := rows.Scan(&item.ID, &fromWorkflow, &fromStep, &toWorkflow, &toStep, &item.Trigger, &item.ActorKind, &item.ActorID, &item.OccurredAt); err != nil {
 			return nil, fmt.Errorf("scan task step transition: %w", err)
 		}
 		item.FromWorkflowID = nullableValue(fromWorkflow)
@@ -43,6 +44,36 @@ func (r *Repository) ListTaskStepTransitions(ctx context.Context, taskID string,
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// GetLatestStepTransitionForStep returns the newest ledger row whose
+// to_workflow_step_id is toStepID for taskID — the durable identity of the
+// task's current entry into that step. It returns (nil, nil) when no such row
+// exists; callers treat that as "no episode identity" rather than an error.
+func (r *Repository) GetLatestStepTransitionForStep(ctx context.Context, taskID, toStepID string) (*models.StepTransition, error) {
+	if taskID == "" || toStepID == "" {
+		return nil, nil
+	}
+	const query = `SELECT id, from_workflow_id, from_workflow_step_id, to_workflow_id, to_workflow_step_id, trigger, actor_kind, COALESCE(actor_id, ''), occurred_at
+		FROM task_step_transitions
+		WHERE task_id = ? AND to_workflow_step_id = ?
+		ORDER BY id DESC
+		LIMIT 1`
+	row := r.ro.QueryRowContext(ctx, r.ro.Rebind(query), taskID, toStepID)
+	var item models.StepTransition
+	var fromWorkflow, fromStep, toWorkflow, toStep sql.NullString
+	err := row.Scan(&item.ID, &fromWorkflow, &fromStep, &toWorkflow, &toStep, &item.Trigger, &item.ActorKind, &item.ActorID, &item.OccurredAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get latest step transition for step: %w", err)
+	}
+	item.FromWorkflowID = nullableValue(fromWorkflow)
+	item.FromWorkflowStepID = nullableValue(fromStep)
+	item.ToWorkflowID = nullableValue(toWorkflow)
+	item.ToWorkflowStepID = nullableValue(toStep)
+	return &item, nil
 }
 
 func nullableValue(value sql.NullString) *string {

@@ -3,11 +3,12 @@ import { useAppStore, useAppStoreApi } from "@/components/state-provider";
 import { useFeature } from "@/hooks/domains/features/use-feature";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
 import { getWebSocketClient } from "@/lib/ws/connection";
-import { listRemoteClarificationInbox } from "@/lib/api/domains/remote-inbox-api";
+import { listRemoteNeedsYouInbox } from "@/lib/api/domains/remote-inbox-api";
 import { LOCAL_INSTANCE_ID } from "@/lib/state/slices/instances/types";
-import { REMOTE_NOTIFICATION_ACTION } from "@/lib/ws/handlers/remote-notification";
-import type { RemoteNotificationOccurrence } from "@/lib/api/domains/remote-notifications-api";
-import type { BackendMessageMap } from "@/lib/types/backend";
+import {
+  NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED,
+  NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED,
+} from "@/lib/notifications/events";
 import { NeedsYouInboxRefreshCoordinator } from "./needs-you-inbox-refresh-coordinator";
 
 // Same bounded cadence and snooze-timer discipline as the local controller
@@ -16,15 +17,13 @@ const PERIODIC_REFRESH_MS = 60_000;
 const MIN_SNOOZE_RESCHEDULE_MS = 5_000;
 const SNOOZE_RESCHEDULE_BUFFER_MS = 1_000;
 
-type RemoteNotificationMessage = BackendMessageMap[typeof REMOTE_NOTIFICATION_ACTION];
-
 /**
  * Owns every remote instance-page refresh trigger (cross-instance-inbox
- * design): mount / instance-registry change, the relay's
- * `session.clarification_requested` occurrences, foreground resume, the
- * bounded 60s re-read while visible, per-instance manual retries, and each
- * instance's snooze-expiry timer. One coordinator per instance (scopeKey
- * carries the instance id) keeps failure isolation per remote.
+ * design): mount / instance-registry change, relayed needs-you occurrences,
+ * foreground resume, the bounded 60s re-read while visible, per-instance
+ * manual retries, and each instance's snooze-expiry timer. One coordinator
+ * per instance (scopeKey carries the instance id) keeps failure isolation
+ * per remote.
  *
  * Gated to the local-instance view: while the panel views a remote instance,
  * that instance's own Inbox is the local page there, and this panel must not
@@ -101,20 +100,8 @@ export function useRemoteInboxController() {
     return () => disposeRemoteCoordinators(coordinatorsRef.current, generationsRef.current);
   }, [enabled, instanceIdsKey, storeApi, refreshAll]);
 
-  // Trigger: relay occurrences. Only a clarification_requested occurrence for
-  // a registered instance bumps that instance's tick; the slice fence drops
-  // bumps for unknown instances naturally (no coordinator reads them).
-  useEffect(() => {
-    if (!enabled) return;
-    const client = getWebSocketClient();
-    if (!client) return;
-    const off = client.on(REMOTE_NOTIFICATION_ACTION, (message: RemoteNotificationMessage) => {
-      const payload: RemoteNotificationOccurrence | undefined = message?.payload;
-      if (payload?.event !== "session.clarification_requested") return;
-      storeApi.getState().bumpRemoteInboxRefreshTick(payload.instance_id);
-    });
-    return off;
-  }, [enabled, storeApi]);
+  // Trigger: relayed needs-you occurrences (see useRelayedNeedsYouRefresh).
+  useRelayedNeedsYouRefresh(enabled, storeApi);
 
   const lastGlobalTickRef = useRef(remoteRefreshTick);
   useEffect(() => {
@@ -160,6 +147,33 @@ function disposeRemoteCoordinators(
   generations.clear();
 }
 
+/** Trigger: relayed needs-you occurrences arrive as shared notification
+ *  frames carrying the origin instance; only a frame naming a registered
+ *  instance bumps that instance's tick. The slice fence drops bumps for
+ *  unknown instances naturally (no coordinator reads them), and a local
+ *  event (no origin) bumps nothing here: the local controller owns that
+ *  refresh. */
+function useRelayedNeedsYouRefresh(enabled: boolean, storeApi: ReturnType<typeof useAppStoreApi>) {
+  useEffect(() => {
+    if (!enabled) return;
+    const client = getWebSocketClient();
+    if (!client) return;
+    const bumpForOrigin = (message?: { payload?: { origin_instance_id?: string } }) => {
+      const instanceId = message?.payload?.origin_instance_id;
+      if (instanceId) storeApi.getState().bumpRemoteInboxRefreshTick(instanceId);
+    };
+    const offClarification = client.on(
+      NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED,
+      bumpForOrigin,
+    );
+    const offManualStep = client.on(NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED, bumpForOrigin);
+    return () => {
+      offClarification();
+      offManualStep();
+    };
+  }, [enabled, storeApi]);
+}
+
 function buildRemoteInstanceRead(
   instanceId: string,
   storeApi: ReturnType<typeof useAppStoreApi>,
@@ -170,7 +184,9 @@ function buildRemoteInstanceRead(
       storeApi.getState();
     const generation = beginRemoteInboxRead(instanceId);
     generationsRef.current.set(instanceId, generation);
-    const page = await listRemoteClarificationInbox(instanceId, { init: { signal } });
+    // The merged needs-you forward read carries both row kinds, so one page
+    // per instance covers questions and manual-step waiting rows alike.
+    const page = await listRemoteNeedsYouInbox(instanceId, { init: { signal } });
     if (signal.aborted) return;
     if (page.status === "degraded") {
       // A degraded page is a successful read of instance-scoped state, not a
@@ -180,7 +196,7 @@ function buildRemoteInstanceRead(
       return;
     }
     setRemoteInboxPage(instanceId, generation, {
-      bundles: page.bundles,
+      rows: page.rows,
       count: page.count,
       hiddenCount: page.hidden_count,
       nextSnoozeExpiry: page.next_snooze_expiry,

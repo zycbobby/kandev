@@ -24,8 +24,6 @@ func ConnectionID(ctx context.Context) string {
 // MessageType represents the type of WebSocket message
 type MessageType string
 
-const ActionRemoteNotification = "remote_notification"
-
 const (
 	MessageTypeRequest      MessageType = "request"
 	MessageTypeResponse     MessageType = "response"

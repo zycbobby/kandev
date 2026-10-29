@@ -48,16 +48,16 @@ The sidebar header has an instance picker beside the workspace picker. The local
 
 Each enabled instance has a relay that keeps its own event subscription to the remote and reconciles missed events roughly once a minute, independent of which instance the panel is currently viewing.
 
-- Remote session notifications appear in the sidebar's **Remote notifications** module, grouped by instance, with unread badges on the module and on the instance in the picker.
-- Remote events never trigger toasts, browser notifications, or sound. The local instance's own notification behavior is unchanged.
-- Clicking an entry switches the panel to that instance and opens the referenced task.
-- Read and dismissed state persists across reloads. Entries are removed automatically after seven days.
+- Remote events use the same notification logic as local ones: your notification settings (per-event subscriptions, providers, sound, browser and desktop notifications) decide how a remote event alerts you, exactly as they do for the same kind of local event.
+- There is no dedicated remote-notifications module in the sidebar. A notification from a remote instance shows the instance's name as a label.
+- Remote notifications offer no open action. To reach a remote task that is waiting on you, open its row in your Inbox ([Remote rows in your Inbox](#remote-rows-in-your-inbox)). For informational events, switch to the instance from the sidebar picker.
+- A remote event that needs you (a blocked question or a task waiting at a manual step) also refreshes that instance's Inbox section.
 - Events missed while a remote was unreachable are recovered by the reconciliation poll after reconnection, without duplicates.
 
 What is relayed:
 
-- A remote session finishing a turn and a remote session requesting clarification are the live events today.
-- Live delivery requires the remote to have a notification provider subscribed to those events. Without one, entries still arrive, but only through the roughly one-minute reconciliation window.
+- A remote session finishing a turn, a remote session requesting clarification, a remote task entering a manual step that waits for you, and the Office inbox event are the live events today.
+- Live delivery requires the remote to have a notification provider subscribed to those events. Without one, occurrences still arrive through the roughly one-minute reconciliation window.
 - The relayed event set is a closed list. The Office inbox event is in the set, but events without an occurrence identity are not relayed; the remote's inbox-item path currently never fires in production.
 
 ## Host-bound actions while viewing a remote
@@ -72,20 +72,23 @@ Some actions bind to the machine serving the panel. While a remote instance is a
 
 Arbitrary TCP port proxying across instances is not provided.
 
-## Remote questions in your Inbox
+## Remote rows in your Inbox
 
 With both **Multi-instance federation** and the needs-you inbox enabled, your
-local Inbox also lists the blocked questions of every enabled registered
-remote instance: one section per instance, answerable right there without
-switching panels. Answering forwards your answer to that instance through your
-local backend, the remote task resumes, and the row disappears on the next
-read. Dismissing, snoozing, and restoring a remote row are stored on that
-instance, not locally, and each row's open-task control switches the panel to
-the instance and opens the task. An unreachable remote, one that needs a
-personal access token, or one with its own inbox disabled shows a named,
-retryable state in that section instead of rows, and never affects your local
-rows or the other sections. The sidebar count includes the remote rows that
-have loaded.
+local Inbox also lists what is waiting on you from every enabled registered
+remote instance, in one section per instance: blocked questions, answerable
+right there without switching panels, and tasks waiting at a manual step.
+Answering a question forwards your answer to that instance through your local
+backend, the remote task resumes, and the row disappears on the next read. A
+waiting row offers open task, dismiss, and snooze, and disappears on the next
+read once the remote no longer reports the wait. Dismissing, snoozing, and
+restoring a remote row are stored on that instance, not locally, and each
+row's open-task control switches the panel to the instance and opens the
+task. An unreachable remote, one that needs a personal access token, one
+running an older version without the merged read, or one with its own inbox
+disabled shows a named, retryable state in that section instead of rows, and
+never affects your local rows or the other sections. The sidebar count
+includes the remote rows that have loaded.
 
 ## Limits
 
@@ -98,7 +101,7 @@ The feature ships off in every profile and stays off until an all-user release. 
 
 1. Turn on **Multi-instance federation** in **Settings > System > Feature Toggles** (an admin override), or set `KANDEV_FEATURES_MULTI_INSTANCE=true` in the environment.
 2. Restart the backend: the flag is restart-required.
-3. Verify: register a remote instance and check its health banner, switch to it, operate one task, and confirm a notification entry appears when a remote session finishes a turn.
+3. Verify: register a remote instance and check its health banner, switch to it, operate one task, and confirm a notification appears when a remote session finishes a turn.
 4. To disable it again, turn the toggle off (and restart) or unset the environment variable. Registrations are kept.
 
 Related guides: [Feature Status](feature-status.md), [Authentication](authentication.md), [Security](security.md), and [Cross-Instance Stats Sync](stats-sync.md), the other cross-instance capability.

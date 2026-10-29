@@ -70,11 +70,6 @@ vi.mock("./sections/canvases-section", () => ({
 vi.mock("./sections/projects-section", () => ({
   ProjectsSection: () => <div data-testid="projects-section" />,
 }));
-vi.mock("./sections/notifications-section", () => ({
-  NotificationsSection: ({ collapsed }: { collapsed: boolean }) => (
-    <div data-testid="notifications-section" data-collapsed={collapsed ? "true" : "false"} />
-  ),
-}));
 vi.mock("./sections/agents-section", () => ({
   AgentsSection: () => <div data-testid="agents-section" />,
 }));

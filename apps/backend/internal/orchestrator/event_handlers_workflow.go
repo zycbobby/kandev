@@ -2124,6 +2124,10 @@ func (s *Service) autoStartTaskForLoadedStep(ctx context.Context, task *models.T
 		s.logger.Debug(eventName+": target step has no auto-start",
 			zap.String("task_id", task.ID),
 			zap.String("to_step_id", step.ID))
+		// The sessionless manual-step entry: the task sits idle at a step that
+		// waits for the operator, with no session to carry a waiting event.
+		// The queue gates above already ran, so this is a genuine entry.
+		s.notifyManualStepWait(ctx, task.ID, "", step.ID)
 		if autoStartOnCreateClaimed {
 			s.discardAutoStartOnCreate(ctx, task.ID, eventName)
 		}
@@ -7604,11 +7608,14 @@ func (s *Service) processTurnCompleteActions(ctx context.Context, session *model
 
 // publishSessionWaitingEvent publishes a session state change event for WAITING_FOR_INPUT.
 // An optional preloaded session avoids re-reading from DB (which can miss recent writes
-// on the read-only WAL connection).
+// on the read-only WAL connection). It is also the single convergence point for the
+// manual-step wait notification: every path that settles a session into waiting here
+// offers the notification exactly once, gated on the step's own semantics.
 func (s *Service) publishSessionWaitingEvent(ctx context.Context, taskID, sessionID, stepID string, preloadedSession ...*models.TaskSession) {
 	if s.eventBus == nil {
 		return
 	}
+	s.notifyManualStepWait(ctx, taskID, sessionID, stepID)
 	eventData := map[string]interface{}{
 		metaKeyTaskID:      taskID,
 		metaKeySessionID:   sessionID,

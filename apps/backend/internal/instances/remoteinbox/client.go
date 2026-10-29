@@ -23,9 +23,11 @@ const (
 	// hundred kilobytes at the default limit.
 	maxPageBodyBytes = 32 << 20
 
-	workspacesPath = "/api/v1/workspaces"
-	inboxPath      = "/api/v1/clarification-inbox"
-	hiddenPath     = "/api/v1/clarification-inbox/hidden"
+	workspacesPath     = "/api/v1/workspaces"
+	inboxPath          = "/api/v1/clarification-inbox"
+	hiddenPath         = "/api/v1/clarification-inbox/hidden"
+	needsYouPath       = "/api/v1/needs-you-inbox"
+	needsYouHiddenPath = "/api/v1/needs-you-inbox/hidden"
 )
 
 // remoteWorkspace is the id-bearing subset of one remote workspace row.
@@ -64,10 +66,28 @@ type remoteInboxPage struct {
 	NextCursor       string         `json:"next_cursor"`
 }
 
+// remoteNeedsYouPage is one remote per-workspace merged needs-you page. The
+// remote reports its own truncation through has_more; there is no cursor.
+type remoteNeedsYouPage struct {
+	Rows             []NeedsYouRow `json:"rows"`
+	Count            int           `json:"count"`
+	HiddenCount      int           `json:"hidden_count"`
+	Total            int           `json:"total"`
+	NextSnoozeExpiry *string       `json:"next_snooze_expiry"`
+	HasMore          bool          `json:"has_more"`
+}
+
 // workspacePage pairs one fetched page with the workspace it came from.
 type workspacePage struct {
 	workspaceID string
 	page        remoteInboxPage
+}
+
+// needsYouWorkspacePage pairs one fetched merged needs-you page with the
+// workspace it came from.
+type needsYouWorkspacePage struct {
+	workspaceID string
+	page        remoteNeedsYouPage
 }
 
 type sidecarPutBody struct {
@@ -76,7 +96,7 @@ type sidecarPutBody struct {
 }
 
 // Client reads and forwards one remote instance's own clarification-inbox
-// surface over its registered credential.
+// and merged needs-you surfaces over its registered credential.
 type Client struct {
 	inst       instances.Instance
 	credential func() (string, error)
@@ -129,6 +149,43 @@ func (c *Client) read(ctx context.Context, path string, limit int) ReadResult {
 		pages = append(pages, page)
 	}
 	return ReadResult{Page: aggregatePages(c.inst.ID, pages, limit)}
+}
+
+// ReadNeedsYou aggregates the remote's merged needs-you page (clarification
+// questions plus manual-step waiting rows) across every credential-visible
+// workspace into one instance page, using the same per-workspace fan-out and
+// degradation mapping the clarification reads use.
+func (c *Client) ReadNeedsYou(ctx context.Context, limit int) NeedsYouReadResult {
+	return c.readNeedsYou(ctx, needsYouPath, limit)
+}
+
+// ReadNeedsYouHidden aggregates the remote's merged hidden enumeration the
+// same way; rows additionally carry sidecar state and the page carries the
+// instance-wide total.
+func (c *Client) ReadNeedsYouHidden(ctx context.Context, limit int) NeedsYouReadResult {
+	return c.readNeedsYou(ctx, needsYouHiddenPath, limit)
+}
+
+func (c *Client) readNeedsYou(ctx context.Context, path string, limit int) NeedsYouReadResult {
+	ctx, cancel := context.WithTimeout(ctx, readDeadline)
+	defer cancel()
+	token, err := c.credential()
+	if err != nil {
+		return NeedsYouReadResult{Degraded: ReasonUnauthorized}
+	}
+	workspaces, reason := c.fetchWorkspaces(ctx, token)
+	if reason != "" {
+		return NeedsYouReadResult{Degraded: reason}
+	}
+	pages := make([]needsYouWorkspacePage, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		page, reason := c.fetchNeedsYouPage(ctx, token, path, workspace.ID, limit)
+		if reason != "" {
+			return NeedsYouReadResult{Degraded: reason}
+		}
+		pages = append(pages, page)
+	}
+	return NeedsYouReadResult{Page: aggregateNeedsYouPages(c.inst.ID, pages, limit)}
 }
 
 // Respond forwards one answer/rejection submission to the remote's own
@@ -234,7 +291,11 @@ func (c *Client) fetchWorkspaces(ctx context.Context, token string) ([]remoteWor
 	return decoded.Workspaces, ""
 }
 
-func (c *Client) fetchPage(ctx context.Context, token, path, workspaceID string, limit int) (workspacePage, Reason) {
+// fetchRemotePage performs one credentialed per-workspace page GET, mapping
+// the remote status onto the degradation closed set and bounding the body.
+// Both page flavors (clarification and merged needs-you) share it so their
+// transport and status behavior can never drift.
+func (c *Client) fetchRemotePage(ctx context.Context, token, path, workspaceID string, limit int) ([]byte, Reason) {
 	query := url.Values{}
 	query.Set("workspace_id", workspaceID)
 	if limit > 0 {
@@ -242,26 +303,50 @@ func (c *Client) fetchPage(ctx context.Context, token, path, workspaceID string,
 	}
 	target, err := c.target(path, query)
 	if err != nil {
-		return workspacePage{}, ReasonUnreachable
+		return nil, ReasonUnreachable
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return workspacePage{}, ReasonError
+		return nil, ReasonError
 	}
 	authorize(req.Header, token)
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return workspacePage{}, ReasonUnreachable
+		return nil, ReasonUnreachable
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if reason := pageStatusReason(resp.StatusCode); reason != "" {
+		return nil, reason
+	}
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, maxPageBodyBytes))
+	if err != nil {
+		return nil, ReasonError
+	}
+	return payload, ""
+}
+
+func (c *Client) fetchPage(ctx context.Context, token, path, workspaceID string, limit int) (workspacePage, Reason) {
+	payload, reason := c.fetchRemotePage(ctx, token, path, workspaceID, limit)
+	if reason != "" {
 		return workspacePage{}, reason
 	}
 	var page remoteInboxPage
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxPageBodyBytes)).Decode(&page); err != nil {
+	if err := json.Unmarshal(payload, &page); err != nil {
 		return workspacePage{}, ReasonError
 	}
 	return workspacePage{workspaceID: workspaceID, page: page}, ""
+}
+
+func (c *Client) fetchNeedsYouPage(ctx context.Context, token, path, workspaceID string, limit int) (needsYouWorkspacePage, Reason) {
+	payload, reason := c.fetchRemotePage(ctx, token, path, workspaceID, limit)
+	if reason != "" {
+		return needsYouWorkspacePage{}, reason
+	}
+	var page remoteNeedsYouPage
+	if err := json.Unmarshal(payload, &page); err != nil {
+		return needsYouWorkspacePage{}, ReasonError
+	}
+	return needsYouWorkspacePage{workspaceID: workspaceID, page: page}, ""
 }
 
 // pageStatusReason maps one per-workspace page status to the degradation

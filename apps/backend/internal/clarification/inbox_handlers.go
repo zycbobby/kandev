@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kandev/kandev/internal/auth/authn"
 	"github.com/kandev/kandev/internal/authz"
+	"github.com/kandev/kandev/internal/common/logger"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
 	"github.com/kandev/kandev/internal/task/repository/repoerrors"
 	"github.com/kandev/kandev/internal/task/service"
@@ -539,6 +540,17 @@ func (h *Handlers) respondInboxWorkspaceAuthzError(c *gin.Context, err error) {
 	}
 }
 
+// authorizeInboxSidecarOrRespond picks the sidecar write's authorization path:
+// a clarification bundle goes through the resolver's bundle access check, a
+// manual-step waiting row's mw identity goes through the waiting-row path
+// (needs_you_inbox_handlers.go). Both write only the caller's own sidecar row.
+func (h *Handlers) authorizeInboxSidecarOrRespond(c *gin.Context, pendingID string) bool {
+	if isManualStepWaitRowID(pendingID) {
+		return h.authorizeManualStepWaitAccessOrRespond(c, pendingID)
+	}
+	return h.authorizeBundleAccessOrRespond(c, pendingID)
+}
+
 // httpUpsertInboxSidecar backs PUT /api/v1/clarification-inbox/sidecar/:pendingID.
 func (h *Handlers) httpUpsertInboxSidecar(c *gin.Context) {
 	pendingID := c.Param("pendingID")
@@ -575,7 +587,7 @@ func (h *Handlers) httpUpsertInboxSidecar(c *gin.Context) {
 		snoozeUntil = &until
 	}
 
-	if !h.authorizeBundleAccessOrRespond(c, pendingID) {
+	if !h.authorizeInboxSidecarOrRespond(c, pendingID) {
 		return
 	}
 	if err := h.inboxBundles.UpsertClarificationInboxSidecar(c.Request.Context(), InboxUserID(c.Request.Context()), pendingID, state, snoozeUntil, now); err != nil {
@@ -591,7 +603,7 @@ func (h *Handlers) httpUpsertInboxSidecar(c *gin.Context) {
 // restore is deleting the sidecar row, idempotent by construction.
 func (h *Handlers) httpDeleteInboxSidecar(c *gin.Context) {
 	pendingID := c.Param("pendingID")
-	if !h.authorizeBundleAccessOrRespond(c, pendingID) {
+	if !h.authorizeInboxSidecarOrRespond(c, pendingID) {
 		return
 	}
 	if err := h.inboxBundles.DeleteClarificationInboxSidecar(c.Request.Context(), InboxUserID(c.Request.Context()), pendingID); err != nil {
@@ -657,27 +669,25 @@ func InboxUserID(ctx context.Context) string {
 // same bounded count, truncation flag, and next snooze expiry the list
 // endpoint returns, at the same default limit and workspace/sidecar scope,
 // for a workspace the boot builder has already resolved as the caller's own.
+// The waiting store contributes the manual-step waiting rows through the
+// same merge helper the list endpoint uses (needs-you-inbox-waiting-rows
+// design D5), so the boot count and the list count can never disagree.
 func InboxBootSummary(
 	ctx context.Context,
 	bundles inboxBundleStore,
 	workspaceID, userID string,
 	now time.Time,
+	waits ManualStepWaitStore,
 ) (count int, hasMore bool, nextSnoozeExpiry *time.Time, err error) {
-	page, err := bundles.ListUnresolvedClarificationBundles(ctx, taskmodels.ListClarificationBundlesOptions{
-		Unscoped:    true,
-		WorkspaceID: workspaceID,
-		Limit:       defaultInboxLimit,
-		Sidecar:     &taskmodels.ClarificationSidecarFilter{UserID: userID, Now: now},
-	})
+	h := &Handlers{
+		inboxBundles: bundles,
+		inboxWaits:   waits,
+		now:          func() time.Time { return now },
+		logger:       logger.Default().WithFields(zap.String("component", "clarification-boot-summary")),
+	}
+	read, err := h.readNeedsYouInboxCounts(ctx, userID, workspaceID, defaultInboxLimit)
 	if err != nil {
 		return 0, false, nil, err
 	}
-	summary, err := bundles.CountHiddenClarificationBundles(ctx, taskmodels.ListClarificationBundlesOptions{
-		Unscoped: true, WorkspaceID: workspaceID, Limit: 1,
-		Sidecar: &taskmodels.ClarificationSidecarFilter{UserID: userID, Only: true, Now: now},
-	})
-	if err != nil {
-		return 0, false, nil, err
-	}
-	return len(page.Bundles), page.HasMore, summary.NextSnoozeExpiry, nil
+	return read.count, read.hasMore, read.nextSnoozeExpiry, nil
 }

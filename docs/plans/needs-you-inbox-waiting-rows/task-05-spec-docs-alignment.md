@@ -1,7 +1,7 @@
 ---
 id: "05-spec-docs-alignment"
 title: "Specification and user-doc alignment"
-status: pending
+status: done
 wave: 5
 depends_on: ["04-remote-waiting-rows"]
 plan: "plan.md"
@@ -91,4 +91,50 @@ Task 04, so the documents describe shipped behavior rather than intent.
 
 ## Results
 
-Pending.
+Done. The draft artifacts are promoted
+(`docs/specs/ui/requirements/needs-you-inbox-waiting-rows.md` to
+`status: active`, its system design to `status: current`), and the
+requirements doc's supersession section is stated in effect rather than as a
+future activation. AC-004.1 and AC-004.3 were confirmed to match decision D8
+(no open action, Inbox-row navigation, manual instance switch for
+informational kinds) as already revised during planning. The system design's
+stale implementation premises were aligned without touching its conclusions:
+the episode emitter converges on `publishSessionWaitingEvent` (11 waiting
+convergence sites) plus the sessionless `autoStartTaskForLoadedStep` entry
+(not two manual-branch sites), the episode identity is
+`mw:<task_id>:<step_id>:<transitionID>` from the immutable
+`task_step_transitions` row (not `<moved_at>`), the event payload is the
+implemented field set, and the waiting-row re-read trigger is
+`task.manual_step_entered`.
+
+The supersession is applied to REQ-UI-NEEDS-YOU-INBOX-001's amended criteria
+in `docs/specs/ui/requirements/needs-you-inbox.md`: AC-001.5 and .6 are
+scoped to question rows within the wider row set, AC-001.20's not-counted
+list and hidden-row disclosure are kind-neutral, and AC-001.27's difference
+list gains the manual-step wait. That file sits 8 bytes under its 20 KiB
+lint ceiling, so the conventional pointer line (as used for the
+cross-instance-inbox exemptions) could not be added; the one-way reference
+lives in the waiting-rows requirements' Supersession section, and a back-link
+should be added when that file is next split or trimmed. The ui README needed
+no boundary-link change (it links no inbox documents).
+
+`apps/backend/internal/instances/AGENTS.md` now states the unified relay
+(relayed set v2, notifier into `HandleRelayedOccurrence` with the instance
+owner as explicit recipient, relay store as the dedup/recovery ledger only,
+remoteinbox reading both the clarification and aggregated needs-you
+endpoints). `docs/public/multi-instance.md` section 3 describes remote events
+notifying per the notification settings with an origin label, no dedicated
+sidebar module, and no open action, and its Inbox section covers remote
+waiting rows and per-instance degradation; the "remote events never trigger
+toasts, browser notifications, or sound" wording is removed, as is the
+module-entry verify step in Rollout. The ADR revision paragraph names
+REQ-UI-NEEDS-YOU-INBOX-003 through -005, the removed module, the
+dedup-and-recovery relay store role, the v2 relayed set, and the
+notification contract without an open action, consistent with the change's
+`cross-instance-notifications` spec delta.
+
+Validation: `openspec validate --all --strict --no-interactive` (13 passed),
+`uv run --no-project --python 3.12 python scripts/list-docs.py validate`
+(395 decisions, 1681 specifications), `uv run --no-project --python 3.12
+python scripts/lint-spec-files.py --all` (all files pass), and
+`git diff --check -- docs openspec` all pass. No production code was touched.

@@ -1,6 +1,6 @@
 ---
 created: 2026-10-28
-status: draft
+status: implemented
 requirements:
   - REQ-UI-NEEDS-YOU-INBOX-003
   - REQ-UI-NEEDS-YOU-INBOX-004
@@ -56,25 +56,26 @@ and user-doc alignment.
 
 By boundary, with the owning requirement in parentheses:
 
-- **Episode occurrence (002):** one shared emitter called from the
-  orchestrator's two manual-branch sites
-  (`apps/backend/internal/orchestrator/event_handlers_workflow.go`, manual
-  branch of `processOnEnter` and `handleTaskMovedNoSession`), gated on
-  `StepRunsOnEntry` false, `CompleteTaskOnEnter` false, and a non-self move
-  actor. Notification service kind and provider subscription mirror
+- **Episode occurrence (003):** one shared emitter called from inside
+  `publishSessionWaitingEvent` (covering every waiting convergence site) and
+  from the sessionless manual-step entry
+  (`apps/backend/internal/orchestrator/event_handlers_workflow.go`), gated on
+  `StepRunsOnEntry` false and `CompleteTaskOnEnter` false, with the move actor
+  carried on the event so the notification service suppresses a self-move.
+  Notification service kind and provider subscription mirror
   `HandleClarificationRequested` (`apps/backend/internal/notifications/service/service.go`).
-- **Local merged read (002, 004):** derived waiting-row query in the task
+- **Local merged read (003, 005):** derived waiting-row query in the task
   SQLite repository; aggregate endpoint family under the existing
   `needsYouInboxEnabled` route registration
   (`apps/backend/internal/clarification/handlers.go`); sidecar reuse through
   `mw:` prefixed row identities; `InboxBootSummary` extension.
-- **Unified bridge (003):** relay occurrence recovery feeds the notification
+- **Unified bridge (004):** relay occurrence recovery feeds the notification
   service with origin-tagged events instead of its own
   `ws.ActionRemoteNotification` wire
   (`apps/backend/internal/instances/relay/relay.go`); frontend origin
   handling in `apps/web/lib/ws/handlers/notifications.ts`; module, slice, and
   module REST removal; relayed set v2 adds `task.manual_step_entered`.
-- **Remote waiting rows (004):** extend the landed per-instance composition
+- **Remote waiting rows (005):** extend the landed per-instance composition
   with the aggregate endpoint as remote API surface; degraded states per the
   landed pattern.
 
@@ -138,17 +139,17 @@ it).
 
 | ACs | Evidence |
 | --- | --- |
-| 002.1, 002.2, 002.3 | `apps/backend/internal/task/repository/sqlite/needs_you_waiting_query_test.go` (new), `apps/backend/internal/clarification/needs_you_inbox_handlers_test.go` (new) |
-| 002.4, 002.5 | `apps/backend/internal/orchestrator/event_handlers_workflow_manual_wait_test.go` (new), `apps/backend/internal/notifications/service/service_test.go` (extended) |
-| 002.6 | `apps/backend/internal/task/repository/sqlite/clarification_inbox_sidecar_test.go` (extended) |
-| 002.7 | notification service flag-independence test in the same files |
-| 002.8 | `apps/web/lib/coordinator/attention.test.ts` (difference asserted) |
-| 003.1, 003.2, 003.5 | `apps/backend/internal/instances/relay/relay_test.go` (extended), `apps/backend/internal/notifications/service/service_test.go` (origin-tagged delivery) |
-| 003.3, 003.4 | `apps/web/lib/ws/handlers/notifications.test.ts` (extended: origin navigation, suppression by active instance) |
-| 003.6 | flag-off behavior asserted in the relay and handler tests |
-| 004.1 through 004.5, 004.7, 004.8 | `needs_you_inbox_handlers_test.go` (merge, order, page, count, hidden, boot, error) |
-| 004.6 | remote composition tests extending the landed change's suite in `apps/backend/internal/instances/` |
-| 004.9 | `pnpm run i18n:check`, `pnpm run i18n:ratchet` |
+| 003.1, 003.2, 003.3 | `apps/backend/internal/task/repository/sqlite/needs_you_waiting_query_test.go` (new), `apps/backend/internal/clarification/needs_you_inbox_handlers_test.go` (new) |
+| 003.4, 003.5 | `apps/backend/internal/orchestrator/manual_step_wait_test.go` (new), `apps/backend/internal/notifications/service/service_test.go` (extended) |
+| 003.6 | `apps/backend/internal/task/repository/sqlite/clarification_inbox_sidecar_test.go` (extended) |
+| 003.7 | notification service flag-independence test in the same files |
+| 003.8 | `apps/web/lib/coordinator/attention.test.ts` (difference asserted) |
+| 004.1, 004.2, 004.5 | `apps/backend/internal/instances/relay/relay_test.go` (extended), `apps/backend/internal/notifications/service/service_test.go` (origin-tagged delivery) |
+| 004.3, 004.4 | `apps/web/lib/ws/handlers/notifications.test.ts` (extended: origin label, suppression by active instance) |
+| 004.6 | flag-off behavior asserted in the relay and handler tests |
+| 005.1 through 005.5, 005.7, 005.8 | `needs_you_inbox_handlers_test.go` (merge, order, page, count, hidden, boot, error) |
+| 005.6 | remote composition tests extending the landed change's suite in `apps/backend/internal/instances/` |
+| 005.9 | `pnpm run i18n:check`, `pnpm run i18n:ratchet` |
 
 ## E2E tests
 
@@ -160,21 +161,49 @@ it).
 - `apps/web/e2e/tests/multi-instance/multi-instance.spec.ts` (extended):
   remote waiting rows, degraded instance section, unified notification for a
   relayed kind, sidebar module absence (AC-004.1 through .6, AC-005.6).
-- Mobile parity sibling of
+- Deferred (follow-up): mobile parity sibling of
   `apps/web/e2e/tests/chat/mobile-needs-you-inbox-answer.spec.ts` for the
   waiting row interactions (UI-04).
 
 ## Work orders
 
-- [ ] [Task 01: Manual-step episode notification](task-01-manual-step-episode-notification.md)
-- [ ] [Task 02: Local waiting rows and the merged Inbox read](task-02-local-waiting-rows.md)
-- [ ] [Task 03: Unified notification bridge and module removal](task-03-unified-notification-bridge.md)
-- [ ] [Task 04: Remote waiting rows through the landed composition](task-04-remote-waiting-rows.md)
-- [ ] [Task 05: Specification and user-doc alignment](task-05-spec-docs-alignment.md)
+- [x] [Task 01: Manual-step episode notification](task-01-manual-step-episode-notification.md)
+- [x] [Task 02: Local waiting rows and the merged Inbox read](task-02-local-waiting-rows.md)
+- [x] [Task 03: Unified notification bridge and module removal](task-03-unified-notification-bridge.md)
+- [x] [Task 04: Remote waiting rows through the landed composition](task-04-remote-waiting-rows.md)
+- [x] [Task 05: Specification and user-doc alignment](task-05-spec-docs-alignment.md)
 
 ## Verification results
 
-Pending.
+All five work orders are implemented and verified; per-task detail lives in
+each task file's Results. Against the plan's verification entry points:
+
+- Backend: every new and changed test in
+  `./internal/orchestrator/...`, `./internal/notifications/...`,
+  `./internal/clarification/...`, `./internal/task/...`,
+  `./internal/instances/...`, and `./internal/backendapp/...` passes. The
+  remaining package failures were compared name-for-name against a
+  pristine-HEAD baseline worktree on this machine and are identical
+  (documented environmental baseline: worktree-fixture and `/var` symlink
+  failures); the change adds zero new failures.
+- Frontend: targeted vitest runs over every touched area pass (notification
+  handler, settings events table, needs-you-inbox types/API/slice/hooks/
+  components/page, app-sidebar and navigation, remote-inbox controller and
+  section, coordinator classifier difference); `pnpm run typecheck`,
+  `pnpm run i18n:check`, and `pnpm run i18n:ratchet` pass.
+- E2E: `pnpm e2e:run --grep "waiting rows"` passes 3/3;
+  `pnpm e2e:run --grep "multi-instance"` passes all matching tests (the
+  six-test full run had one remote-inbox badge failure caused by the merged
+  remote read legitimately counting the fixture task's manual-step wait;
+  fixed by completing that fixture task, and both affected specs re-ran
+  green).
+- OpenSpec/docs: `openspec validate --all --strict --no-interactive`,
+  `scripts/list-docs.py validate`, `scripts/lint-spec-files.py --all`, and
+  `git diff --check -- docs openspec` pass (task 05).
+- Not implemented: the mobile-parity sibling E2E spec for waiting-row
+  interactions named under E2E tests. Waiting-row interactions are covered by
+  the desktop waiting-rows spec plus the row and hidden-panel component
+  tests; a dedicated mobile spec remains follow-up work.
 
 ## Risks
 

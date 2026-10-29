@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "../../fixtures/test-base";
 import type { ApiClient } from "../../helpers/api-client";
 import { dwell, waitForHttp, watchWs } from "../../helpers/causal-waits";
+import { getCapturedNotifications } from "../../helpers/notifications-capture";
 import { waitForAgentMessage, waitForSessionDone } from "../../helpers/session";
 import {
   bootRemoteBackend,
@@ -36,30 +37,33 @@ type InstanceHealth = {
   supported: boolean;
 };
 
-type RemoteNotificationRow = {
-  id: string;
-  instance_id: string;
-  event: string;
-  occurrence_id: string;
-  task_id: string;
-  session_id: string;
-  title: string;
-  body: string;
-  created_at: string;
-  read: boolean;
-  dismissed: boolean;
-};
-
 async function instanceHealth(apiClient: ApiClient, instanceId: string): Promise<InstanceHealth> {
   const res = await apiClient.rawRequest("GET", `/api/v1/instances/${instanceId}/health`);
   if (res.status !== 200) throw new Error(`instance health returned ${res.status}`);
   return (await res.json()) as InstanceHealth;
 }
 
-async function remoteNotificationRows(apiClient: ApiClient): Promise<RemoteNotificationRow[]> {
-  const res = await apiClient.rawRequest("GET", "/api/v1/remote-notifications");
-  if (res.status !== 200) throw new Error(`remote notifications returned ${res.status}`);
-  return (await res.json()) as RemoteNotificationRow[];
+type NotificationProvider = { id: string; type: string; events: string[] };
+
+/** Subscribes the local backend's default local provider to one more event
+ *  kind, the same rule a locally emitted event follows. */
+async function subscribeLocalProviderEvent(apiClient: ApiClient, event: string): Promise<void> {
+  const listResponse = await apiClient.rawRequest("GET", "/api/v1/notification-providers");
+  if (listResponse.status !== 200) {
+    throw new Error(`notification providers returned ${listResponse.status}`);
+  }
+  const body = (await listResponse.json()) as { providers: NotificationProvider[] };
+  const provider = body.providers.find((candidate) => candidate.type === "local");
+  if (!provider) throw new Error("no local notification provider provisioned");
+  if (provider.events.includes(event)) return;
+  const updateResponse = await apiClient.rawRequest(
+    "PATCH",
+    `/api/v1/notification-providers/${provider.id}`,
+    { events: [...provider.events, event] },
+  );
+  if (updateResponse.status !== 200) {
+    throw new Error(`provider subscription update returned ${updateResponse.status}`);
+  }
 }
 
 // Switching back to the local instance is a full reload. Detect the fresh
@@ -106,9 +110,9 @@ async function switchInstanceViaPicker(
   await selectSent;
 }
 
-// Task workbenches collapse the app sidebar rail, and the instance picker and
-// the notifications module's rows render only in the expanded sidebar, so
-// expand the rail before interacting with either surface.
+// Task workbenches collapse the app sidebar rail, and the instance picker
+// renders only in the expanded sidebar, so expand the rail before
+// interacting with that surface.
 async function expandSidebarIfNeeded(page: Page): Promise<void> {
   const header = page.getByTestId("app-sidebar-header");
   await expect(header).toBeAttached();
@@ -133,7 +137,7 @@ test.describe("multi-instance", () => {
     await releaseMultiInstanceFlag?.();
   });
 
-  test("multi-instance register, switch, chat, notify, read, and kill flows", async ({
+  test("multi-instance register, switch, chat, relayed notification, and kill flows", async ({
     testPage,
     backend,
     apiClient,
@@ -208,6 +212,14 @@ test.describe("multi-instance", () => {
       );
       await waitForRemoteBoot(testPage, created.id);
       await remoteAppStateLoaded;
+      // B's shell overwrites __KANDEV_API_PORT with the per-instance proxy
+      // port; capture it now, because the page fixture's init script restores
+      // the local backend port on every document, including the local one the
+      // panel returns to for the relayed-notification flow.
+      const remoteProxyPort = await testPage.evaluate(
+        () => (window as Window & { __KANDEV_API_PORT?: string }).__KANDEV_API_PORT,
+      );
+      if (!remoteProxyPort) throw new Error("remote boot did not expose __KANDEV_API_PORT");
       const kanban = new KanbanPage(testPage);
       await expect(kanban.board).toBeVisible();
       await expect(kanban.taskCard(remoteTaskId)).toBeVisible();
@@ -232,31 +244,24 @@ test.describe("multi-instance", () => {
       ).toBeVisible();
 
       // --- Flow 4: switch back to A; a remote turn completion notifies ---
-      // The module's rows come from the local remote-notifications REST load,
-      // and live frames only arrive on a subscribed socket (no replay), so
-      // both are awaited before the badge baseline is read.
-      const notificationsLoaded = waitForHttp(testPage, "GET", /^\/api\/v1\/remote-notifications$/);
+      // Relayed occurrences now flow through the shared notification
+      // pipeline: a subscribed event kind notifies exactly like a local
+      // event of that kind, with the origin instance carried on the frame.
       const subscribed = ws.waitForResponse("user.subscribe");
       await switchToLocalInstance(testPage);
-      await notificationsLoaded;
       await subscribed;
+      // Turn-finished is quiet by default, so opt the local user in before
+      // the remote turn that must notify.
+      await subscribeLocalProviderEvent(apiClient, "session.turn_finished");
 
-      const totalBadge = testPage.getByTestId("sidebar-notifications-unread-total");
-      const instanceBadge = testPage.getByTestId(`sidebar-instance-unread-${created.id}`);
-      const pickerTrigger = testPage.getByTestId("sidebar-instance-trigger");
-      await expect(totalBadge).toBeVisible();
-      // The module badge renders in the sidebar; the picker's per-instance
-      // badge renders inside its dropdown, so open it to read the baseline.
-      await pickerTrigger.click();
-      await expect(instanceBadge).toBeVisible();
-      const beforeTotal = Number(await totalBadge.textContent());
-      const beforeInstance = Number(await instanceBadge.textContent());
-      await testPage.keyboard.press("Escape");
+      // The module's REST surface is gone with the module itself.
+      const remoteNotifications = await apiClient.rawRequest("GET", "/api/v1/remote-notifications");
+      expect(remoteNotifications.status).toBe(404);
 
       // Arm the frame wait before the action that publishes it, then drive
       // the turn directly against B (api-client, not through the proxy).
-      const remoteFrame = ws.waitForEvent("remote_notification", {
-        where: (payload) => payload.task_id === remoteTaskId,
+      const relayedFrame = ws.waitForEvent("session.turn_finished", {
+        where: (payload) => payload.origin_instance_id === created.id,
       });
       await remoteClient.addUserMessage(
         remoteTaskId,
@@ -270,68 +275,37 @@ test.describe("multi-instance", () => {
         "Waiting for the notification-triggering remote turn to finish",
         30_000,
       );
-      await remoteFrame;
+      const frame = await relayedFrame;
+      expect(frame.payload.origin_instance_name).toBe(REMOTE_INSTANCE_NAME);
+      expect(frame.payload.task_id).toBe(remoteTaskId);
 
-      await expect(testPage.getByTestId(`sidebar-notification-group-${created.id}`)).toBeVisible();
-      await expect(totalBadge).toHaveText(String(beforeTotal + 1));
-      await pickerTrigger.click();
-      await expect(instanceBadge).toHaveText(String(beforeInstance + 1));
-      await testPage.keyboard.press("Escape");
+      // The unified pipeline notifies like a local event of the kind: the
+      // browser notification carries the origin instance as its label.
+      await expect
+        .poll(
+          async () =>
+            (await getCapturedNotifications(testPage)).some(
+              (notification) =>
+                notification.title === `[${REMOTE_INSTANCE_NAME}] Agent turn finished`,
+            ),
+          { message: "Waiting for the relayed notification to reach the browser surface" },
+        )
+        .toBe(true);
+
+      // The remote-only sidebar module no longer exists: no groups, no
+      // unread badges, on the desktop sidebar or the phone navigation.
+      await expect(testPage.getByTestId("sidebar-notifications-unread-total")).toHaveCount(0);
+      await expect(testPage.getByTestId(`sidebar-notification-group-${created.id}`)).toHaveCount(0);
       await dwell(
         testPage,
         300,
         "negative-assertion",
-        "asserting the relayed remote notification never raises a toast",
+        "asserting the relayed remote notification never raises an in-app toast",
       );
       await expect(testPage.getByTestId("toast-message")).toHaveCount(0);
 
-      // --- Flow 5: click the entry; switch to B on the task route ---
-      const rows = await remoteNotificationRows(apiClient);
-      const entry = rows.filter((row) => row.task_id === remoteTaskId).at(-1);
-      if (!entry) throw new Error("no relayed notification entry for the remote task");
-      await testPage.getByTestId(`sidebar-notification-row-${entry.id}`).click();
-      await testPage.waitForURL(new RegExp(`/t/${remoteTaskId}\\?kandev_instance=${created.id}$`));
-      await waitForRemoteBoot(testPage, created.id);
-      const remoteSession = new SessionPage(testPage);
-      await remoteSession.waitForLoad();
-      await expect(
-        remoteSession.activeChat().getByText(REMOTE_TURN_TWO_REPLY, { exact: true }),
-      ).toBeVisible();
-
-      // --- Flow 6: mark all read; badge clears and survives reload ---
-      const readAllSent = waitForHttp(
-        testPage,
-        "POST",
-        /^\/api\/v1\/remote-notifications\/read-all$/,
-      );
-      await testPage.getByTestId("sidebar-notifications-read-all").click();
-      await readAllSent;
-      await expect(totalBadge).toHaveCount(0);
-      await expect(instanceBadge).toHaveCount(0);
-      // The reload's module REST read is the cause the cleared badges hang
-      // off; awaiting it keeps "stays cleared" from passing on a slow load.
-      const notificationsReloaded = waitForHttp(
-        testPage,
-        "GET",
-        /^\/api\/v1\/remote-notifications$/,
-      );
-      await testPage.reload();
-      await remoteSession.waitForLoad();
-      await expandSidebarIfNeeded(testPage);
-      await notificationsReloaded;
-      await expect(testPage.getByTestId("sidebar-notifications-unread-total")).toHaveCount(0);
-      // Open the picker so its per-instance badge absence is asserted inside
-      // the rendered dropdown, not behind a closed one.
-      await testPage.getByTestId("sidebar-instance-trigger").click();
-      await expect(testPage.getByTestId(`sidebar-instance-unread-${created.id}`)).toHaveCount(0);
-      await testPage.keyboard.press("Escape");
-      await expect(testPage.getByTestId(`sidebar-notification-row-${entry.id}`)).toBeVisible();
-
-      // --- Flow 7: kill B; health degrades, A unaffected, structured error ---
-      const proxyPort = await testPage.evaluate(
-        () => (window as Window & { __KANDEV_API_PORT?: string }).__KANDEV_API_PORT,
-      );
-      if (!proxyPort) throw new Error("remote boot did not expose __KANDEV_API_PORT");
+      // --- Flow 5: kill B; health degrades, A unaffected, structured error ---
+      const proxyPort = remoteProxyPort;
       await remote.kill();
 
       const proxyError = await testPage.request.get(
@@ -371,8 +345,173 @@ test.describe("multi-instance", () => {
         instance: REMOTE_INSTANCE_NAME,
       });
 
-      await switchToLocalInstance(testPage);
+      // The panel already returned to the local instance for the relayed
+      // notification, so the picker's local row is the active one and a
+      // picker switch would be a no-op: a plain local navigation re-reads the
+      // board instead.
+      await testPage.goto("/");
       await expect(kanban.taskCard(afterTask.id)).toBeVisible();
+    } finally {
+      await remote?.dispose();
+    }
+  });
+
+  test("remote waiting rows appear, resolve, degrade, and notify without affecting other sources", async ({
+    testPage,
+    backend,
+    apiClient,
+  }) => {
+    test.setTimeout(420_000);
+    const { portOffset, parallelSlot } = remoteBackendPortInputs(backend.port);
+    let remote: RemoteBackendContext | undefined;
+
+    try {
+      remote = await bootRemoteBackend({
+        localBaseUrl: backend.baseUrl,
+        portOffset,
+        parallelSlot,
+      });
+      const seed = await seedRemoteBackendTask(remote, "Remote waiting rows fixture task");
+      // The fixture task's completed turn parks it in the template's Review
+      // step, which is itself a manual step; complete it so the remote's
+      // waiting page holds exactly the rows this test seeds.
+      await seed.client.updateTaskState(seed.task.id, "COMPLETED");
+
+      // A manual step on the remote's own workflow: a sessionless task parked
+      // there is the remote's manual-step waiting row.
+      const manualStepName = "Remote manual gate";
+      const manualStep = await seed.client.createWorkflowStep(seed.workflowId, manualStepName, 99);
+      const waitingTitle = "Remote task parked at the gate";
+      const waitingTask = await seed.client.seedTask(seed.workspaceId, waitingTitle, {
+        workflow_id: seed.workflowId,
+        workflow_step_id: manualStep.id,
+      });
+
+      // Register the live remote B, plus a second instance that never answers:
+      // its degradation must not hide B's rows or the local page.
+      const ws = watchWs(testPage);
+      const registerResponse = await apiClient.rawRequest("POST", "/api/v1/instances", {
+        name: REMOTE_INSTANCE_NAME,
+        base_url: remote.baseUrl,
+        enabled: true,
+      });
+      expect(registerResponse.status).toBe(201);
+      const instanceId = ((await registerResponse.json()) as { id: string }).id;
+
+      const deadInstance = await apiClient.rawRequest("POST", "/api/v1/instances", {
+        name: "Never reachable box",
+        base_url: "http://localhost:65530",
+        enabled: true,
+      });
+      expect(deadInstance.status).toBe(201);
+      const deadInstanceId = ((await deadInstance.json()) as { id: string }).id;
+
+      // --- The remote waiting row appears in B's section; the dead instance
+      // degrades on its own; the local page still lists its own (empty) state.
+      await testPage.goto("/needs-you-inbox");
+      const liveSection = testPage.locator(
+        `[data-testid="remote-inbox-section"][data-instance-id="${instanceId}"]`,
+      );
+      const deadSection = testPage.locator(
+        `[data-testid="remote-inbox-section"][data-instance-id="${deadInstanceId}"]`,
+      );
+      const remoteRow = liveSection.getByTestId("needs-you-waiting-row").filter({
+        hasText: waitingTitle,
+      });
+      await expect(remoteRow).toBeVisible({ timeout: 30_000 });
+      await expect(remoteRow).toContainText(manualStepName);
+      // The waiting row names its origin instance and offers no answer surface.
+      await expect(liveSection.getByTestId("needs-you-inbox-instance-chip").first()).toHaveText(
+        REMOTE_INSTANCE_NAME,
+      );
+      await expect(remoteRow.getByTestId("needs-you-inbox-row-toggle")).toHaveCount(0);
+
+      await expect(deadSection.getByTestId("remote-inbox-degraded")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(deadSection.getByTestId("remote-inbox-degraded")).toContainText(
+        "Never reachable box",
+      );
+      await expect(testPage.getByTestId("needs-you-inbox-empty")).toBeVisible();
+
+      // --- Opening the remote waiting row switches the panel to B's task ---
+      await remoteRow.getByTestId("needs-you-waiting-open-task").click();
+      await testPage.waitForURL(
+        new RegExp(`/t/${waitingTask.task_id}\\?[^/]*kandev_instance=${instanceId}$`),
+      );
+      await switchToLocalInstance(testPage);
+
+      // --- The row resolves by re-read once the remote no longer reports it ---
+      await seed.client.updateTaskState(waitingTask.task_id, "COMPLETED");
+      await testPage.goto("/needs-you-inbox");
+      await expect(remoteRow).toHaveCount(0, { timeout: 30_000 });
+      await expect(liveSection.getByTestId("remote-inbox-empty")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(deadSection.getByTestId("remote-inbox-degraded")).toBeVisible();
+      await expect(testPage.getByTestId("needs-you-inbox-empty")).toBeVisible();
+
+      // --- A relayed manual-step entry refreshes B's page and notifies ---
+      // The agent's own turn completion moves its task into the template's
+      // Review step (a manual step), so the entry is attributable to the
+      // agent and the moving operator is not excluded from the notification.
+      const relayedTitle = "Remote task the agent parked";
+      const relayedFrame = ws.waitForEvent("task.manual_step_entered", {
+        where: (payload) => payload.origin_instance_id === instanceId,
+        timeout: 90_000,
+      });
+      const relayedTask = await seed.client.createTaskWithAgent(
+        seed.workspaceId,
+        relayedTitle,
+        seed.agentProfileId,
+        {
+          description: "/e2e:simple-message",
+          workflow_id: seed.workflowId,
+          workflow_step_id: seed.startStepId,
+          repository_ids: [seed.repositoryId],
+        },
+      );
+      if (!relayedTask.session_id) throw new Error("relayed manual-step task returned no session");
+      await waitForSessionDone(
+        seed.client,
+        relayedTask.id,
+        relayedTask.session_id,
+        "Waiting for the remote turn that parks the task at the manual step",
+        60_000,
+      );
+      const frame = await relayedFrame;
+      expect(frame.payload.task_id).toBe(relayedTask.id);
+
+      // The frame refreshes B's page without a reload, so the new wait lists.
+      const relayedRow = liveSection.getByTestId("needs-you-waiting-row").filter({
+        hasText: relayedTitle,
+      });
+      await expect(relayedRow).toBeVisible({ timeout: 30_000 });
+      // The unified pipeline notifies like a local event of the kind, with the
+      // origin instance as the label.
+      await expect
+        .poll(
+          async () =>
+            (await getCapturedNotifications(testPage)).some(
+              (notification) =>
+                notification.title === `[${REMOTE_INSTANCE_NAME}] Task waiting on you`,
+            ),
+          { message: "Waiting for the relayed manual-step notification" },
+        )
+        .toBe(true);
+
+      // --- Killing B degrades only B's section ---
+      await remote.kill();
+      await testPage.goto("/needs-you-inbox");
+      await expect(liveSection.getByTestId("remote-inbox-degraded")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(liveSection.getByTestId("remote-inbox-degraded")).toContainText(
+        REMOTE_INSTANCE_NAME,
+      );
+      await expect(liveSection.getByTestId("needs-you-waiting-row")).toHaveCount(0);
+      await expect(deadSection.getByTestId("remote-inbox-degraded")).toBeVisible();
+      await expect(testPage.getByTestId("needs-you-inbox-empty")).toBeVisible();
     } finally {
       await remote?.dispose();
     }
@@ -403,6 +542,11 @@ test.describe("multi-instance", () => {
     const listResponse = await apiClient.rawRequest("GET", "/api/v1/instances");
     expect(listResponse.status).toBe(404);
 
+    // The remote-notifications REST surface is removed with the module, not
+    // flag-gated: it answers 404 in every build.
+    const remoteNotifications = await apiClient.rawRequest("GET", "/api/v1/remote-notifications");
+    expect(remoteNotifications.status).toBe(404);
+
     const shellResponse = await testPage.request.get(
       `/?kandev_instance=${encodeURIComponent(created.id)}`,
     );
@@ -413,10 +557,13 @@ test.describe("multi-instance", () => {
     expect(shellHtml).not.toContain("__KANDEV_INSTANCE_ID");
 
     await testPage.goto("/");
-    // The sidebar itself renders (registry row persisted, flag off), and the
-    // picker and notifications module stay hidden.
+    // The sidebar itself renders (registry row persisted, flag off), the
+    // picker stays hidden, and no remote-only notification module or entry
+    // exists anywhere in the navigation.
     await expect(testPage.getByTestId("app-sidebar-scroll")).toBeVisible();
     await expect(testPage.getByTestId("sidebar-instance-trigger")).toHaveCount(0);
     await expect(testPage.getByTestId("sidebar-notifications-unread-total")).toHaveCount(0);
+    await expect(testPage.getByTestId("sidebar-notification-group-local")).toHaveCount(0);
+    await expect(testPage.getByTestId(`sidebar-notification-group-${created.id}`)).toHaveCount(0);
   });
 });

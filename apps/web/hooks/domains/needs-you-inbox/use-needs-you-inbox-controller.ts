@@ -3,7 +3,8 @@ import { useAppStore, useAppStoreApi } from "@/components/state-provider";
 import { useFeature } from "@/hooks/domains/features/use-feature";
 import { FOREGROUND_EVENT_COALESCE_MS, useForegroundRefresh } from "@/hooks/use-foreground-refresh";
 import { getWebSocketClient } from "@/lib/ws/connection";
-import { listClarificationInbox } from "@/lib/api/domains/clarification-inbox-api";
+import { listNeedsYouInbox } from "@/lib/api/domains/needs-you-inbox-api";
+import { NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED } from "@/lib/notifications/events";
 import { selectNeedsYouInboxNextSnoozeExpiry } from "@/lib/state/slices/needs-you-inbox/selectors";
 import { readBootPayload } from "@/src/boot-payload";
 import { NeedsYouInboxRefreshCoordinator } from "./needs-you-inbox-refresh-coordinator";
@@ -115,9 +116,18 @@ function useNeedsYouInboxWsRefresh(
     };
     const offPending = client.on("session.pending_action_changed", bump);
     const offStateChanged = client.on("session.state_changed", bump);
+    // A new manual-step waiting episode names a task that may have no session
+    // at all, so neither session signal above can carry it: this is the
+    // waiting rows' own arrival trigger. A relayed episode carries the origin
+    // instance and refreshes that instance's page, not the local read.
+    const offManualStep = client.on(NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED, (message) => {
+      if (message?.payload?.origin_instance_id) return;
+      bump();
+    });
     return () => {
       offPending();
       offStateChanged();
+      offManualStep();
     };
   }, [enabled, scope.connectionStatus, workspaceId, refresh, storeApi]);
 
@@ -192,14 +202,14 @@ export function useNeedsYouInboxController() {
         const { beginNeedsYouInboxRead, setNeedsYouInboxPage } = storeApi.getState();
         const generation = beginNeedsYouInboxRead(workspaceId);
         readGeneration = generation;
-        const page = await listClarificationInbox(workspaceId, { init: { signal } });
+        const page = await listNeedsYouInbox(workspaceId, { init: { signal } });
         if (signal.aborted || coordinatorRef.current !== coordinator) return;
         setNeedsYouInboxPage(workspaceId, generation, {
-          bundles: page.bundles,
+          rows: page.rows,
           count: page.count,
           hiddenCount: page.hidden_count,
           nextSnoozeExpiry: page.next_snooze_expiry,
-          hasMore: page.next_cursor !== undefined,
+          hasMore: page.has_more,
         });
       },
       () => {

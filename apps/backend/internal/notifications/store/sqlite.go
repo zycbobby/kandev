@@ -128,19 +128,39 @@ func (r *sqliteRepository) initSchema(ctx context.Context) error {
 	if err := r.migrateLegacySubscriptions(); err != nil {
 		return err
 	}
-	return r.migrateUpdateAvailableSubscriptions(ctx)
+	if err := r.migrateUpdateAvailableSubscriptions(ctx); err != nil {
+		return err
+	}
+	return r.migrateManualStepWaitSubscriptions(ctx)
 }
 
 const updateAvailableSubscriptionMigration = "add_system_update_available_to_local_and_system_v1"
 
-func (r *sqliteRepository) migrateUpdateAvailableSubscriptions(ctx context.Context) error {
+// manualStepWaitSubscriptionMigration backfills task.manual_step_entered
+// onto pre-existing default providers. The notification service's creation
+// list only covers brand-new installs; without this pass every existing
+// Local/System provider stays silent on manual-step waits forever.
+const manualStepWaitSubscriptionMigration = "add_task_manual_step_entered_to_local_and_system_v1"
+
+// manualStepWaitSubscriptionEvent is the event type the migration
+// backfills. It is spelled locally because the store cannot import the
+// service package that owns the canonical constant (the service imports the
+// store); the value is the wire contract, not an internal name.
+const manualStepWaitSubscriptionEvent = "task.manual_step_entered"
+
+// migrateDefaultEventSubscription inserts an eventType subscription for every
+// local/system provider that lacks one, exactly once per migrationName. The
+// marker row makes the pass one-shot, so a user who later unsubscribes is
+// never re-subscribed by a later boot; a provider holding a disabled
+// subscription row for the event is deliberately left alone too.
+func (r *sqliteRepository) migrateDefaultEventSubscription(ctx context.Context, migrationName, eventType string) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var completed bool
-	err = tx.GetContext(ctx, &completed, r.db.Rebind(`SELECT TRUE FROM notification_migrations WHERE name = ?`), updateAvailableSubscriptionMigration)
+	err = tx.GetContext(ctx, &completed, r.db.Rebind(`SELECT TRUE FROM notification_migrations WHERE name = ?`), migrationName)
 	if err == nil {
 		return tx.Commit()
 	}
@@ -154,7 +174,7 @@ func (r *sqliteRepository) migrateUpdateAvailableSubscriptions(ctx context.Conte
 			SELECT 1 FROM notification_subscriptions s
 			WHERE s.provider_id = p.id AND s.event_type = ?
 		)
-	`), "local", "system", "system.update_available")
+	`), "local", "system", eventType)
 	if err != nil {
 		return err
 	}
@@ -176,14 +196,22 @@ func (r *sqliteRepository) migrateUpdateAvailableSubscriptions(ctx context.Conte
 		if _, err := tx.ExecContext(ctx, r.db.Rebind(`
 			INSERT INTO notification_subscriptions (id, user_id, provider_id, event_type, enabled, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`), uuid.New().String(), provider.userID, provider.id, "system.update_available", dialect.BoolToInt(true), now, now); err != nil {
+		`), uuid.New().String(), provider.userID, provider.id, eventType, dialect.BoolToInt(true), now, now); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, r.db.Rebind(`INSERT INTO notification_migrations (name, completed_at) VALUES (?, ?)`), updateAvailableSubscriptionMigration, now); err != nil {
+	if _, err := tx.ExecContext(ctx, r.db.Rebind(`INSERT INTO notification_migrations (name, completed_at) VALUES (?, ?)`), migrationName, now); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (r *sqliteRepository) migrateUpdateAvailableSubscriptions(ctx context.Context) error {
+	return r.migrateDefaultEventSubscription(ctx, updateAvailableSubscriptionMigration, "system.update_available")
+}
+
+func (r *sqliteRepository) migrateManualStepWaitSubscriptions(ctx context.Context) error {
+	return r.migrateDefaultEventSubscription(ctx, manualStepWaitSubscriptionMigration, manualStepWaitSubscriptionEvent)
 }
 
 func (r *sqliteRepository) migrateDeliveries() error {

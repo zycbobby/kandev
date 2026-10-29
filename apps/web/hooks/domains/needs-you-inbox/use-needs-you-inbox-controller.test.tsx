@@ -5,20 +5,29 @@ import { defaultFeatureFlags } from "@/lib/state/slices/features/types";
 import { ApiError } from "@/lib/api/client";
 import type { HydrationState } from "@/lib/state/store";
 
-const listClarificationInboxMock = vi.fn();
-vi.mock("@/lib/api/domains/clarification-inbox-api", () => ({
-  listClarificationInbox: (...args: unknown[]) => listClarificationInboxMock(...args),
+const listNeedsYouInboxMock = vi.fn();
+vi.mock("@/lib/api/domains/needs-you-inbox-api", () => ({
+  listNeedsYouInbox: (...args: unknown[]) => listNeedsYouInboxMock(...args),
 }));
 
 const SESSION_STATE_CHANGED = "session.state_changed";
+const TASK_MANUAL_STEP_ENTERED = "task.manual_step_entered";
 
-type WsHandler = () => void;
+type WsHandler = (message?: { payload?: { origin_instance_id?: string } }) => void;
 const wsMocks = vi.hoisted(() => ({
   handlers: new Map<string, Set<WsHandler>>(),
 }));
 
 function emitWsEvent(type: string) {
   for (const handler of wsMocks.handlers.get(type) ?? []) handler();
+}
+
+/** A relayed manual-step frame carries the origin instance and must not
+ *  refresh the LOCAL inbox read. */
+function emitRelayedWsEvent(type: string) {
+  for (const handler of wsMocks.handlers.get(type) ?? []) {
+    handler({ payload: { origin_instance_id: "remote-instance" } });
+  }
 }
 
 vi.mock("@/lib/ws/connection", () => ({
@@ -49,11 +58,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function page(overrides: Partial<Awaited<ReturnType<typeof listClarificationInboxMock>>> = {}) {
+function page(overrides: Partial<Awaited<ReturnType<typeof listNeedsYouInboxMock>>> = {}) {
   return {
-    bundles: [],
+    rows: [],
     count: 0,
     hidden_count: 0,
+    has_more: false,
     next_snooze_expiry: null,
     ...overrides,
   };
@@ -81,8 +91,8 @@ function renderController(enabled = true) {
 }
 
 beforeEach(() => {
-  listClarificationInboxMock.mockReset();
-  listClarificationInboxMock.mockResolvedValue(page());
+  listNeedsYouInboxMock.mockReset();
+  listNeedsYouInboxMock.mockResolvedValue(page());
   readBootPayloadMock.mockReset();
   readBootPayloadMock.mockReturnValue({ initialState: {} });
   wsMocks.handlers.clear();
@@ -98,7 +108,7 @@ describe("useNeedsYouInboxController", () => {
     renderController(true);
 
     await waitFor(() =>
-      expect(listClarificationInboxMock).toHaveBeenCalledWith(WORKSPACE_ID, expect.anything()),
+      expect(listNeedsYouInboxMock).toHaveBeenCalledWith(WORKSPACE_ID, expect.anything()),
     );
   });
 
@@ -108,12 +118,12 @@ describe("useNeedsYouInboxController", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(listClarificationInboxMock).not.toHaveBeenCalled();
+    expect(listNeedsYouInboxMock).not.toHaveBeenCalled();
   });
 
   it("applies a successful read into the count slice", async () => {
-    listClarificationInboxMock.mockResolvedValue(
-      page({ count: 2, bundles: [], hidden_count: 1, next_snooze_expiry: null }),
+    listNeedsYouInboxMock.mockResolvedValue(
+      page({ count: 2, rows: [], hidden_count: 1, next_snooze_expiry: null }),
     );
     const { result } = renderController(true);
 
@@ -131,7 +141,7 @@ describe("useNeedsYouInboxController", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     act(() => {
       result.current.getState().bumpNeedsYouInboxRefreshTick();
@@ -140,20 +150,100 @@ describe("useNeedsYouInboxController", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useNeedsYouInboxController WS refresh triggers", () => {
+  it("re-reads when a manual-step waiting episode arrives over the WS", async () => {
+    vi.useFakeTimers();
+    renderController(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
+
+    // A waiting episode may have no session at all, so this is the only WS
+    // arrival signal the waiting rows have.
+    act(() => emitWsEvent(TASK_MANUAL_STEP_ENTERED));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores a relayed manual-step frame for a remote instance", async () => {
+    vi.useFakeTimers();
+    renderController(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
+
+    // The frame names a remote origin instance: its waiting row belongs to
+    // that instance's page, never to the local read.
+    act(() => emitRelayedWsEvent(TASK_MANUAL_STEP_ENTERED));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("switching workspaces replaces the local rows and leaves remote pages alone", async () => {
+    vi.useFakeTimers();
+    listNeedsYouInboxMock.mockImplementation((_workspaceId: string) =>
+      Promise.resolve(page({ count: 1 })),
+    );
+    const { result } = renderController(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.getState().needsYouInbox.byWorkspaceId[WORKSPACE_ID]?.count).toBe(1);
+
+    // A landed remote page exists for an instance: switching the local
+    // workspace must not disturb it.
+    const remoteGeneration = result.current.getState().beginRemoteInboxRead("i1");
+    result.current.getState().setRemoteInboxPage("i1", remoteGeneration, {
+      rows: [],
+      count: 4,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+
+    act(() => result.current.getState().setActiveWorkspace("w2"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The new workspace's rows replace the old workspace's as the active page
+    // (the old workspace keeps its own stale entry until re-read), while the
+    // remote instance page is untouched by the local switch.
+    expect(result.current.getState().workspaces.activeId).toBe("w2");
+    expect(result.current.getState().needsYouInbox.byWorkspaceId.w2?.count).toBe(1);
+    expect(result.current.getState().needsYouInbox.byWorkspaceId[WORKSPACE_ID]?.count).toBe(1);
+    expect(result.current.getState().needsYouInbox.remoteByInstanceId.i1?.count).toBe(4);
+    expect(listNeedsYouInboxMock).toHaveBeenLastCalledWith("w2", expect.anything());
+  });
+});
+
+describe("useNeedsYouInboxController refresh coalescing", () => {
   it("shares mixed triggers during a read and runs at most one trailing refresh", async () => {
     vi.useFakeTimers();
     const firstRead = deferred<ReturnType<typeof page>>();
-    listClarificationInboxMock.mockImplementationOnce(() => firstRead.promise);
-    listClarificationInboxMock.mockResolvedValue(page({ count: 4 }));
+    listNeedsYouInboxMock.mockImplementationOnce(() => firstRead.promise);
+    listNeedsYouInboxMock.mockResolvedValue(page({ count: 4 }));
     const { result } = renderController(true);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     act(() => {
       emitWsEvent(SESSION_STATE_CHANGED);
@@ -165,7 +255,7 @@ describe("useNeedsYouInboxController", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(250);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       firstRead.resolve(page());
@@ -173,7 +263,7 @@ describe("useNeedsYouInboxController", () => {
       await vi.advanceTimersByTimeAsync(750);
     });
 
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
     await act(async () => {
       await Promise.resolve();
     });
@@ -184,7 +274,7 @@ describe("useNeedsYouInboxController", () => {
 describe("useNeedsYouInboxController temporary-failure cooldowns", () => {
   it("keeps WS refreshes inside the temporary-failure cooldown and honors Retry-After", async () => {
     vi.useFakeTimers();
-    listClarificationInboxMock
+    listNeedsYouInboxMock
       .mockRejectedValueOnce(new ApiError("busy", 503, null, 3))
       .mockResolvedValueOnce(page())
       .mockRejectedValueOnce(new ApiError("busy", 503, null))
@@ -194,7 +284,7 @@ describe("useNeedsYouInboxController temporary-failure cooldowns", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     act(() => emitWsEvent(SESSION_STATE_CHANGED));
     await act(async () => {
@@ -206,47 +296,47 @@ describe("useNeedsYouInboxController temporary-failure cooldowns", () => {
         await vi.advanceTimersByTimeAsync(500);
       });
     }
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(499);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
 
     act(() => emitWsEvent(SESSION_STATE_CHANGED));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(3);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(3);
 
     act(() => result.current.getState().bumpNeedsYouInboxRefreshTick());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_999);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(3);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(3);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(4);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(4);
   });
 
   it("backs off successive temporary failures by 2, 5, 15, and 30 seconds", async () => {
     vi.useFakeTimers();
-    listClarificationInboxMock.mockRejectedValue(new ApiError("busy", 503, null));
+    listNeedsYouInboxMock.mockRejectedValue(new ApiError("busy", 503, null));
     const { result } = renderController(true);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     const delays = [2_000, 5_000, 15_000, 30_000];
     for (const [index, delay] of delays.entries()) {
@@ -254,11 +344,11 @@ describe("useNeedsYouInboxController temporary-failure cooldowns", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(delay - 1);
       });
-      expect(listClarificationInboxMock).toHaveBeenCalledTimes(index + 1);
+      expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(index + 1);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1);
       });
-      expect(listClarificationInboxMock).toHaveBeenCalledTimes(index + 2);
+      expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(index + 2);
     }
   });
 });
@@ -266,7 +356,7 @@ describe("useNeedsYouInboxController temporary-failure cooldowns", () => {
 describe("useNeedsYouInboxController permanent-failure recovery", () => {
   it("suspends automatic work after a permanent error but keeps explicit retry available", async () => {
     vi.useFakeTimers();
-    listClarificationInboxMock
+    listNeedsYouInboxMock
       .mockRejectedValueOnce(new ApiError("not found", 404, null))
       .mockResolvedValue(page({ count: 2 }));
     const { result } = renderController(true);
@@ -274,7 +364,7 @@ describe("useNeedsYouInboxController permanent-failure recovery", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     act(() => {
       result.current.getState().bumpNeedsYouInboxRefreshTick();
@@ -284,13 +374,13 @@ describe("useNeedsYouInboxController permanent-failure recovery", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(120_000);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     act(() => result.current.getState().requestNeedsYouInboxRetry());
     await act(async () => {
       await Promise.resolve();
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
     expect(result.current.getState().needsYouInbox.byWorkspaceId[WORKSPACE_ID]?.count).toBe(2);
   });
 });
@@ -301,7 +391,7 @@ describe("useNeedsYouInboxController scope cancellation", () => {
       signal: AbortSignal;
       deferred: ReturnType<typeof deferred<ReturnType<typeof page>>>;
     }> = [];
-    listClarificationInboxMock.mockImplementation((_workspaceId, options) => {
+    listNeedsYouInboxMock.mockImplementation((_workspaceId, options) => {
       const request = deferred<ReturnType<typeof page>>();
       reads.push({
         signal: options?.init?.signal ?? new AbortController().signal,
@@ -365,26 +455,26 @@ describe("useNeedsYouInboxController periodic and snooze refreshes", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
 
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
   });
 
   it("arms a snooze-expiry timer from the read response and re-reads once it fires", async () => {
     vi.useFakeTimers();
     const soon = new Date(Date.now() + 10_000).toISOString();
-    listClarificationInboxMock.mockResolvedValueOnce(page({ next_snooze_expiry: soon }));
-    listClarificationInboxMock.mockResolvedValue(page());
+    listNeedsYouInboxMock.mockResolvedValueOnce(page({ next_snooze_expiry: soon }));
+    listNeedsYouInboxMock.mockResolvedValue(page());
 
     renderController(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     // The reported expiry is whole-second RFC3339; the reschedule buffer
     // (below) pushes the actual timer 1s past it so the re-read always
@@ -393,20 +483,20 @@ describe("useNeedsYouInboxController periodic and snooze refreshes", () => {
       await vi.advanceTimersByTimeAsync(11_000);
     });
 
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
   });
 
   it("delays the re-read a second past the reported second-precision expiry", async () => {
     vi.useFakeTimers();
     const soon = new Date(Date.now() + 10_000).toISOString();
-    listClarificationInboxMock.mockResolvedValueOnce(page({ next_snooze_expiry: soon }));
-    listClarificationInboxMock.mockResolvedValue(page());
+    listNeedsYouInboxMock.mockResolvedValueOnce(page({ next_snooze_expiry: soon }));
+    listNeedsYouInboxMock.mockResolvedValue(page());
 
     renderController(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     // Firing exactly at the reported (truncated) instant would still see the
     // bundle as snoozed on a server storing subsecond precision; the buffer
@@ -414,12 +504,12 @@ describe("useNeedsYouInboxController periodic and snooze refreshes", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -470,7 +560,7 @@ describe("useNeedsYouInboxController boot-hydration seed (AC .34, .40, .41)", ()
     expect(seeded?.count ?? 0).toBe(0);
 
     await waitFor(() =>
-      expect(listClarificationInboxMock).toHaveBeenCalledWith(WORKSPACE_ID, expect.anything()),
+      expect(listNeedsYouInboxMock).toHaveBeenCalledWith(WORKSPACE_ID, expect.anything()),
     );
   });
 
@@ -498,13 +588,13 @@ describe("useNeedsYouInboxController boot-hydration seed (AC .34, .40, .41)", ()
 describe("useNeedsYouInboxController WS event coalescing", () => {
   it("coalesces a burst into a leading read now and one trailing read for what changed inside the window", async () => {
     vi.useFakeTimers();
-    listClarificationInboxMock.mockResolvedValueOnce(page());
-    listClarificationInboxMock.mockResolvedValue(page({ count: 3 }));
+    listNeedsYouInboxMock.mockResolvedValueOnce(page());
+    listNeedsYouInboxMock.mockResolvedValue(page({ count: 3 }));
     const { result } = renderController(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     // Burst of two distinct signals plus a repeat, all inside the window:
     // `session.state_changed` and `session.pending_action_changed` are
@@ -519,20 +609,20 @@ describe("useNeedsYouInboxController WS event coalescing", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     // The WS debounce expires at 250ms, while the shared one-second start
     // floor holds its single trailing read.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(249);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     // Once the start floor elapses, the trailing read includes the burst.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(751);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
     expect(result.current.getState().needsYouInbox.byWorkspaceId[WORKSPACE_ID]?.count).toBe(3);
 
     // A later event after the read has settled still causes a bounded read.
@@ -545,11 +635,11 @@ describe("useNeedsYouInboxController WS event coalescing", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(750);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(3);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -557,12 +647,12 @@ describe("useNeedsYouInboxController WS event cleanup", () => {
   it("aborts a held read and clears pending WS work on unmount", async () => {
     vi.useFakeTimers();
     const firstRead = deferred<ReturnType<typeof page>>();
-    listClarificationInboxMock.mockImplementationOnce(() => firstRead.promise);
+    listNeedsYouInboxMock.mockImplementationOnce(() => firstRead.promise);
     const { unmount } = renderController(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     act(() => {
       emitWsEvent(SESSION_STATE_CHANGED);
@@ -571,7 +661,7 @@ describe("useNeedsYouInboxController WS event cleanup", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     // The second WS event and held request leave timer work pending.
     expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -589,15 +679,15 @@ describe("useNeedsYouInboxController WS event cleanup", () => {
   // drop a still-pending trailing bump.
   it("does not drop a pending trailing read when the WS effect re-runs for an unrelated reason", async () => {
     vi.useFakeTimers();
-    listClarificationInboxMock.mockResolvedValueOnce(page());
+    listNeedsYouInboxMock.mockResolvedValueOnce(page());
     const secondRead = deferred<ReturnType<typeof page>>();
-    listClarificationInboxMock.mockImplementationOnce(() => secondRead.promise);
-    listClarificationInboxMock.mockResolvedValue(page({ count: 3 }));
+    listNeedsYouInboxMock.mockImplementationOnce(() => secondRead.promise);
+    listNeedsYouInboxMock.mockResolvedValue(page({ count: 3 }));
     const { result } = renderController(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(1);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
@@ -610,7 +700,7 @@ describe("useNeedsYouInboxController WS event cleanup", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(2);
 
     // A connectionStatus change that is not a "disconnected -> connected"
     // edge (so it does not itself trigger a reconnect read) still re-runs the
@@ -628,7 +718,7 @@ describe("useNeedsYouInboxController WS event cleanup", () => {
       await secondRead.promise;
       await vi.advanceTimersByTimeAsync(750);
     });
-    expect(listClarificationInboxMock).toHaveBeenCalledTimes(3);
+    expect(listNeedsYouInboxMock).toHaveBeenCalledTimes(3);
     expect(result.current.getState().needsYouInbox.byWorkspaceId[WORKSPACE_ID]?.count).toBe(3);
   });
 });

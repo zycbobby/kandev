@@ -18,9 +18,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Occurrence carries both the remote identity and the locally persisted state.
+// Occurrence carries the remote identity of one relayed semantic occurrence.
+// It carries no presentation state: the relay store is the deduplication and
+// recovery ledger, never a display source.
 type Occurrence struct {
-	ID           string    `json:"id"`
 	InstanceID   string    `json:"instance_id"`
 	Event        string    `json:"event"`
 	OccurrenceID string    `json:"occurrence_id"`
@@ -29,12 +30,12 @@ type Occurrence struct {
 	Title        string    `json:"title"`
 	Body         string    `json:"body"`
 	CreatedAt    time.Time `json:"created_at"`
-	Read         bool      `json:"read"`
-	Dismissed    bool      `json:"dismissed"`
+	// OriginInstanceID marks a notification a peer already relayed from
+	// another instance. Its true origin must stay with that instance.
+	OriginInstanceID string `json:"origin_instance_id"`
 }
 
-// OccurrenceID is shared by persisted rows and live payloads so read/dismiss
-// actions address the same local notification without an additional lookup.
+// OccurrenceID derives the relay store's row identity from the dedup key.
 func OccurrenceID(instanceID, event, occurrenceID string) string {
 	key, _ := json.Marshal([]string{instanceID, event, occurrenceID})
 	return uuid.NewSHA1(uuid.NameSpaceOID, key).String()
@@ -44,15 +45,20 @@ type Store interface {
 	Record(context.Context, string, string, string, string, string, string, string, string, time.Time) (bool, error)
 	LatestOccurrenceTime(context.Context, string) (time.Time, error)
 }
-type Broadcaster interface {
-	BroadcastToUser(string, *ws.Message) bool
+
+// Notifier receives deduplicated relayed occurrences and delivers them
+// through the same notification pipeline local events use. The recipient is
+// explicit (the instance owner) because the remote task ID cannot be
+// resolved against local ownership.
+type Notifier interface {
+	HandleRelayedOccurrence(ctx context.Context, userID, originInstanceID, originInstanceName, eventType, taskID, sessionID, occurrenceID, title, body string)
 }
 
 type Relay struct {
 	inst        instances.Instance
 	credential  string
 	store       Store
-	hub         Broadcaster
+	notifier    Notifier
 	log         *logger.Logger
 	client      *http.Client
 	lifecycleMu sync.Mutex
@@ -64,8 +70,8 @@ type Relay struct {
 	cursorReady bool
 }
 
-func NewRelay(inst instances.Instance, credential string, store Store, hub Broadcaster, log *logger.Logger) *Relay {
-	return &Relay{inst: inst, credential: credential, store: store, hub: hub, log: log, client: &http.Client{Timeout: 20 * time.Second}}
+func NewRelay(inst instances.Instance, credential string, store Store, notifier Notifier, log *logger.Logger) *Relay {
+	return &Relay{inst: inst, credential: credential, store: store, notifier: notifier, log: log, client: &http.Client{Timeout: 20 * time.Second}}
 }
 func (r *Relay) Start(ctx context.Context) {
 	r.lifecycleMu.Lock()
@@ -183,10 +189,20 @@ func (r *Relay) authorize(header http.Header) {
 	}
 }
 func allowed(event string) bool {
-	return event == "session.turn_finished" || event == "session.clarification_requested" || event == "office.inbox_item"
+	switch event {
+	case "session.turn_finished", "session.clarification_requested", "office.inbox_item", "task.manual_step_entered":
+		return true
+	}
+	return false
 }
 func (r *Relay) record(ctx context.Context, o Occurrence) error {
 	if !allowed(o.Event) {
+		return nil
+	}
+	// Accepting an already-relayed frame would announce one logical occurrence
+	// again under this instance's identity and echo it back in bidirectional
+	// registrations.
+	if o.OriginInstanceID != "" {
 		return nil
 	}
 	if o.OccurrenceID == "" {
@@ -197,13 +213,11 @@ func (r *Relay) record(ctx context.Context, o Occurrence) error {
 	if err != nil || !inserted {
 		return err
 	}
-	o.InstanceID = r.inst.ID
-	o.ID = OccurrenceID(r.inst.ID, o.Event, o.OccurrenceID)
-	msg, err := ws.NewNotification(ws.ActionRemoteNotification, o)
-	if err != nil {
-		return err
-	}
-	r.hub.BroadcastToUser(r.inst.OwnerUserID, msg)
+	// The relay store is the only ledger: a relayed occurrence never enters
+	// the local occurrence history, so a federating peer cannot observe and
+	// re-relay it. Delivery goes to the instance owner with the origin
+	// identity, through the shared notification pipeline.
+	r.notifier.HandleRelayedOccurrence(ctx, r.inst.OwnerUserID, r.inst.ID, r.inst.Name, o.Event, o.TaskID, o.SessionID, o.OccurrenceID, o.Title, o.Body)
 	return nil
 }
 func (r *Relay) reconcileLoop(ctx context.Context) {

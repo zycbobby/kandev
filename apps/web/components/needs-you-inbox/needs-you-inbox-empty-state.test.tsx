@@ -49,8 +49,8 @@ describe("NeedsYouInboxEmptyState", () => {
   it("names all four things it does not count (AC .20)", () => {
     render(<NeedsYouInboxEmptyState hiddenCount={0} />);
 
-    const description = screen.getByText(/does not count bundles in other workspaces/);
-    expect(description.textContent).toContain("bundles in other workspaces");
+    const description = screen.getByText(/does not count rows in other workspaces/);
+    expect(description.textContent).toContain("rows in other workspaces");
     expect(description.textContent).toContain("pending permission requests");
     expect(description.textContent).toContain("parent-question records");
     expect(description.textContent).toContain("snoozed or dismissed rows");

@@ -506,6 +506,8 @@
   "notInstalled": "未安裝",
   "notificationEventClarificationRequested": "代理程式需要回答",
   "notificationEventClarificationRequestedDescription": "代理程式明確提出問題時通知。",
+  "notificationEventManualStepEntered": "任務等待你操作",
+  "notificationEventManualStepEnteredDescription": "當任務進入需要你操作的步驟時通知。",
   "notificationEventOfficeInboxItem": "辦公室收件箱項目",
   "notificationEventOfficeInboxItemDescription": "有新的收件箱項目需要你處理時通知。",
   "notificationEventToggle": "{{event}}（{{name}}）",

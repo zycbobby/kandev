@@ -165,3 +165,138 @@ func TestLocalProviderForwardsUpdatePayloadToSubscribedClient(t *testing.T) {
 		t.Fatalf("summary payload = %+v", summary)
 	}
 }
+
+// TestLocalProviderForwardsOriginAndEventKindAction pins the unified wire
+// surface: a relayed occurrence is broadcast under its own event kind (never
+// a remote-only notification action) and carries the origin identity so the
+// frontend can label and suppress by instance. Local events emit no origin
+// keys at all.
+func TestLocalProviderForwardsOriginAndEventKindAction(t *testing.T) {
+	log, err := logger.NewFromZap(zap.NewNop())
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+	hub := gatewayws.NewHub(nil, log)
+	hubCtx, cancelHub := context.WithCancel(context.Background())
+	hubDone := make(chan struct{})
+	go func() {
+		hub.Run(hubCtx)
+		close(hubDone)
+	}()
+	cleanupHub := func() {
+		cancelHub()
+		<-hubDone
+	}
+	t.Cleanup(cleanupHub)
+	frames := make(chan *ws.Message, 2)
+	clientReady := make(chan struct{})
+	serverDone := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(serverDone)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade connection: %v", err)
+			return
+		}
+		client := gatewayws.NewClient("client-1", authn.Identity{}, conn, hub, log)
+		hub.Register(client)
+		hub.SubscribeToUser(client, "user-1")
+		close(clientReady)
+		client.WritePump()
+	}))
+	t.Cleanup(func() {
+		cleanupHub()
+		select {
+		case <-serverDone:
+		case <-time.After(time.Second):
+			t.Error("websocket writer did not stop")
+		}
+		server.Close()
+	})
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+	<-clientReady
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2; i++ {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read notification: %v", err)
+				return
+			}
+			var message ws.Message
+			if err := json.Unmarshal(data, &message); err != nil {
+				t.Errorf("decode notification: %v", err)
+				return
+			}
+			frames <- &message
+		}
+	}()
+
+	provider := NewLocalProvider(hub)
+	if err := provider.Send(context.Background(), Message{
+		EventType:          "session.clarification_requested",
+		OccurrenceID:       "pending-1",
+		UserID:             "user-1",
+		Title:              "Agent needs your answer",
+		Body:               `The agent asked a question on "Remote task".`,
+		OriginInstanceID:   "inst-1",
+		OriginInstanceName: "Remote Studio",
+	}); err != nil {
+		t.Fatalf("send relayed notification: %v", err)
+	}
+	if err := provider.Send(context.Background(), Message{
+		EventType:    "session.clarification_requested",
+		OccurrenceID: "pending-2",
+		UserID:       "user-1",
+		Title:        "Agent needs your answer",
+		Body:         "The agent asked a question.",
+	}); err != nil {
+		t.Fatalf("send local notification: %v", err)
+	}
+
+	select {
+	case relayed := <-frames:
+		if relayed.Action != "session.clarification_requested" {
+			t.Fatalf("relayed frame action = %q, want the event kind", relayed.Action)
+		}
+		var payload struct {
+			OriginInstanceID   string `json:"origin_instance_id"`
+			OriginInstanceName string `json:"origin_instance_name"`
+		}
+		if err := relayed.ParsePayload(&payload); err != nil {
+			t.Fatalf("decode relayed payload: %v", err)
+		}
+		if payload.OriginInstanceID != "inst-1" || payload.OriginInstanceName != "Remote Studio" {
+			t.Fatalf("relayed origin payload = %+v, want inst-1 / Remote Studio", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no relayed frame")
+	}
+	select {
+	case local := <-frames:
+		if local.Action != "session.clarification_requested" {
+			t.Fatalf("local frame action = %q, want the event kind", local.Action)
+		}
+		var payload struct {
+			OriginInstanceID   string `json:"origin_instance_id"`
+			OriginInstanceName string `json:"origin_instance_name"`
+		}
+		if err := local.ParsePayload(&payload); err != nil {
+			t.Fatalf("decode local payload: %v", err)
+		}
+		if payload.OriginInstanceID != "" || payload.OriginInstanceName != "" {
+			t.Fatalf("local frame carried origin %+v, want none", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no local frame")
+	}
+	<-done
+}

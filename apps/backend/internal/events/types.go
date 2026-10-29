@@ -34,6 +34,13 @@ const (
 	// synthesized decision, or a queued run. Payload:
 	// {task_id, workspace_id, session_ids, stalled_for, last_event_at}.
 	TaskStalled = "task.stalled"
+	// TaskManualStepEntered fires when a task begins waiting at a manual
+	// workflow step: one that neither starts work on entry nor completes the
+	// task on entry. Payload:
+	// {task_id, session_id, workflow_step_id, occurrence_id, actor_kind, actor_id, occurred_at},
+	// where occurrence_id is the episode identity "mw:<task>:<step>:<transition>"
+	// and actor_kind/actor_id carry the step-transition ledger attribution.
+	TaskManualStepEntered = "task.manual_step_entered"
 )
 
 // Event types for plugin-backed canvas lifecycle changes. Payloads contain

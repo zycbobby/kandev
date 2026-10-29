@@ -1,15 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoreApi } from "zustand";
 import type { AppState } from "@/lib/state/store";
 import {
   NOTIFICATION_EVENT_OFFICE_INBOX_ITEM,
   NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED,
   NOTIFICATION_EVENT_SESSION_TURN_FINISHED,
   NOTIFICATION_EVENT_SYSTEM_UPDATE_AVAILABLE,
+  NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED,
 } from "@/lib/notifications/events";
-import type { BackendMessageMap } from "@/lib/types/backend";
 import { i18n } from "@/lib/i18n";
+import type { BackendMessageMap } from "@/lib/types/backend";
 import { registerNotificationsHandlers } from "./notifications";
+import type { SemanticNotificationMessage } from "./notifications.test-helpers";
+import {
+  MESSAGE_BODY,
+  MESSAGE_TITLE,
+  OTHER_TASK_ID,
+  SESSION_ID,
+  TASK_ID,
+  getHandler,
+  makeMessage,
+  makeStore,
+  notificationMock,
+} from "./notifications.test-helpers";
 
 vi.mock("@/lib/notifications/sound", () => ({
   playWaitingForInputSound: vi.fn(),
@@ -17,12 +29,6 @@ vi.mock("@/lib/notifications/sound", () => ({
 
 import { playWaitingForInputSound } from "@/lib/notifications/sound";
 
-const TASK_ID = "task-1";
-const SESSION_ID = "session-1";
-const OTHER_TASK_ID = "task-2";
-const MESSAGE_TITLE = "Agent needs your answer";
-const MESSAGE_BODY = 'The agent asked a question on "Task one".';
-const notificationMock = vi.fn();
 const TURN_FINISHED = NOTIFICATION_EVENT_SESSION_TURN_FINISHED;
 const TURN_FINISHED_FALLBACK_TITLE = "Agent turn finished";
 const ATTENTION_CASES = [
@@ -55,62 +61,6 @@ const ATTENTION_CASES = [
     delivered: true,
   },
 ] as const;
-type SemanticNotificationMessage =
-  | BackendMessageMap["session.clarification_requested"]
-  | BackendMessageMap["session.turn_finished"]
-  | BackendMessageMap["office.inbox_item"];
-
-function makeStore(overrides: Partial<AppState> = {}) {
-  const state = {
-    turns: { bySession: { [SESSION_ID]: [{ id: "turn-1" }] } },
-    tasks: { activeTaskId: OTHER_TASK_ID },
-    ...overrides,
-  } as unknown as AppState;
-
-  return { getState: () => state } as unknown as StoreApi<AppState>;
-}
-
-function makeMessage(
-  id = "message-1",
-  action:
-    | "session.turn_finished"
-    | "session.clarification_requested"
-    | "office.inbox_item" = "session.clarification_requested",
-  title = MESSAGE_TITLE,
-  body = MESSAGE_BODY,
-  occurrenceId = "pending-1",
-):
-  | BackendMessageMap["session.clarification_requested"]
-  | BackendMessageMap["session.turn_finished"]
-  | BackendMessageMap["office.inbox_item"] {
-  return {
-    id,
-    type: "notification",
-    action,
-    payload: {
-      task_id: TASK_ID,
-      session_id: SESSION_ID,
-      occurrence_id: occurrenceId,
-      title,
-      body,
-    },
-  } as SemanticNotificationMessage;
-}
-
-function getHandler(
-  store: StoreApi<AppState>,
-  action:
-    | "session.turn_finished"
-    | "session.clarification_requested"
-    | "office.inbox_item" = "session.clarification_requested",
-) {
-  return (
-    registerNotificationsHandlers(store) as unknown as Record<
-      string,
-      (message: SemanticNotificationMessage) => void
-    >
-  )[action]!;
-}
 
 function expectNoAttention(invoke: ReturnType<typeof vi.fn>) {
   expect(playWaitingForInputSound).not.toHaveBeenCalled();
@@ -128,6 +78,7 @@ describe("notification handler registration", () => {
     );
     expect(handlers["office.inbox_item"]).toEqual(expect.any(Function));
     expect(handlers[NOTIFICATION_EVENT_SYSTEM_UPDATE_AVAILABLE]).toEqual(expect.any(Function));
+    expect(handlers[NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED]).toEqual(expect.any(Function));
   });
 
   it("routes a Local update occurrence into the in-app toast bridge", () => {

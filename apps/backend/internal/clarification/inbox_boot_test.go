@@ -8,6 +8,18 @@ import (
 	taskmodels "github.com/kandev/kandev/internal/task/models"
 )
 
+// noOpManualStepWaitStore is the degenerate waiting source for boot-summary
+// tests that exercise only the bundle side: no rows, zero hidden, no
+// truncation. The boot summary always consults a waiting store, so these
+// tests pass an explicit no-op rather than omitting the source.
+type noOpManualStepWaitStore struct{}
+
+func (noOpManualStepWaitStore) ListManualStepWaits(
+	context.Context, taskmodels.ManualStepWaitOptions,
+) (*taskmodels.ManualStepWaitPage, error) {
+	return &taskmodels.ManualStepWaitPage{}, nil
+}
+
 func TestInboxBootSummary_UsesBundleCountAndHiddenSummary(t *testing.T) {
 	bundles := &fakeInboxBundleStore{
 		page: &taskmodels.ClarificationBundlePage{
@@ -20,7 +32,7 @@ func TestInboxBootSummary_UsesBundleCountAndHiddenSummary(t *testing.T) {
 		},
 	}
 
-	count, hasMore, nextSnoozeExpiry, err := InboxBootSummary(context.Background(), bundles, "workspace-1", "user-1", testInboxNow)
+	count, hasMore, nextSnoozeExpiry, err := InboxBootSummary(context.Background(), bundles, "workspace-1", "user-1", testInboxNow, noOpManualStepWaitStore{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,7 +57,7 @@ func TestInboxBootSummary_UsesBundleCountAndHiddenSummary(t *testing.T) {
 func TestInboxBootSummary_ListErrorPropagates(t *testing.T) {
 	bundles := &fakeInboxBundleStore{listErr: errors.New("boom")}
 
-	_, _, _, err := InboxBootSummary(context.Background(), bundles, "workspace-1", "user-1", testInboxNow)
+	_, _, _, err := InboxBootSummary(context.Background(), bundles, "workspace-1", "user-1", testInboxNow, noOpManualStepWaitStore{})
 	if err == nil {
 		t.Fatal("expected the list error to propagate")
 	}
@@ -57,7 +69,7 @@ func TestInboxBootSummary_HiddenSummaryErrorPropagates(t *testing.T) {
 		summaryErr: errors.New("boom"),
 	}
 
-	_, _, _, err := InboxBootSummary(context.Background(), bundles, "workspace-1", "user-1", testInboxNow)
+	_, _, _, err := InboxBootSummary(context.Background(), bundles, "workspace-1", "user-1", testInboxNow, noOpManualStepWaitStore{})
 	if err == nil {
 		t.Fatal("expected the hidden-summary error to propagate rather than defaulting")
 	}

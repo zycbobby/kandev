@@ -20,6 +20,8 @@ import (
 type remoteInboxForwarder interface {
 	ReadInbox(ctx context.Context, limit int) remoteinbox.ReadResult
 	ReadHidden(ctx context.Context, limit int) remoteinbox.ReadResult
+	ReadNeedsYou(ctx context.Context, limit int) remoteinbox.NeedsYouReadResult
+	ReadNeedsYouHidden(ctx context.Context, limit int) remoteinbox.NeedsYouReadResult
 	Respond(ctx context.Context, pendingID string, body []byte) (int, []byte, error)
 	UpsertSidecar(ctx context.Context, pendingID, state, duration string) (int, error)
 	DeleteSidecar(ctx context.Context, pendingID string) (int, error)
@@ -38,20 +40,62 @@ const (
 	instanceNameKey = "instance"
 )
 
-// instanceInboxPageEnvelope is the composed per-instance page both read
-// routes return. A degraded read is still 200: the read request itself
-// succeeded and the degradation is instance-scoped state the Inbox renders.
+// instancePageAggregate is the aggregate block every composed instance page
+// envelope carries. Embedded (not named) so the marshaled wire stays flat.
+type instancePageAggregate struct {
+	InstanceID       string  `json:"instance_id"`
+	InstanceName     string  `json:"instance_name"`
+	Status           string  `json:"status"`
+	DegradedReason   string  `json:"degraded_reason,omitempty"`
+	Count            int     `json:"count"`
+	HiddenCount      int     `json:"hidden_count"`
+	Total            int     `json:"total,omitempty"`
+	NextSnoozeExpiry *string `json:"next_snooze_expiry"`
+	HasMore          bool    `json:"has_more"`
+}
+
+// degradedInstancePageAggregates is a degraded read's aggregate block: the
+// read request itself succeeded, so the degradation is instance-scoped state
+// the Inbox renders and every aggregate is zeroed.
+func degradedInstancePageAggregates(inst instances.Instance, reason string) instancePageAggregate {
+	return instancePageAggregate{
+		InstanceID:     inst.ID,
+		InstanceName:   inst.Name,
+		Status:         "degraded",
+		DegradedReason: reason,
+	}
+}
+
+// okInstancePageAggregates is a successful read's aggregate block.
+func okInstancePageAggregates(inst instances.Instance, count, hiddenCount, total int, expiry *time.Time, hasMore bool) instancePageAggregate {
+	return instancePageAggregate{
+		InstanceID:       inst.ID,
+		InstanceName:     inst.Name,
+		Status:           "ok",
+		Count:            count,
+		HiddenCount:      hiddenCount,
+		Total:            total,
+		NextSnoozeExpiry: formatInstanceInboxTime(expiry),
+		HasMore:          hasMore,
+	}
+}
+
+// instanceInboxPageEnvelope is the composed per-instance page both
+// clarification read routes return. A degraded read is still 200: the read
+// request itself succeeded and the degradation is instance-scoped state the
+// Inbox renders.
 type instanceInboxPageEnvelope struct {
-	InstanceID       string               `json:"instance_id"`
-	InstanceName     string               `json:"instance_name"`
-	Status           string               `json:"status"`
-	DegradedReason   string               `json:"degraded_reason,omitempty"`
-	Bundles          []remoteinbox.Bundle `json:"bundles"`
-	Count            int                  `json:"count"`
-	HiddenCount      int                  `json:"hidden_count"`
-	Total            int                  `json:"total,omitempty"`
-	NextSnoozeExpiry *string              `json:"next_snooze_expiry"`
-	HasMore          bool                 `json:"has_more"`
+	instancePageAggregate
+	Bundles []remoteinbox.Bundle `json:"bundles"`
+}
+
+// instanceNeedsYouPageEnvelope is the composed per-instance page the merged
+// needs-you forward routes return: the same aggregate shape as
+// instanceInboxPageEnvelope with kind-tagged rows carrying the remote's
+// questions and manual-step waiting rows. Same degradation contract.
+type instanceNeedsYouPageEnvelope struct {
+	instancePageAggregate
+	Rows []remoteinbox.NeedsYouRow `json:"rows"`
 }
 
 type instanceInboxSidecarBody struct {
@@ -87,6 +131,8 @@ func registerInstanceInboxRoutesWithForwarder(p routeParams, forwarderFor func(i
 	api := p.router.Group("/api/v1/instances")
 	api.GET("/:id/clarification-inbox", h.pageRoute(false))
 	api.GET("/:id/clarification-inbox/hidden", h.pageRoute(true))
+	api.GET("/:id/needs-you-inbox", h.needsYouPageRoute(false))
+	api.GET("/:id/needs-you-inbox/hidden", h.needsYouPageRoute(true))
 	api.POST("/:id/clarification/:pendingID/respond", h.respondRoute)
 	api.PUT("/:id/clarification-inbox/sidecar/:pendingID", h.upsertSidecarRoute)
 	api.DELETE("/:id/clarification-inbox/sidecar/:pendingID", h.deleteSidecarRoute)
@@ -127,15 +173,34 @@ func (h *instanceInboxHandlers) pageRoute(hidden bool) gin.HandlerFunc {
 	}
 }
 
-func (h *instanceInboxHandlers) respondPage(c *gin.Context, inst instances.Instance, result remoteinbox.ReadResult) {
-	envelope := instanceInboxPageEnvelope{
-		InstanceID:   inst.ID,
-		InstanceName: inst.Name,
-		Bundles:      []remoteinbox.Bundle{},
+// needsYouPageRoute backs the merged needs-you forward reads: one fan-out to
+// the remote's own aggregated needs-you endpoint per request, with the same
+// limit rules and per-instance degraded envelope as the clarification reads.
+func (h *instanceInboxHandlers) needsYouPageRoute(hidden bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		inst, forwarder, ok := h.resolve(c)
+		if !ok {
+			return
+		}
+		limit, ok := parseInstanceInboxLimit(c.Query("limit"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{errKey: "limit must be a positive integer"})
+			return
+		}
+		var result remoteinbox.NeedsYouReadResult
+		if hidden {
+			result = forwarder.ReadNeedsYouHidden(c.Request.Context(), limit)
+		} else {
+			result = forwarder.ReadNeedsYou(c.Request.Context(), limit)
+		}
+		h.respondNeedsYouPage(c, *inst, result)
 	}
+}
+
+func (h *instanceInboxHandlers) respondPage(c *gin.Context, inst instances.Instance, result remoteinbox.ReadResult) {
+	envelope := instanceInboxPageEnvelope{Bundles: []remoteinbox.Bundle{}}
 	if result.Page == nil {
-		envelope.Status = "degraded"
-		envelope.DegradedReason = string(result.Degraded)
+		envelope.instancePageAggregate = degradedInstancePageAggregates(inst, string(result.Degraded))
 		c.JSON(http.StatusOK, envelope)
 		return
 	}
@@ -149,13 +214,33 @@ func (h *instanceInboxHandlers) respondPage(c *gin.Context, inst instances.Insta
 	for i := range bundles {
 		bundles[i].InstanceID = inst.ID
 	}
-	envelope.Status = "ok"
+	envelope.instancePageAggregate = okInstancePageAggregates(
+		inst, result.Page.Count, result.Page.HiddenCount, result.Page.Total,
+		result.Page.NextSnoozeExpiry, result.Page.HasMore)
 	envelope.Bundles = bundles
-	envelope.Count = result.Page.Count
-	envelope.HiddenCount = result.Page.HiddenCount
-	envelope.Total = result.Page.Total
-	envelope.NextSnoozeExpiry = formatInstanceInboxTime(result.Page.NextSnoozeExpiry)
-	envelope.HasMore = result.Page.HasMore
+	c.JSON(http.StatusOK, envelope)
+}
+
+func (h *instanceInboxHandlers) respondNeedsYouPage(c *gin.Context, inst instances.Instance, result remoteinbox.NeedsYouReadResult) {
+	envelope := instanceNeedsYouPageEnvelope{Rows: []remoteinbox.NeedsYouRow{}}
+	if result.Page == nil {
+		envelope.instancePageAggregate = degradedInstancePageAggregates(inst, string(result.Degraded))
+		c.JSON(http.StatusOK, envelope)
+		return
+	}
+	rows := result.Page.Rows
+	if rows == nil {
+		rows = []remoteinbox.NeedsYouRow{}
+	}
+	// Same instance-identity stamping as the clarification page: every
+	// cross-instance row the Inbox holds carries instance identity.
+	for i := range rows {
+		rows[i].InstanceID = inst.ID
+	}
+	envelope.instancePageAggregate = okInstancePageAggregates(
+		inst, result.Page.Count, result.Page.HiddenCount, result.Page.Total,
+		result.Page.NextSnoozeExpiry, result.Page.HasMore)
+	envelope.Rows = rows
 	c.JSON(http.StatusOK, envelope)
 }
 

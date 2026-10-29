@@ -133,6 +133,10 @@ export type TaskSessionNotificationPayload = {
   occurrence_id: string;
   title: string;
   body: string;
+  /** Origin instance identity for relayed occurrences; absent for local
+   *  events, whose task belongs to the instance the panel is connected to. */
+  origin_instance_id?: string;
+  origin_instance_name?: string;
 };
 
 export type TaskSessionAgentctlPayload = {
@@ -300,6 +304,10 @@ export type SessionBackendMessageMap = {
   >;
   "session.clarification_requested": BackendMessage<
     "session.clarification_requested",
+    TaskSessionNotificationPayload
+  >;
+  "task.manual_step_entered": BackendMessage<
+    "task.manual_step_entered",
     TaskSessionNotificationPayload
   >;
   "session.agentctl_starting": BackendMessage<

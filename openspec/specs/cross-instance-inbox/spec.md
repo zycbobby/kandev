@@ -2,8 +2,7 @@
 
 ## Purpose
 
-远端实例上阻塞等待回答的 clarification bundle 只在远端面板可答：本机侧边栏的中继通知不可回答（occurrence 只携带 title/body），本机 Needs-you Inbox 只列本机 workspace 的 bundle，操作者不看远端面板就会漏掉被阻塞的远端 agent。本 capability 让本机 Inbox 组合远端 answerable 状态：本机后端作为联邦客户端按实例直连远端（PAT 注入，不经浏览器 proxy port），把远端自身的 clarification-inbox 聚合为每实例一页（PAT 可见全部远端 workspace），就地回答与 dismiss/snooze/restore 经本机后端转发回远端自身端点，角标计入已落地远端页（count-known），远端不可达/需凭据/不支持时按实例渲染降级态，远端行不写任何本地表，收敛只靠远端页 re-read。建立在 `multi-instance-management`（注册表、PAT、后端联邦客户端）与 `needs-you-inbox`（本机 Inbox 契约）之上；跨实例通知的中继与展示仍归 `cross-instance-notifications`，本 capability 不改任何通知投递行为。
-
+远端实例上阻塞等待回答的 clarification bundle，以及处于手工工作流步骤、没有执行中或排队 turn 的任务，都只在远端面板可见：中继通知本身不可回答（occurrence 只携带 title/body），本机 Needs-you Inbox 原本只列本机 workspace 的状态，操作者不看远端面板就会漏掉被阻塞的远端 agent。本 capability 让本机 Inbox 组合远端的 answerable 状态与手工步等待行：本机后端作为联邦客户端按实例直连远端（PAT 注入，不经浏览器 proxy port），把远端自身的 needs-you 聚合为每实例一页（PAT 可见全部远端 workspace），就地回答与 dismiss/snooze/restore 经本机后端转发回远端自身端点，角标计入已落地远端页（count-known），远端不可达/需凭据/不支持时按实例渲染降级态，远端行不写任何本地表，收敛只靠远端页 re-read。建立在 `multi-instance-management`（注册表、PAT、后端联邦客户端）、`needs-you-inbox`（本机 Inbox 契约）与 `cross-instance-notifications`（通知中继与投递）之上；本 capability 不改任何通知投递行为。
 ## Requirements
 ### Requirement: 远端 answerable 行组合
 The local backend SHALL, for each enabled registered instance while both `features.needsYouInbox` and `features.multiInstance` are on, read that remote instance's own clarification-inbox endpoint over the instance's registered credential, aggregate the PAT-visible remote workspaces into one instance page (ordered by bundle creation time ascending, bounded by the same default page size as the local read), and the local Inbox SHALL render one answerable section per instance with rows carrying instance and origin-workspace identity, without writing remote rows into any local task table, board cache, or sidecar table.
@@ -51,13 +50,16 @@ Dismiss, snooze, and restore on a remote row SHALL be forwarded through the loca
 - **THEN** addressing either row resolves and mutates only that row on its owning instance
 
 ### Requirement: 角标计数包含远端行
-The sidebar actionable count SHALL include loaded remote instance pages alongside the local page, equal to the number of rows the composed view lists from loaded sources, boot hydration SHALL continue to seed only the local page, and a remote instance contributes to the count only once its page has landed.
+
+The sidebar actionable count SHALL include loaded remote instance pages alongside the local page, equal to the number of rows the composed view lists from loaded sources across row kinds (clarification and waiting), boot hydration SHALL continue to seed only the local page, and a remote instance contributes to the count only once its page has landed.
 
 #### Scenario: 远端行计入角标
-- **WHEN** a remote instance page lands holding answerable rows
+
+- **WHEN** a remote instance page lands holding clarification rows or waiting rows
 - **THEN** the sidebar count increases by that page's listed rows and equals the rows the composed view lists from loaded sources
 
 #### Scenario: 未加载或降级实例不计入
+
 - **WHEN** a remote instance's page has not landed or that instance is degraded
 - **THEN** it contributes no rows and no count, and the count never reports rows the view does not list
 
@@ -79,6 +81,35 @@ The local Inbox SHALL provide, on every remote row, a control that switches the 
 - **WHEN** the operator opens a remote row's task
 - **THEN** the panel switches to that instance via the standard switch path and lands on the task's route
 
+### Requirement: 远端等待行组合
+
+The local backend SHALL, for each enabled registered instance while both `features.needsYouInbox` and `features.multiInstance` are on, read that remote instance's own aggregated needs-you endpoint over the instance's registered credential and attach the remote's manual-step waiting rows to that instance's page through the same per-instance composition the remote clarification rows use. Remote waiting rows SHALL carry instance and origin-workspace identity together with the task and step, SHALL resolve by re-reading when the remote no longer reports the wait, SHALL NOT be written into any local task table, board cache, or sidecar table, and an instance that is unreachable, credential-required, or runs a version without the waiting read SHALL render that instance's degraded state without preventing local rows or other instances from listing.
+
+#### Scenario: 看本机时远端等待行出现在 Inbox
+
+- **WHEN** the panel is viewing the local instance and a remote instance holds a task in a manual step with no executing or queued turn in any workspace its credential identity can see
+- **THEN** the local Inbox lists that wait in that instance's section with the task and step, and the row carries the instance and origin-workspace identity
+
+#### Scenario: 远端不再报告时行消失
+
+- **WHEN** the remote task leaves the manual step, starts a turn, completes, or archives
+- **THEN** the next re-read of that instance page no longer lists the row, without navigation or local derivation
+
+#### Scenario: 旧版本远端降级
+
+- **WHEN** a remote instance runs a version without the aggregated needs-you read
+- **THEN** that instance's section renders the degraded state naming the instance and offering a retry, and no dead row is listed
+
+#### Scenario: 降级实例不影响本地读
+
+- **WHEN** one remote instance is unreachable or requires credentials
+- **THEN** local rows and other instances' sections still list, and the local read is not treated as failed
+
+#### Scenario: 远端等待行不落本地表
+
+- **WHEN** a remote waiting row is listed, dismissed, or snoozed
+- **THEN** no local task table, board cache, or local sidecar row is written for it; its sidecar state stays on the remote under the credential identity
+
 ## Known Failure Modes
 
 | Symptom | Cause | Fix |
@@ -92,4 +123,9 @@ The local Inbox SHALL provide, on every remote row, a control that switches the 
 | 远端行出现死答案框 | 降级态下仍渲染可提交表单 | 降级 section 只渲染命名实例的重试态，不含答案组件 |
 | auth-on 远端被当作不可达且无提示 | 健康探测不带凭据的已知限制 | 降级态文案区分「需凭据」路径并指向 PAT 登记 |
 | 隐藏页请求双倍读放大 | pageRoute 先无条件 ReadInbox 再以 ReadHidden 整体覆盖，前一次 fan-out 纯浪费 | 每请求按 hidden 标志二选一读（design 界限 1+W）；路由测试 fake 计数 Read 调用并断言单次 fan-out |
+| 远端等待行出现死答案框 | 复用了 question 行的展开/回答组件 | 等待行只渲染打开任务与 dismiss/snooze 菜单，不渲染答案组件 |
+| 旧版本远端把整个 Inbox 拖成错误态 | 远端 404 被当成 transport failure | 每实例降级：404 映射为 unsupported/inbox_disabled，本地与其他实例照常列出 |
+| 远端等待行被本机 workspace 过滤掉 | 等待读误用了本机 workspace id | 远端读沿用 landed 的 workspace 映射，本机 workspace 切换不影响实例页 |
+| 远端等待行落进本地 sidecar | dismiss/snooze 走了本地 sidecar 入口 | 远端行一律经 instance 转发；本地 sidecar 只接受本机 `mw:` 行 |
+| 远端等待行重复或漏行 | 远端聚合页的 limit 与合并排序未与本地一致 | 复用同一 limit 与 (reference time, id) 排序契约；每实例页一次读 |
 

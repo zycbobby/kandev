@@ -43,8 +43,5 @@
   "healthDotHealthy": "정상",
   "healthDotUnreachable": "연결 불가",
   "healthDotUnsupported": "지원되지 않는 버전",
-  "healthDotUnknown": "아직 상태를 확인하지 않았습니다",
-  "notificationsSectionLabel": "원격 알림",
-  "notificationsMarkAllRead": "모두 읽음으로 표시",
-  "notificationDismiss": "알림 해제"
+  "healthDotUnknown": "아직 상태를 확인하지 않았습니다"
 }

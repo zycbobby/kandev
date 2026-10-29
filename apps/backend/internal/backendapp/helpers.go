@@ -1910,7 +1910,6 @@ func registerSecondaryRoutes(
 	p.log.Debug("Registered User handlers (HTTP + WebSocket)")
 
 	notificationhandlers.RegisterRoutes(p.router, p.notificationCtrl, p.log)
-	registerRemoteNotificationRoutes(p.router, p.services)
 	registerInstanceRoutes(p)
 	registerInstanceInboxRoutes(p)
 	p.log.Debug("Registered Notification handlers (HTTP)")
@@ -1939,6 +1938,9 @@ func registerSecondaryRoutes(
 		p.taskSvc,
 		p.taskRepo,
 		p.features.NeedsYouInbox,
+		// The task repository is also the manual-step waiting store: the same
+		// handle backs the merged /api/v1/needs-you-inbox read.
+		p.taskRepo,
 	)
 	p.log.Debug("Registered Clarification handlers (HTTP)")
 

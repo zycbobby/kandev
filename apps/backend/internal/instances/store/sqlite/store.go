@@ -244,31 +244,6 @@ func (s *Store) Record(ctx context.Context, owner, instanceID, event, occurrence
 	return n > 0, err
 }
 
-func (s *Store) ListOccurrences(ctx context.Context, owner string, since time.Time, limit int) ([]relay.Occurrence, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	limit = min(limit, 200)
-	rows, err := s.ro.QueryContext(ctx, s.ro.Rebind(`SELECT id,instance_id,event,occurrence_id,task_id,session_id,title,body,created_at,is_read,dismissed
- FROM remote_notification_occurrences WHERE owner_user_id=? AND created_at>? ORDER BY created_at ASC,id ASC LIMIT ?`), owner, since.UTC(), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	result := []relay.Occurrence{}
-	for rows.Next() {
-		var o relay.Occurrence
-		var read, dismissed int
-		if err := rows.Scan(&o.ID, &o.InstanceID, &o.Event, &o.OccurrenceID, &o.TaskID, &o.SessionID, &o.Title, &o.Body, &o.CreatedAt, &read, &dismissed); err != nil {
-			return nil, err
-		}
-		o.Read = read != 0
-		o.Dismissed = dismissed != 0
-		result = append(result, o)
-	}
-	return result, rows.Err()
-}
-
 func (s *Store) LatestOccurrenceTime(ctx context.Context, instanceID string) (time.Time, error) {
 	var at time.Time
 	err := s.ro.QueryRowContext(ctx, s.ro.Rebind(`SELECT created_at FROM remote_notification_occurrences WHERE instance_id=? ORDER BY created_at DESC LIMIT 1`), instanceID).Scan(&at)
@@ -276,24 +251,6 @@ func (s *Store) LatestOccurrenceTime(ctx context.Context, instanceID string) (ti
 		return time.Time{}, nil
 	}
 	return at, err
-}
-func (s *Store) MarkOccurrenceRead(ctx context.Context, owner, id string) error {
-	result, err := s.db.ExecContext(ctx, s.db.Rebind(`UPDATE remote_notification_occurrences SET is_read=1 WHERE owner_user_id=? AND id=?`), owner, id)
-	if err != nil {
-		return err
-	}
-	return errIfNoRows(result)
-}
-func (s *Store) MarkOccurrenceDismissed(ctx context.Context, owner, id string) error {
-	result, err := s.db.ExecContext(ctx, s.db.Rebind(`UPDATE remote_notification_occurrences SET dismissed=1 WHERE owner_user_id=? AND id=?`), owner, id)
-	if err != nil {
-		return err
-	}
-	return errIfNoRows(result)
-}
-func (s *Store) MarkAllOccurrencesRead(ctx context.Context, owner string) error {
-	_, err := s.db.ExecContext(ctx, s.db.Rebind(`UPDATE remote_notification_occurrences SET is_read=1 WHERE owner_user_id=?`), owner)
-	return err
 }
 func (s *Store) SweepOccurrences(ctx context.Context, before time.Time) (int64, error) {
 	result, err := s.db.ExecContext(ctx, s.db.Rebind(`DELETE FROM remote_notification_occurrences WHERE created_at<?`), before.UTC())

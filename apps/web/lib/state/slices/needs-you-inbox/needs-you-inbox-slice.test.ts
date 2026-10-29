@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
+import type { NeedsYouInboxRow, NeedsYouInboxWaitingRow } from "@/lib/types/needs-you-inbox";
+import { isNeedsYouWaitingRow } from "@/lib/types/needs-you-inbox";
 import { createNeedsYouInboxSlice } from "./needs-you-inbox-slice";
 import type { NeedsYouInboxSlice } from "./types";
 
@@ -32,6 +34,24 @@ function bundle(overrides: Partial<ClarificationInboxBundle> = {}): Clarificatio
   };
 }
 
+function questionRow(overrides: Partial<ClarificationInboxBundle> = {}): NeedsYouInboxRow {
+  return { ...bundle(overrides), kind: "question" };
+}
+
+function waitingRow(overrides: Partial<NeedsYouInboxWaitingRow> = {}): NeedsYouInboxWaitingRow {
+  return {
+    kind: "waiting",
+    id: "mw:t2:step-manual:7",
+    task_id: "t2",
+    task_title: "Waiting task",
+    workspace_id: "w1",
+    step_id: "step-manual",
+    step_name: "Manual review",
+    reference_time: "2026-09-03T05:00:00Z",
+    ...overrides,
+  };
+}
+
 describe("needs-you-inbox slice retry signals", () => {
   it("keeps explicit retry requests separate from WebSocket refresh ticks", () => {
     const store = newStore();
@@ -55,7 +75,7 @@ describe("needs-you-inbox slice", () => {
     const generation = store.getState().beginNeedsYouInboxRead("w1");
 
     store.getState().setNeedsYouInboxPage("w1", generation, {
-      bundles: [bundle()],
+      rows: [questionRow()],
       count: 1,
       hiddenCount: 2,
       nextSnoozeExpiry: "2026-09-03T05:00:00Z",
@@ -65,7 +85,7 @@ describe("needs-you-inbox slice", () => {
     const state = store.getState().needsYouInbox.byWorkspaceId.w1;
     expect(state.status).toBe("ready");
     expect(state.count).toBe(1);
-    expect(state.bundles).toHaveLength(1);
+    expect(state.rows).toHaveLength(1);
     expect(state.hiddenCount).toBe(2);
     expect(state.hasMore).toBe(true);
     expect(state.nextSnoozeExpiry).toBe("2026-09-03T05:00:00Z");
@@ -80,7 +100,7 @@ describe("needs-you-inbox slice", () => {
     expect(freshGeneration).not.toBe(staleGeneration);
 
     store.getState().setNeedsYouInboxPage("w1", freshGeneration, {
-      bundles: [bundle({ pending_id: "fresh" })],
+      rows: [questionRow({ pending_id: "fresh" })],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -88,7 +108,7 @@ describe("needs-you-inbox slice", () => {
     });
     // The stale response lands after the fresh one and must be dropped.
     store.getState().setNeedsYouInboxPage("w1", staleGeneration, {
-      bundles: [bundle({ pending_id: "stale" })],
+      rows: [questionRow({ pending_id: "stale" })],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -96,14 +116,17 @@ describe("needs-you-inbox slice", () => {
     });
 
     const state = store.getState().needsYouInbox.byWorkspaceId.w1;
-    expect(state.bundles[0].pending_id).toBe("fresh");
+    expect(state.rows[0].kind).toBe("question");
+    if (state.rows[0].kind === "question") {
+      expect(state.rows[0].pending_id).toBe("fresh");
+    }
   });
 
   it("clears rows and count in the same update on a failed read that follows a successful one", () => {
     const store = newStore();
     const okGeneration = store.getState().beginNeedsYouInboxRead("w1");
     store.getState().setNeedsYouInboxPage("w1", okGeneration, {
-      bundles: [bundle()],
+      rows: [questionRow()],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -115,10 +138,12 @@ describe("needs-you-inbox slice", () => {
 
     const state = store.getState().needsYouInbox.byWorkspaceId.w1;
     expect(state.status).toBe("error");
-    expect(state.bundles).toHaveLength(0);
+    expect(state.rows).toHaveLength(0);
     expect(state.count).toBe(0);
   });
+});
 
+describe("needs-you-inbox slice read-state transitions", () => {
   // R2-F1: `resolveViewMode` needs to tell a refresh following success apart
   // from one following a failure, and `status` alone can't -- a refresh in
   // flight is "loading" either way, since `beginNeedsYouInboxRead` only ever
@@ -128,7 +153,7 @@ describe("needs-you-inbox slice", () => {
     const store = newStore();
     const okGeneration = store.getState().beginNeedsYouInboxRead("w1");
     store.getState().setNeedsYouInboxPage("w1", okGeneration, {
-      bundles: [bundle()],
+      rows: [questionRow()],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -159,7 +184,7 @@ describe("needs-you-inbox slice", () => {
     const staleGeneration = store.getState().beginNeedsYouInboxRead("w1");
     const freshGeneration = store.getState().beginNeedsYouInboxRead("w1");
     store.getState().setNeedsYouInboxPage("w1", freshGeneration, {
-      bundles: [bundle()],
+      rows: [questionRow()],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -171,6 +196,55 @@ describe("needs-you-inbox slice", () => {
     const state = store.getState().needsYouInbox.byWorkspaceId.w1;
     expect(state.status).toBe("ready");
     expect(state.count).toBe(1);
+  });
+});
+
+describe("needs-you-inbox slice — merged rows union", () => {
+  it("applies a merged page carrying both kinds and keeps the server's order", () => {
+    const store = newStore();
+    const generation = store.getState().beginNeedsYouInboxRead("w1");
+
+    store.getState().setNeedsYouInboxPage("w1", generation, {
+      rows: [questionRow(), waitingRow()],
+      count: 2,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+
+    const state = store.getState().needsYouInbox.byWorkspaceId.w1;
+    expect(state.rows).toHaveLength(2);
+    expect(state.rows[0].kind).toBe("question");
+    expect(state.rows[1].kind).toBe("waiting");
+    // count is the merged page's row count, not a per-kind tally.
+    expect(state.count).toBe(2);
+  });
+
+  it("the kind discriminant separates waiting rows without inspecting payloads", () => {
+    const rows: NeedsYouInboxRow[] = [questionRow(), waitingRow()];
+    const waiting = rows.filter(isNeedsYouWaitingRow);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].id).toBe("mw:t2:step-manual:7");
+    expect(waiting[0].step_name).toBe("Manual review");
+  });
+
+  it("clears both kinds in the same update on a failed read", () => {
+    const store = newStore();
+    const generation = store.getState().beginNeedsYouInboxRead("w1");
+    store.getState().setNeedsYouInboxPage("w1", generation, {
+      rows: [questionRow(), waitingRow()],
+      count: 2,
+      hiddenCount: 0,
+      nextSnoozeExpiry: null,
+      hasMore: false,
+    });
+
+    const failGeneration = store.getState().beginNeedsYouInboxRead("w1");
+    store.getState().setNeedsYouInboxError("w1", failGeneration);
+
+    const state = store.getState().needsYouInbox.byWorkspaceId.w1;
+    expect(state.rows).toHaveLength(0);
+    expect(state.count).toBe(0);
   });
 });
 
@@ -196,7 +270,7 @@ describe("needs-you-inbox slice — boot seeding", () => {
 
     const generation = store.getState().beginNeedsYouInboxRead("w1");
     store.getState().setNeedsYouInboxPage("w1", generation, {
-      bundles: [],
+      rows: [],
       count: 0,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -224,7 +298,7 @@ describe("needs-you-inbox slice — boot seeding", () => {
 
 // ---- remote instance pages (cross-instance-inbox) ----
 
-import type { RemoteInboxBundle } from "@/lib/types/remote-inbox";
+import type { RemoteNeedsYouRow } from "@/lib/types/remote-inbox";
 import type { AppState } from "@/lib/state/store";
 import {
   selectComposedNeedsYouCount,
@@ -232,13 +306,22 @@ import {
   selectRemoteInboxInstances,
 } from "./selectors";
 
-function remoteBundle(overrides: Partial<RemoteInboxBundle> = {}): RemoteInboxBundle {
+function remoteQuestionRow(overrides: Partial<RemoteNeedsYouRow> = {}): RemoteNeedsYouRow {
   return {
-    ...bundle(),
+    ...questionRow(),
     instance_id: "i1",
     workspace_id: "ws-r",
     ...overrides,
-  };
+  } as RemoteNeedsYouRow;
+}
+
+function remoteWaitingRow(overrides: Partial<RemoteNeedsYouRow> = {}): RemoteNeedsYouRow {
+  return {
+    ...waitingRow(),
+    instance_id: "i1",
+    workspace_id: "ws-r",
+    ...overrides,
+  } as RemoteNeedsYouRow;
 }
 
 function composedView(store: ReturnType<typeof newStore>, activeWorkspaceId?: string): AppState {
@@ -254,8 +337,8 @@ describe("needs-you-inbox slice — remote instance pages", () => {
     const generation = store.getState().beginRemoteInboxRead("i1");
 
     store.getState().setRemoteInboxPage("i1", generation, {
-      bundles: [remoteBundle()],
-      count: 1,
+      rows: [remoteQuestionRow(), remoteWaitingRow()],
+      count: 2,
       hiddenCount: 1,
       nextSnoozeExpiry: null,
       hasMore: false,
@@ -263,9 +346,11 @@ describe("needs-you-inbox slice — remote instance pages", () => {
 
     const instance = store.getState().needsYouInbox.remoteByInstanceId.i1;
     expect(instance.status).toBe("ready");
-    expect(instance.count).toBe(1);
-    expect(instance.bundles).toHaveLength(1);
-    expect(instance.bundles[0]?.instance_id).toBe("i1");
+    expect(instance.count).toBe(2);
+    expect(instance.rows).toHaveLength(2);
+    expect(instance.rows[0]?.instance_id).toBe("i1");
+    expect(instance.rows[0]?.kind).toBe("question");
+    expect(instance.rows[1]?.kind).toBe("waiting");
   });
 
   it("drops a stale remote response; instance generations never cross", () => {
@@ -275,7 +360,7 @@ describe("needs-you-inbox slice — remote instance pages", () => {
     expect(fresh).not.toBe(stale);
 
     store.getState().setRemoteInboxPage("i1", stale, {
-      bundles: [remoteBundle()],
+      rows: [remoteQuestionRow()],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -283,13 +368,13 @@ describe("needs-you-inbox slice — remote instance pages", () => {
     });
     const dropped = store.getState().needsYouInbox.remoteByInstanceId.i1;
     expect(dropped?.count).toBe(0);
-    expect(dropped?.bundles).toHaveLength(0);
+    expect(dropped?.rows).toHaveLength(0);
     expect(dropped?.status).not.toBe("ready");
 
     // A read of another instance does not fence i1's fresh generation.
     store.getState().beginRemoteInboxRead("i2");
     store.getState().setRemoteInboxPage("i1", fresh, {
-      bundles: [],
+      rows: [],
       count: 0,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -302,7 +387,7 @@ describe("needs-you-inbox slice — remote instance pages", () => {
     const store = newStore();
     const generation = store.getState().beginRemoteInboxRead("i1");
     store.getState().setRemoteInboxPage("i1", generation, {
-      bundles: [remoteBundle()],
+      rows: [remoteWaitingRow()],
       count: 1,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -315,7 +400,7 @@ describe("needs-you-inbox slice — remote instance pages", () => {
     const instance = store.getState().needsYouInbox.remoteByInstanceId.i1;
     expect(instance.status).toBe("error");
     expect(instance.degradedReason).toBe("unreachable");
-    expect(instance.bundles).toHaveLength(0);
+    expect(instance.rows).toHaveLength(0);
     expect(instance.count).toBe(0);
     expect(instance.lastAppliedOk).toBe(false);
   });
@@ -360,7 +445,7 @@ describe("needs-you-inbox composed badge selectors", () => {
   ) {
     const generation = store.getState().beginRemoteInboxRead(instanceId);
     store.getState().setRemoteInboxPage(instanceId, generation, {
-      bundles: [],
+      rows: [],
       count,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -372,7 +457,7 @@ describe("needs-you-inbox composed badge selectors", () => {
     const store = newStore();
     const generation = store.getState().beginNeedsYouInboxRead("w1");
     store.getState().setNeedsYouInboxPage("w1", generation, {
-      bundles: [],
+      rows: [waitingRow()],
       count: 2,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -385,7 +470,7 @@ describe("needs-you-inbox composed badge selectors", () => {
     const store = newStore();
     const generation = store.getState().beginNeedsYouInboxRead("w1");
     store.getState().setNeedsYouInboxPage("w1", generation, {
-      bundles: [],
+      rows: [],
       count: 2,
       hiddenCount: 0,
       nextSnoozeExpiry: null,
@@ -397,7 +482,7 @@ describe("needs-you-inbox composed badge selectors", () => {
 
     const degradedGeneration = store.getState().beginRemoteInboxRead(DEGRADED_INSTANCE);
     store.getState().setRemoteInboxPage(DEGRADED_INSTANCE, degradedGeneration, {
-      bundles: [],
+      rows: [],
       count: 7,
       hiddenCount: 0,
       nextSnoozeExpiry: null,

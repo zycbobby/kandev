@@ -16,10 +16,6 @@ import (
 
 type remoteOccurrenceStore interface {
 	relay.Store
-	ListOccurrences(context.Context, string, time.Time, int) ([]relay.Occurrence, error)
-	MarkOccurrenceRead(context.Context, string, string) error
-	MarkOccurrenceDismissed(context.Context, string, string) error
-	MarkAllOccurrencesRead(context.Context, string) error
 	SweepOccurrences(context.Context, time.Time) (int64, error)
 }
 type instanceRelayEntry struct {
@@ -29,19 +25,19 @@ type instanceRelayEntry struct {
 
 // RelayManager owns enabled-instance relays and bounded local retention.
 type RelayManager struct {
-	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	repo    instances.Repository
-	store   remoteOccurrenceStore
-	secrets *secretadapter.Adapter
-	hub     relay.Broadcaster
-	log     *logger.Logger
-	entries map[string]instanceRelayEntry
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	repo     instances.Repository
+	store    remoteOccurrenceStore
+	secrets  *secretadapter.Adapter
+	notifier relay.Notifier
+	log      *logger.Logger
+	entries  map[string]instanceRelayEntry
 }
 
-func initInstanceRelays(ctx context.Context, cfg *config.Config, repos *Repositories, services *Services, hub relay.Broadcaster, log *logger.Logger) func() {
+func initInstanceRelays(ctx context.Context, cfg *config.Config, repos *Repositories, services *Services, notifier relay.Notifier, log *logger.Logger) func() {
 	if !cfg.Features.MultiInstance {
 		return func() {}
 	}
@@ -51,7 +47,7 @@ func initInstanceRelays(ctx context.Context, cfg *config.Config, repos *Reposito
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	m := &RelayManager{ctx: ctx, cancel: cancel, repo: repos.Instances, store: store, hub: hub, log: log, entries: map[string]instanceRelayEntry{}}
+	m := &RelayManager{ctx: ctx, cancel: cancel, repo: repos.Instances, store: store, notifier: notifier, log: log, entries: map[string]instanceRelayEntry{}}
 	if repos.Secrets != nil {
 		m.secrets = secretadapter.New(repos.Secrets)
 	}
@@ -108,7 +104,7 @@ func (m *RelayManager) startRelay(item instances.Instance) {
 		}
 		credential = value
 	}
-	r := relay.NewRelay(item, credential, m.store, m.hub, m.log)
+	r := relay.NewRelay(item, credential, m.store, m.notifier, m.log)
 	r.Start(m.ctx)
 	m.entries[item.ID] = instanceRelayEntry{instance: item, relay: r}
 }

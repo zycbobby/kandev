@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kandev/kandev/internal/clarification"
+	taskmodels "github.com/kandev/kandev/internal/task/models"
 	ws "github.com/kandev/kandev/pkg/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +22,17 @@ import (
 type noopBroadcaster struct{}
 
 func (noopBroadcaster) BroadcastToSession(string, *ws.Message) {}
+
+// noopManualStepWaitStore is a clarification.ManualStepWaitStore stub: this
+// race test drives the answer path, not the merged Inbox read, so the
+// waiting-row source stays empty.
+type noopManualStepWaitStore struct{}
+
+func (noopManualStepWaitStore) ListManualStepWaits(
+	context.Context, taskmodels.ManualStepWaitOptions,
+) (*taskmodels.ManualStepWaitPage, error) {
+	return &taskmodels.ManualStepWaitPage{}, nil
+}
 
 // TestAnswerQuestion_RESTvsMCP_OnlyOneClaims proves R3: the REST
 // /api/v1/clarification/:id/respond endpoint and answer_question_kandev share
@@ -45,7 +57,7 @@ func TestAnswerQuestion_RESTvsMCP_OnlyOneClaims(t *testing.T) {
 	resolver := newTestResolver(t, store, repo, svc)
 
 	engine := gin.New()
-	clarification.RegisterRoutes(engine, store, noopBroadcaster{}, &svcMessageUpdater{Service: svc}, repo, stubDetachedResumer{}, resolver, testLogger(t), svc, repo, true)
+	clarification.RegisterRoutes(engine, store, noopBroadcaster{}, &svcMessageUpdater{Service: svc}, repo, stubDetachedResumer{}, resolver, testLogger(t), svc, repo, true, noopManualStepWaitStore{})
 
 	mcpH := &Handlers{taskSvc: svc, clarificationResolver: resolver, clarificationBundles: repo, logger: testLogger(t)}
 

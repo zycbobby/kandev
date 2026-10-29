@@ -421,3 +421,100 @@ func (r *notificationTestRepository) UpdateProviderWithSubscriptions(ctx context
 	}
 	return nil
 }
+
+// TestHandleManualStepWaitSuppressesSelfMoveAndDeliversOthers pins the actor
+// exclusion contract: a move the recipient performed themselves must not
+// notify them, while a move by another human or by an agent must. A human
+// actor with no recorded id is the pre-auth default user, so it excludes the
+// default user exactly like an explicit match would.
+func TestHandleManualStepWaitSuppressesSelfMoveAndDeliversOthers(t *testing.T) {
+	// Keep the auto-provisioned system provider out so the single configured
+	// local provider is the only delivery surface under test.
+	t.Setenv(desktopNativeNotificationsEnv, "true")
+	log, err := logger.NewFromZap(zap.NewNop())
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+	repo := &notificationTestRepository{
+		providers: []*models.Provider{{ID: "provider-1", Type: models.ProviderTypeLocal, Enabled: true}},
+		subscriptions: map[string][]*models.Subscription{
+			"provider-1": {
+				{ProviderID: "provider-1", EventType: EventTaskManualStepEntered, Enabled: true},
+			},
+		},
+	}
+	service := NewService(repo, notificationTestTaskGetter{task: &taskmodels.Task{Title: "Weekly routine"}}, nil, log, nil)
+	capture := &captureProvider{}
+	service.providers[models.ProviderTypeLocal] = capture
+
+	// Self-move: the unauthenticated single user moved the task themselves.
+	service.HandleManualStepWait(context.Background(), "task-1", "session-1", "mw:task-1:step-review:7", "human", "")
+	if len(capture.messages) != 0 {
+		t.Fatalf("self-move delivered %#v, want no delivery", capture.messages)
+	}
+	if len(repo.deliveries) != 0 || len(repo.occurrences) != 0 {
+		t.Fatalf("self-move recorded claims=%#v occurrences=%#v, want none", repo.deliveries, repo.occurrences)
+	}
+
+	// Another human's move notifies the workspace owner.
+	service.HandleManualStepWait(context.Background(), "task-1", "session-1", "mw:task-1:step-review:8", "human", "user-2")
+	if len(capture.messages) != 1 {
+		t.Fatalf("other-human move delivered %#v, want exactly one", capture.messages)
+	}
+	message := capture.messages[0]
+	if message.EventType != EventTaskManualStepEntered || message.OccurrenceID != "mw:task-1:step-review:8" ||
+		message.Title != "Task waiting on you" || message.Body != "The task \"Weekly routine\" moved to a step that waits for you." {
+		t.Fatalf("manual-step message = %#v", message)
+	}
+
+	// An agent's move notifies too, and repeating the same episode occurrence
+	// collapses into one delivery via the existing occurrence dedup.
+	service.HandleManualStepWait(context.Background(), "task-1", "session-1", "mw:task-1:step-review:9", "agent", "session-move")
+	service.HandleManualStepWait(context.Background(), "task-1", "session-1", "mw:task-1:step-review:9", "agent", "session-move")
+	if len(capture.messages) != 2 {
+		t.Fatalf("agent move delivered %#v, want one new delivery (2 total)", capture.messages)
+	}
+}
+
+func TestManualStepEnteredIsAnAvailableEvent(t *testing.T) {
+	log, err := logger.NewFromZap(zap.NewNop())
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+	service := NewService(&notificationTestRepository{}, nil, nil, log, nil)
+	if !containsEvent(service.AvailableEvents(), EventTaskManualStepEntered) {
+		t.Fatalf("available events = %#v, want %s", service.AvailableEvents(), EventTaskManualStepEntered)
+	}
+	if err := service.validateEvents([]string{EventTaskManualStepEntered}); err != nil {
+		t.Fatalf("validateEvents(%s) = %v, want accepted", EventTaskManualStepEntered, err)
+	}
+}
+
+// TestFreshDefaultProvidersSubscribeToManualStepEntered pins the creation
+// list: a brand-new install's default local and system providers subscribe to
+// the manual-step wait event from the start, so only pre-existing installs
+// need the one-shot store migration.
+func TestFreshDefaultProvidersSubscribeToManualStepEntered(t *testing.T) {
+	log, err := logger.NewFromZap(zap.NewNop())
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+	repo := &notificationTestRepository{subscriptions: make(map[string][]*models.Subscription)}
+	service := NewService(repo, nil, nil, log, nil)
+	if _, _, err := service.ListProviders(context.Background(), "user-1"); err != nil {
+		t.Fatalf("list providers: %v", err)
+	}
+	defaults := 0
+	for _, provider := range repo.providers {
+		if provider.Type != models.ProviderTypeLocal && provider.Type != models.ProviderTypeSystem {
+			continue
+		}
+		defaults++
+		if !containsEvent(subscriptionEventTypes(repo.subscriptions[provider.ID]), EventTaskManualStepEntered) {
+			t.Fatalf("%s default subscriptions = %#v, want %s", provider.Type, repo.subscriptions[provider.ID], EventTaskManualStepEntered)
+		}
+	}
+	if defaults == 0 {
+		t.Fatalf("no default providers were provisioned: %#v", repo.providers)
+	}
+}

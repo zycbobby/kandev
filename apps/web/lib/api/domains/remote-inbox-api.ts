@@ -1,11 +1,12 @@
 import { fetchJson, type ApiRequestOptions } from "../client";
 import { getLocalBackendConfig } from "@/lib/config";
 import type { ClarificationInboxSnoozeDuration } from "@/lib/types/clarification-inbox";
-import type { RemoteInboxHiddenPage, RemoteInboxPage } from "@/lib/types/remote-inbox";
+import type { RemoteNeedsYouHiddenPage, RemoteNeedsYouPage } from "@/lib/types/remote-inbox";
 
 /**
  * REST client for the cross-instance inbox forward routes
- * (`/api/v1/instances/:id/clarification-inbox...`).
+ * (`/api/v1/instances/:id/clarification-inbox...` and
+ * `/api/v1/instances/:id/needs-you-inbox...`).
  *
  * These routes exist only while both `features.multiInstance` and
  * `features.needsYouInbox` are on; with either flag off every request 404s.
@@ -28,22 +29,27 @@ function sidecarPath(instanceId: string, pendingId: string): string {
   return `${INSTANCES_PATH}/${encodeURIComponent(instanceId)}/clarification-inbox/sidecar/${encodeURIComponent(pendingId)}`;
 }
 
-export function listRemoteClarificationInbox(
+/**
+ * Reads one instance's merged needs-you page (clarification questions plus
+ * manual-step waiting rows) through the local backend's forward route.
+ */
+export function listRemoteNeedsYouInbox(
   instanceId: string,
   options?: ApiRequestOptions,
-): Promise<RemoteInboxPage> {
-  return fetchJson<RemoteInboxPage>(
-    `${INSTANCES_PATH}/${encodeURIComponent(instanceId)}/clarification-inbox`,
+): Promise<RemoteNeedsYouPage> {
+  return fetchJson<RemoteNeedsYouPage>(
+    `${INSTANCES_PATH}/${encodeURIComponent(instanceId)}/needs-you-inbox`,
     localOptions(options),
   );
 }
 
-export function listRemoteHiddenClarificationInbox(
+/** Reads one instance's merged hidden enumeration through the forward route. */
+export function listRemoteHiddenNeedsYouInbox(
   instanceId: string,
   options?: ApiRequestOptions,
-): Promise<RemoteInboxHiddenPage> {
-  return fetchJson<RemoteInboxHiddenPage>(
-    `${INSTANCES_PATH}/${encodeURIComponent(instanceId)}/clarification-inbox/hidden`,
+): Promise<RemoteNeedsYouHiddenPage> {
+  return fetchJson<RemoteNeedsYouHiddenPage>(
+    `${INSTANCES_PATH}/${encodeURIComponent(instanceId)}/needs-you-inbox/hidden`,
     localOptions(options),
   );
 }

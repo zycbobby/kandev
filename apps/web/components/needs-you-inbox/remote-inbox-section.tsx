@@ -6,6 +6,7 @@ import { useAppStore } from "@/components/state-provider";
 import type { RemoteInboxDegradedReason } from "@/lib/types/remote-inbox";
 import type { RemoteInboxInstanceState } from "@/lib/state/slices/needs-you-inbox/types";
 import { NeedsYouInboxRow } from "./needs-you-inbox-row";
+import { NeedsYouWaitingRow } from "./needs-you-waiting-row";
 import { NeedsYouInboxHiddenPanel } from "./needs-you-inbox-hidden-panel";
 
 const DEGRADED_REASON_KEYS: Record<RemoteInboxDegradedReason, string> = {
@@ -16,8 +17,9 @@ const DEGRADED_REASON_KEYS: Record<RemoteInboxDegradedReason, string> = {
 };
 
 /**
- * One remote instance's answerable section of the Needs-you Inbox: rows are
- * answered in place through the forward routes, and a degraded instance
+ * One remote instance's section of the Needs-you Inbox: question rows are
+ * answered in place through the forward routes, manual-step waiting rows
+ * offer open/dismiss/snooze with no answer surface, and a degraded instance
  * renders a named, retryable state instead of rows or an answer form that
  * could not succeed. Never affects the local page or other instances'
  * sections.
@@ -29,6 +31,7 @@ export function RemoteInboxSection({ instance }: { instance: RemoteInboxInstance
     useAppStore((s) => s.instances.items.find((item) => item.id === instance.instanceId)?.name) ??
     instance.instanceId;
   const retry = () => bumpRetryTick(instance.instanceId);
+  const source = { instanceId: instance.instanceId, instanceName };
 
   return (
     <section data-testid="remote-inbox-section" data-instance-id={instance.instanceId}>
@@ -68,20 +71,20 @@ export function RemoteInboxSection({ instance }: { instance: RemoteInboxInstance
         </div>
       ) : (
         <div className="mt-2 space-y-2">
-          {instance.status === "ready" && instance.bundles.length === 0 && (
+          {instance.status === "ready" && instance.rows.length === 0 && (
             <p className="text-xs text-muted-foreground" data-testid="remote-inbox-empty">
               {t("needsYouInbox:remoteEmpty")}
             </p>
           )}
-          {instance.bundles.length > 0 && (
+          {instance.rows.length > 0 && (
             <div className="overflow-hidden rounded-lg border border-border divide-y divide-border">
-              {instance.bundles.map((bundle) => (
-                <NeedsYouInboxRow
-                  key={bundle.pending_id}
-                  bundle={bundle}
-                  source={{ instanceId: instance.instanceId, instanceName }}
-                />
-              ))}
+              {instance.rows.map((row) =>
+                row.kind === "waiting" ? (
+                  <NeedsYouWaitingRow key={row.id} row={row} source={source} />
+                ) : (
+                  <NeedsYouInboxRow key={row.pending_id} bundle={row} source={source} />
+                ),
+              )}
             </div>
           )}
           {instance.status === "ready" && instance.hiddenCount > 0 && (

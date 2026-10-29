@@ -43,8 +43,5 @@
   "healthDotHealthy": "Healthy",
   "healthDotUnreachable": "Unreachable",
   "healthDotUnsupported": "Unsupported version",
-  "healthDotUnknown": "Health not checked yet",
-  "notificationsSectionLabel": "Remote notifications",
-  "notificationsMarkAllRead": "Mark all as read",
-  "notificationDismiss": "Dismiss notification"
+  "healthDotUnknown": "Health not checked yet"
 }

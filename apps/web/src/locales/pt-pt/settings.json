@@ -493,6 +493,8 @@
   "notInstalled": "Não instalado",
   "notificationEventClarificationRequested": "O agente precisa de uma resposta",
   "notificationEventClarificationRequestedDescription": "Notificar quando o agente lhe fizer explicitamente uma pergunta.",
+  "notificationEventManualStepEntered": "Tarefa à espera de si",
+  "notificationEventManualStepEnteredDescription": "Notificar quando uma tarefa passa para um passo que espera por si.",
   "notificationEventOfficeInboxItem": "Item da caixa de entrada do Office",
   "notificationEventOfficeInboxItemDescription": "Notificar quando um novo item da caixa de entrada precisar da sua atenção.",
   "notificationEventToggle": "{{event}} para {{name}}",

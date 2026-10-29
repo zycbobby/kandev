@@ -43,8 +43,5 @@
   "healthDotHealthy": "Ĥēàĺţĥŷ",
   "healthDotUnreachable": "Ũńŕēàćĥàƀĺē",
   "healthDotUnsupported": "Ũńśũƥƥōŕţēď vēŕśĩōń",
-  "healthDotUnknown": "Ĥēàĺţĥ ńōţ ćĥēćķēď ŷēţ",
-  "notificationsSectionLabel": "Ŕēḿōţē ńōţĩƒĩćàţĩōńś",
-  "notificationsMarkAllRead": "Ḿàŕķ àĺĺ àś ŕēàď",
-  "notificationDismiss": "Ďĩśḿĩśś ńōţĩƒĩćàţĩōń"
+  "healthDotUnknown": "Ĥēàĺţĥ ńōţ ćĥēćķēď ŷēţ"
 }

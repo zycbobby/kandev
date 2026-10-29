@@ -503,6 +503,8 @@
   "notInstalled": "Not installed",
   "notificationEventClarificationRequested": "Agent needs an answer",
   "notificationEventClarificationRequestedDescription": "Notify when the agent explicitly asks you a question.",
+  "notificationEventManualStepEntered": "Task waiting on you",
+  "notificationEventManualStepEnteredDescription": "Notify when a task moves to a step that waits for you.",
   "notificationEventOfficeInboxItem": "Office inbox item",
   "notificationEventOfficeInboxItemDescription": "Notify when a new inbox item needs your attention.",
   "notificationEventToggle": "{{event}} for {{name}}",

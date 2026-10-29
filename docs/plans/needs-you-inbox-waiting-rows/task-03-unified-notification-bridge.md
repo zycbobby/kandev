@@ -1,7 +1,7 @@
 ---
 id: "03-unified-notification-bridge"
 title: "Unified notification bridge and module removal"
-status: pending
+status: done
 wave: 3
 depends_on: ["02-local-waiting-rows"]
 plan: "plan.md"
@@ -36,8 +36,9 @@ keeps only its deduplication and recovery role.
   set v2, origin-tagged republication through the notification service, dedup
   guaranteeing one delivery per occurrence.
 - Frontend origin handling in `apps/web/lib/ws/handlers/notifications.ts`:
-  open-by-switch for remote origins, suppression comparing the active
-  instance, needs-you relayed kinds refreshing the Inbox read.
+  origin label on the notification, no open action anywhere (D8),
+  suppression comparing the active instance and task, needs-you relayed kinds
+  refreshing the corresponding instance's Inbox page.
 - Removal of `apps/web/components/app-sidebar/sections/notifications-section.tsx`,
   the remote-notifications slice, hook, API client, and the module's REST
   read and dismiss endpoints; relay store read and dismissed columns stop
@@ -112,4 +113,37 @@ the landed remote-questions change for the proxy and composition context.
 
 ## Results
 
-Pending.
+Done. The relay (`apps/backend/internal/instances/relay/relay.go`) keeps its
+subscription, 60s reconciliation, and (instance, event, occurrence) dedup key
+and, after a successful dedup insert, hands the occurrence to
+`notifications.Service.HandleRelayedOccurrence` with the instance owner as the
+explicit recipient and the origin identity on the message; it no longer holds
+a broadcaster, and `ws.ActionRemoteNotification` is deleted. The relayed set
+is v2: `session.turn_finished`, `session.clarification_requested`,
+`office.inbox_item`, `task.manual_step_entered`. `HandleRelayedOccurrence`
+never writes the local occurrence history, honors per-kind subscriptions, and
+falls back to local per-kind copy when the remote sends no title/body; the
+System provider folds `[<instance name>]` into the OS-notification title; the
+Local provider frame carries `origin_instance_id`/`origin_instance_name` only
+when set.
+
+The frontend handler labels origin-tagged notifications, suppresses them only
+while the active instance equals the origin and the active task matches, and
+adds no open action anywhere (D8); `use-remote-inbox-controller` bumps the
+named origin instance's refresh tick on relayed clarification and
+manual-step frames, while the local controller ignores origin-carrying
+manual-step frames. The sidebar notifications module, the
+remote-notifications slice/hook/API client, the `remote_notification` WS
+action, and the `/api/v1/remote-notifications` routes are deleted; the relay
+store keeps only Record/LatestOccurrenceTime/SweepOccurrences, with the
+display read/dismiss methods removed and the table retained for dedup and
+bounded retention. The module's two orphaned locale keys were removed from
+all eight catalogs in a scoped follow-up.
+
+Verification: backend groups pass except failures verified name-identical on
+pristine HEAD; `pnpm vitest run lib/ws/handlers/notifications.test.ts
+components/app-sidebar lib/state/slices` (135 files, 1440 tests),
+`typecheck`, and `i18n:check` pass; `pnpm e2e:run --grep "multi-instance"`
+passed 5/5 at this task's close (flow rewritten around the removed module:
+relayed notification with origin label, module absence, endpoint 404, kill-B
+degradation, flag-off regression).

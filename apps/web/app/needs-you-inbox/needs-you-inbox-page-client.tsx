@@ -9,11 +9,11 @@ import { usePathname, useRouter, useSearchParams } from "@/lib/routing/client-ro
 import {
   selectComposedNeedsYouCount,
   selectComposedNeedsYouHasMore,
-  selectNeedsYouInboxBundles,
   selectNeedsYouInboxHasMore,
   selectNeedsYouInboxHiddenCount,
   selectNeedsYouInboxLastAppliedOk,
   selectNeedsYouInboxRevision,
+  selectNeedsYouInboxRows,
   selectNeedsYouInboxStatus,
 } from "@/lib/state/slices/needs-you-inbox/selectors";
 import {
@@ -23,7 +23,9 @@ import {
 } from "@/lib/state/slices/failed-inbox/selectors";
 import type { NeedsYouInboxReadStatus } from "@/lib/state/slices/needs-you-inbox/types";
 import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
+import type { NeedsYouInboxRow as NeedsYouInboxRowType } from "@/lib/types/needs-you-inbox";
 import { NeedsYouInboxRow } from "@/components/needs-you-inbox/needs-you-inbox-row";
+import { NeedsYouWaitingRow } from "@/components/needs-you-inbox/needs-you-waiting-row";
 import { NeedsYouInboxEmptyState } from "@/components/needs-you-inbox/needs-you-inbox-empty-state";
 import { NeedsYouInboxErrorState } from "@/components/needs-you-inbox/needs-you-inbox-error-state";
 import { NeedsYouInboxHiddenPanel } from "@/components/needs-you-inbox/needs-you-inbox-hidden-panel";
@@ -75,12 +77,12 @@ function resolveViewMode(
 }
 
 function NeedsYouInboxList({
-  bundles,
+  rows,
   hasMore,
   hiddenCount,
   listRevision,
 }: {
-  bundles: readonly ClarificationInboxBundle[];
+  rows: readonly NeedsYouInboxRowType[];
   hasMore: boolean;
   hiddenCount: number;
   listRevision: number;
@@ -89,9 +91,13 @@ function NeedsYouInboxList({
   return (
     <>
       <div className="overflow-hidden rounded-lg border border-border divide-y divide-border">
-        {bundles.map((bundle) => (
-          <NeedsYouInboxRowWithLateAnswer key={bundle.pending_id} bundle={bundle} />
-        ))}
+        {rows.map((row) =>
+          row.kind === "waiting" ? (
+            <NeedsYouWaitingRow key={row.id} row={row} />
+          ) : (
+            <NeedsYouInboxRowWithLateAnswer key={row.pending_id} bundle={row} />
+          ),
+        )}
       </div>
       {hasMore && (
         <p className="text-xs text-muted-foreground" data-testid="needs-you-inbox-truncated">
@@ -123,7 +129,7 @@ function NeedsYouInboxRowWithLateAnswer({ bundle }: { bundle: ClarificationInbox
 function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
   const { t } = useTranslation();
   const status = useAppStore(selectNeedsYouInboxStatus);
-  const bundles = useAppStore(selectNeedsYouInboxBundles);
+  const rows = useAppStore(selectNeedsYouInboxRows);
   const hiddenCount = useAppStore(selectNeedsYouInboxHiddenCount);
   const listRevision = useAppStore(selectNeedsYouInboxRevision);
   const hasMore = useAppStore(selectNeedsYouInboxHasMore);
@@ -140,13 +146,7 @@ function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
     [remoteByInstanceId],
   );
 
-  const viewMode = resolveViewMode(
-    status,
-    bundles.length,
-    hasMore,
-    lastAppliedOk,
-    hasActiveWorkspace,
-  );
+  const viewMode = resolveViewMode(status, rows.length, hasMore, lastAppliedOk, hasActiveWorkspace);
 
   return (
     <>
@@ -166,7 +166,7 @@ function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
       )}
       {viewMode === "list" && (
         <NeedsYouInboxList
-          bundles={bundles}
+          rows={rows}
           hasMore={hasMore}
           hiddenCount={hiddenCount}
           listRevision={listRevision}

@@ -1,22 +1,8 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import {
-  IconChevronDown,
-  IconChevronRight,
-  IconDotsVertical,
-  IconMessageQuestion,
-} from "@tabler/icons-react";
+import { IconChevronDown, IconChevronRight, IconMessageQuestion } from "@tabler/icons-react";
 import { Button } from "@kandev/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@kandev/ui/dropdown-menu";
 import { useTranslation } from "react-i18next";
 import Link from "@/components/routing/app-link";
 import { useAppStore } from "@/components/state-provider";
@@ -54,34 +40,7 @@ import type {
   LateClarificationState,
 } from "@/hooks/use-late-clarification-message";
 import type { MessageAdmissionOutcome } from "@/hooks/use-message-handler";
-
-const SNOOZE_DURATIONS: ClarificationInboxSnoozeDuration[] = ["1h", "4h", "24h"];
-
-const SNOOZE_DURATION_LABEL_KEYS: Record<ClarificationInboxSnoozeDuration, string> = {
-  "1h": "needsYouInbox:snoozeDuration1h",
-  "4h": "needsYouInbox:snoozeDuration4h",
-  "24h": "needsYouInbox:snoozeDuration24h",
-};
-
-function useSidecarAction(pendingId: string, onDone: () => void, onFailed: () => void) {
-  const [busy, setBusy] = useState(false);
-  const run = useCallback(
-    async (action: () => Promise<void>) => {
-      if (busy) return;
-      setBusy(true);
-      try {
-        await action();
-        onDone();
-      } catch {
-        onFailed();
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, onDone, onFailed],
-  );
-  return { busy, run };
-}
+import { InboxRowActionsMenu, useSidecarAction } from "./inbox-row-actions";
 
 // The winner's status is absent only against a pre-R10 backend that never
 // sent an envelope status; treating that as "answered" preserves this
@@ -114,76 +73,6 @@ function useRowOutcomeNotice(primaryText: string, bumpRefreshTick: () => void) {
       // offers a retry; the row and count stay untouched here.
     },
     [bumpRefreshTick, primaryText, t],
-  );
-}
-
-function RowActionsMenu({
-  disabled,
-  taskHref,
-  onOpenTask,
-  onDismiss,
-  onSnooze,
-}: {
-  disabled: boolean;
-  taskHref: string;
-  // Present on remote rows: opening the task switches the panel to the row's
-  // instance instead of navigating this instance's router.
-  onOpenTask?: () => void;
-  onDismiss: () => void;
-  onSnooze: (duration: ClarificationInboxSnoozeDuration) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="cursor-pointer shrink-0"
-          disabled={disabled}
-          aria-label={t("needsYouInbox:rowActions")}
-        >
-          <IconDotsVertical className="h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {onOpenTask ? (
-          <DropdownMenuItem
-            className="cursor-pointer"
-            onSelect={onOpenTask}
-            data-testid="needs-you-inbox-open-task-menu-item"
-          >
-            {t("needsYouInbox:openTask")}
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem asChild className="cursor-pointer">
-            <Link href={taskHref} data-testid="needs-you-inbox-open-task-menu-item">
-              {t("needsYouInbox:openTask")}
-            </Link>
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem className="cursor-pointer" onSelect={onDismiss}>
-          {t("needsYouInbox:dismiss")}
-        </DropdownMenuItem>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger className="cursor-pointer">
-            {t("needsYouInbox:snooze")}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            {SNOOZE_DURATIONS.map((duration) => (
-              <DropdownMenuItem
-                key={duration}
-                className="cursor-pointer"
-                onSelect={() => onSnooze(duration)}
-              >
-                {t(SNOOZE_DURATION_LABEL_KEYS[duration])}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -439,7 +328,7 @@ export function NeedsYouInboxRow({
           onOpenTask={openTask ?? (() => {})}
           label={t("needsYouInbox:openTask")}
         />
-        <RowActionsMenu
+        <InboxRowActionsMenu
           disabled={dismissing || snoozing}
           taskHref={taskHref}
           onOpenTask={openTask}

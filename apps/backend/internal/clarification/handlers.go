@@ -173,9 +173,12 @@ type Handlers struct {
 
 	// inboxTasks/inboxBundles back the Needs-you Inbox endpoints
 	// (inbox_handlers.go) only; the original clarification endpoints above
-	// never read them.
+	// never read them. inboxWaits adds the manual-step waiting source the
+	// merged /api/v1/needs-you-inbox read needs (needs_you_inbox_handlers.go);
+	// nil leaves only the bundle-backed endpoints usable.
 	inboxTasks   inboxTaskService
 	inboxBundles inboxBundleStore
+	inboxWaits   ManualStepWaitStore
 	// now always returns a UTC instant. The sidecar's snooze_until is
 	// persisted and compared as SQLite TEXT (mattn/go-sqlite3 formats a
 	// time.Time with whatever offset it carries), so a non-UTC value here
@@ -215,6 +218,10 @@ func NewHandlers(
 // gates only the /api/v1/clarification-inbox group: the original
 // /api/v1/clarification routes stay unconditional, matching every agent's
 // existing clarification-request/respond flow regardless of the flag.
+// inboxWaits is the manual-step waiting store; when non-nil alongside the
+// flag, the merged /api/v1/needs-you-inbox endpoints are registered too
+// (needs_you_inbox_handlers.go). Nil leaves only the bundle-backed endpoints
+// usable, which is the test wiring for this registration path.
 func RegisterRoutes(
 	router *gin.Engine,
 	store *Store,
@@ -227,6 +234,7 @@ func RegisterRoutes(
 	inboxTasks inboxTaskService,
 	inboxBundles inboxBundleStore,
 	needsYouInboxEnabled bool,
+	inboxWaits ManualStepWaitStore,
 ) {
 	h := NewHandlers(store, hub, messageCreator, repo, eventBus, resolver, log, inboxTasks, inboxBundles)
 	api := router.Group("/api/v1/clarification")
@@ -243,6 +251,11 @@ func RegisterRoutes(
 		inbox.GET("/history", h.httpListInboxHistory)
 		inbox.PUT("/sidecar/:pendingID", h.httpUpsertInboxSidecar)
 		inbox.DELETE("/sidecar/:pendingID", h.httpDeleteInboxSidecar)
+
+		if inboxWaits != nil {
+			h.inboxWaits = inboxWaits
+			h.registerNeedsYouInboxRoutes(router)
+		}
 	}
 }
 

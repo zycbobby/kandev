@@ -10,10 +10,8 @@ import {
 } from "@kandev/ui/dropdown-menu";
 import { useLocalFeatureFlag } from "@/hooks/domains/features/use-local-feature-flag";
 import { useInstances } from "@/hooks/domains/instances/use-instances";
-import { useRemoteNotificationUnreadByInstance } from "@/hooks/domains/remote-notifications/use-remote-notifications";
 import { switchInstance } from "@/lib/instances/switch-instance";
 import type { InstanceHealth } from "@/lib/api/domains/instances-api";
-import { Badge } from "@kandev/ui/badge";
 import { LOCAL_INSTANCE_ID, type InstanceListItem } from "@/lib/state/slices/instances/types";
 import { cn } from "@/lib/utils";
 
@@ -27,10 +25,9 @@ type AppSidebarInstancePickerProps = {
 /**
  * Compact instance switcher inlined after the workspace picker in the sidebar
  * header. Only the current instance's name shows on the trigger; the rows
- * carry a health dot and the instance's remote-notification unread count.
- * Selecting an instance is a full page reload, so there is no local
- * navigation to close or guard. Hidden while the feature is off or no
- * remote instance is registered.
+ * carry a health dot. Selecting an instance is a full page reload, so there
+ * is no local navigation to close or guard. Hidden while the feature is off
+ * or no remote instance is registered.
  */
 export function AppSidebarInstancePicker({
   triggerClassName,
@@ -41,7 +38,6 @@ export function AppSidebarInstancePicker({
   const { t } = useTranslation();
   const enabled = useLocalFeatureFlag("multiInstance");
   const { items, activeId, health } = useInstances();
-  const unreadByInstance = useRemoteNotificationUnreadByInstance();
 
   if (!enabled || items.length <= 1) return null;
   const active = items.find((item) => item.id === activeId) ?? items[0];
@@ -72,7 +68,6 @@ export function AppSidebarInstancePicker({
             item={item}
             active={item.id === activeId}
             health={health[item.id]}
-            unreadCount={unreadByInstance[item.id] ?? 0}
             itemTestId={`${itemTestIdPrefix}-${item.id}`}
             healthTestId={`${healthTestIdPrefix}-${item.id}`}
           />
@@ -86,7 +81,6 @@ type InstancePickerItemProps = {
   item: InstanceListItem;
   active: boolean;
   health: InstanceHealth | undefined;
-  unreadCount: number;
   itemTestId: string;
   healthTestId: string;
 };
@@ -95,7 +89,6 @@ function InstancePickerItem({
   item,
   active,
   health,
-  unreadCount,
   itemTestId,
   healthTestId,
 }: InstancePickerItemProps) {
@@ -122,23 +115,10 @@ function InstancePickerItem({
         {isLocal ? t("instances:localInstance") : item.name}
       </span>
       {!isLocal && <HealthDot health={health} testId={healthTestId} />}
-      {unreadCount > 0 && <UnreadCountBadge instanceId={item.id} count={unreadCount} />}
       <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground">
         {!item.enabled && t("instances:instanceDisabledHint")}
       </span>
     </DropdownMenuItem>
-  );
-}
-
-function UnreadCountBadge({ instanceId, count }: { instanceId: string; count: number }) {
-  return (
-    <Badge
-      data-testid={`sidebar-instance-unread-${instanceId}`}
-      aria-hidden="true"
-      className="rounded-full bg-primary px-1.5 py-0 text-[10px] leading-none text-primary-foreground"
-    >
-      {count}
-    </Badge>
   );
 }
 

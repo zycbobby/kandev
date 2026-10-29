@@ -20,6 +20,12 @@ type Message struct {
 	Config         map[string]interface{}
 	Payload        map[string]string
 	RuntimeUpdates []models.RuntimeUpdateMember
+	// OriginInstanceID and OriginInstanceName identify the federating
+	// instance a relayed occurrence came from; both stay empty for local
+	// events. Providers that surface origin (the system provider's title,
+	// the frontend's origin label) read them; others ignore them.
+	OriginInstanceID   string
+	OriginInstanceName string
 }
 
 type Provider interface {

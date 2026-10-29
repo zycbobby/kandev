@@ -506,6 +506,8 @@
   "notInstalled": "未安装",
   "notificationEventClarificationRequested": "智能体需要回答",
   "notificationEventClarificationRequestedDescription": "智能体明确提出问题时通知。",
+  "notificationEventManualStepEntered": "任务等待你操作",
+  "notificationEventManualStepEnteredDescription": "当任务进入需要你操作的步骤时通知。",
   "notificationEventOfficeInboxItem": "办公室收件箱项目",
   "notificationEventOfficeInboxItemDescription": "有新的收件箱项目需要你处理时通知。",
   "notificationEventToggle": "{{event}}（{{name}}）",

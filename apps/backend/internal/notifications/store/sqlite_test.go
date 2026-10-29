@@ -150,6 +150,57 @@ func TestSQLiteRepositoryMigratesExistingLocalAndSystemUpdateSubscriptionsOnlyOn
 	}
 }
 
+// TestSQLiteRepositoryMigratesManualStepWaitSubscriptionsOnlyOnce pins D9:
+// pre-existing local/system providers gain the task.manual_step_entered
+// subscription exactly once, a later user opt-out is never backfilled, and
+// non-default provider types are left untouched.
+func TestSQLiteRepositoryMigratesManualStepWaitSubscriptionsOnlyOnce(t *testing.T) {
+	database := openNotificationTestDB(t)
+	ctx := context.Background()
+	repo, err := newSQLiteRepositoryWithDB(ctx, database, database)
+	if err != nil {
+		t.Fatalf("create repository: %v", err)
+	}
+	providerIDs := make(map[string]string)
+	for _, provider := range []*models.Provider{
+		{ID: "local", UserID: "user-1", Name: "Local", Type: models.ProviderTypeLocal, Enabled: true},
+		{ID: "system", UserID: "user-1", Name: "System", Type: models.ProviderTypeSystem, Enabled: true},
+		{ID: "apprise", UserID: "user-1", Name: "Apprise", Type: models.ProviderTypeApprise, Enabled: true},
+	} {
+		if err := repo.CreateProvider(ctx, provider); err != nil {
+			t.Fatalf("create %s provider: %v", provider.Type, err)
+		}
+		providerIDs[string(provider.Type)] = provider.ID
+	}
+	if _, err := database.Exec(`DELETE FROM notification_migrations`); err != nil {
+		t.Fatalf("clear fresh migration marker: %v", err)
+	}
+
+	if err := repo.migrateManualStepWaitSubscriptions(ctx); err != nil {
+		t.Fatalf("migrate manual step wait subscriptions: %v", err)
+	}
+	if err := repo.ReplaceSubscriptions(ctx, providerIDs[string(models.ProviderTypeLocal)], "user-1", []string{}); err != nil {
+		t.Fatalf("user opt-out: %v", err)
+	}
+	if err := repo.migrateManualStepWaitSubscriptions(ctx); err != nil {
+		t.Fatalf("replay manual step wait migration: %v", err)
+	}
+	for providerType, want := range map[string]bool{"local": false, "system": true, "apprise": false} {
+		providerID := providerIDs[providerType]
+		subscriptions, err := repo.ListSubscriptionsByProvider(ctx, providerID)
+		if err != nil {
+			t.Fatalf("list %s subscriptions: %v", providerType, err)
+		}
+		got := false
+		for _, subscription := range subscriptions {
+			got = got || (subscription.EventType == "task.manual_step_entered" && subscription.Enabled)
+		}
+		if got != want {
+			t.Fatalf("%s manual step wait subscription = %v, want %v", providerType, got, want)
+		}
+	}
+}
+
 func TestSQLiteRepositoryMergesLegacySubscriptionIdempotently(t *testing.T) {
 	database := openNotificationTestDB(t)
 	ctx := context.Background()

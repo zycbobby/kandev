@@ -1,7 +1,7 @@
 ---
 id: "02-local-waiting-rows"
 title: "Local waiting rows and the merged Inbox read"
-status: pending
+status: done
 wave: 2
 depends_on: ["01-manual-step-episode-notification"]
 plan: "plan.md"
@@ -39,8 +39,8 @@ boot count, and the frontend waiting row with its menu and copy.
 
 - Repository query: tasks of the workspace in a manual step with no executing
   or queued turn, `StepRunsOnEntry` evaluated in Go, bounded page, episode
-  identity `mw:<task_id>:<step_id>:<moved_at>` from the manual-step
-  transition audit trail.
+  identity `mw:<task_id>:<step_id>:<transitionID>` from the immutable
+  `task_step_transitions` row id for the move into the current step.
 - Aggregate endpoint and hidden enumeration under `needsYouInboxEnabled`,
   merged ordering by (reference time, id), count, hidden count, `has_more`
   from the one merge; `InboxBootSummary` extension.
@@ -118,4 +118,39 @@ Task 01 (episode semantics and event name are settled inputs).
 
 ## Results
 
-Pending.
+Done. `ListManualStepWaits`
+(`apps/backend/internal/task/repository/sqlite/needs_you_waiting_query.go`)
+narrows candidates by workspace, non-terminal state, `complete_task_on_enter
+= 0`, no STARTING/RUNNING session, and no queued message, then filters
+through `StepRunsOnEntry` in Go over a bounded overscan (`limit*4+1`, capped);
+`queued_messages` is probed for existence because it is queue-owned. The
+episode identity comes from the newest `task_step_transitions` row for the
+step (correlated LEFT JOIN; no row falls back to `:0`) and is built by the
+single source `taskmodels.ManualStepWaitRowID`, which the task-01 notifier
+also delegates to, so the notification occurrence id, the row id, and the
+sidecar key are one identity. The sidecar join reuses
+`clarification_inbox_sidecar` keyed by the `mw:` id with the existing hidden
+predicates.
+
+The merged read lives in
+`apps/backend/internal/clarification/needs_you_inbox_handlers.go`:
+`GET /api/v1/needs-you-inbox` and `/hidden` return
+`{rows, count, hidden_count, has_more, next_snooze_expiry}` from one merge of
+the bundle page and the waiting page at the same limit (order
+`(reference_time, id)`; either source failing returns 500 with no partial
+list); `InboxBootSummary` calls the same merge helper for the pre-open badge.
+`/api/v1/clarification-inbox` and its sidecar routes are unchanged, with
+`mw:` ids authorized through the task-scope rule. The frontend moved to
+`listNeedsYouInbox`/`listHiddenNeedsYouInbox` with the `rows` union slice, the
+waiting-row component and shared actions menu, the merged hidden panel, the
+`task.manual_step_entered` refresh trigger, kind-neutral copy in eight
+catalogs, the classifier difference tests, and the
+`needs-you-inbox-waiting-rows.spec.ts` E2E (3 tests).
+
+Verification: the targeted backend and frontend suites pass, `pnpm run
+typecheck`, `i18n:check`, `i18n:ratchet`, and the waiting-rows E2E all pass;
+package-level failures in `internal/task/...` and `internal/backendapp` were
+verified name-identical on a pristine-HEAD baseline (93 = 93, environmental).
+The two variadic compatibility parameters this task originally introduced
+were removed after acceptance: `RegisterRoutes` and `InboxBootSummary` take
+the waiting store as a required parameter.

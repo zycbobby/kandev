@@ -1,11 +1,11 @@
 import type { AppState } from "@/lib/state/store";
-import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
+import type { NeedsYouInboxRow } from "@/lib/types/needs-you-inbox";
 import type { NeedsYouInboxWorkspaceState, RemoteInboxInstanceState } from "./types";
 
-const EMPTY_BUNDLES: ClarificationInboxBundle[] = [];
+const EMPTY_ROWS: NeedsYouInboxRow[] = [];
 
 const EMPTY_WORKSPACE_STATE: NeedsYouInboxWorkspaceState = {
-  bundles: EMPTY_BUNDLES,
+  rows: EMPTY_ROWS,
   count: 0,
   hiddenCount: 0,
   nextSnoozeExpiry: null,
@@ -29,8 +29,10 @@ export function selectNeedsYouInboxCount(state: AppState): number {
   return selectActiveWorkspaceState(state).count;
 }
 
-export function selectNeedsYouInboxBundles(state: AppState): ClarificationInboxBundle[] {
-  return selectActiveWorkspaceState(state).bundles;
+/** The merged rows of the active workspace's page: question rows and
+ * manual-step waiting rows in the server's (reference_time, id) order. */
+export function selectNeedsYouInboxRows(state: AppState): NeedsYouInboxRow[] {
+  return selectActiveWorkspaceState(state).rows;
 }
 
 export function selectNeedsYouInboxStatus(state: AppState) {

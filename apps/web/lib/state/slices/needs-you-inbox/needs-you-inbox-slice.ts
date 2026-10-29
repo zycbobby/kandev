@@ -24,7 +24,7 @@ export const defaultNeedsYouInboxState: NeedsYouInboxSliceState = {
 };
 
 const emptyWorkspaceState = (): NeedsYouInboxWorkspaceState => ({
-  bundles: [],
+  rows: [],
   count: 0,
   hiddenCount: 0,
   nextSnoozeExpiry: null,
@@ -36,7 +36,7 @@ const emptyWorkspaceState = (): NeedsYouInboxWorkspaceState => ({
 
 const emptyRemoteInstanceState = (instanceId: string): RemoteInboxInstanceState => ({
   instanceId,
-  bundles: [],
+  rows: [],
   count: 0,
   hiddenCount: 0,
   nextSnoozeExpiry: null,
@@ -112,7 +112,7 @@ function createRemoteInboxActions(set: ImmerSet) {
         if (remote.generationByInstanceId[instanceId] !== generation) return;
         remote.remoteByInstanceId[instanceId] = {
           instanceId,
-          bundles: page.bundles,
+          rows: page.rows,
           count: page.count,
           hiddenCount: page.hiddenCount,
           nextSnoozeExpiry: page.nextSnoozeExpiry,
@@ -180,7 +180,7 @@ export const createNeedsYouInboxSlice = (set: ImmerSet): NeedsYouInboxSlice => (
     set((draft) => {
       if (draft.needsYouInbox.generationByWorkspaceId[workspaceId] !== generation) return;
       draft.needsYouInbox.byWorkspaceId[workspaceId] = {
-        bundles: page.bundles,
+        rows: page.rows,
         count: page.count,
         hiddenCount: page.hiddenCount,
         nextSnoozeExpiry: page.nextSnoozeExpiry,
@@ -211,7 +211,7 @@ export const createNeedsYouInboxSlice = (set: ImmerSet): NeedsYouInboxSlice => (
       if (draft.needsYouInbox.generationByWorkspaceId[workspaceId]) return;
       if (draft.needsYouInbox.byWorkspaceId[workspaceId]) return;
       draft.needsYouInbox.byWorkspaceId[workspaceId] = {
-        bundles: [],
+        rows: [],
         count: seed.count,
         hiddenCount: 0,
         nextSnoozeExpiry: seed.nextSnoozeExpiry,

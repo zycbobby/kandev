@@ -18,7 +18,6 @@ import { registerWorkflowsHandlers } from "@/lib/ws/handlers/workflows";
 
 import { createMessagesHandlerRegistration } from "@/lib/ws/handlers/messages";
 import { registerNotificationsHandlers } from "@/lib/ws/handlers/notifications";
-import { registerRemoteNotificationHandlers } from "@/lib/ws/handlers/remote-notification";
 import { registerDiffsHandlers } from "@/lib/ws/handlers/diffs";
 import { registerExecutorsHandlers } from "@/lib/ws/handlers/executors";
 import { registerExecutorProfileHandlers } from "@/lib/ws/handlers/executor-profiles";
@@ -89,7 +88,6 @@ export function registerWsHandlers(store: StoreApi<AppState>) {
     ...registerDiffsHandlers(store),
     ...messages.handlers,
     ...registerNotificationsHandlers(store),
-    ...registerRemoteNotificationHandlers(store),
     ...registerSecretsHandlers(store),
     ...registerGitStatusHandlers(store),
     ...registerSystemEventsHandlers(store),

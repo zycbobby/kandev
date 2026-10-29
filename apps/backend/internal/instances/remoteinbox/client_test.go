@@ -309,6 +309,269 @@ func hiddenPage(bundles []map[string]any, total int) map[string]any {
 	return page
 }
 
+// fakeQuestionRow builds one merged needs-you question row: the bundle shape
+// plus the kind discriminant.
+func fakeQuestionRow(pendingID, createdAt string) map[string]any {
+	row := fakeBundle(pendingID, createdAt)
+	row["kind"] = "question"
+	return row
+}
+
+// fakeWaitingRow builds one merged needs-you manual-step waiting row.
+func fakeWaitingRow(id, referenceTime string) map[string]any {
+	return map[string]any{
+		"kind":           "waiting",
+		"id":             id,
+		"task_id":        "task-" + id,
+		"task_title":     "Task " + id,
+		"workspace_id":   "ws-stamped-by-aggregation",
+		"step_id":        "step-" + id,
+		"step_name":      "Manual " + id,
+		"reference_time": referenceTime,
+	}
+}
+
+func fakeHiddenWaitingRow(id, referenceTime, state string, snoozeUntil *string) map[string]any {
+	row := fakeWaitingRow(id, referenceTime)
+	row["state"] = state
+	row["snooze_until"] = snoozeUntil
+	return row
+}
+
+func needsYouPage(rows []map[string]any, hiddenCount int, hasMore bool) map[string]any {
+	return map[string]any{
+		"rows":               rows,
+		"count":              len(rows),
+		"hidden_count":       hiddenCount,
+		"has_more":           hasMore,
+		"next_snooze_expiry": nil,
+	}
+}
+
+func needsYouHiddenPage(rows []map[string]any, total int) map[string]any {
+	page := needsYouPage(rows, 0, false)
+	page["total"] = total
+	return page
+}
+
+func TestReadNeedsYouAggregatesAcrossWorkspaces(t *testing.T) {
+	var mu sync.Mutex
+	var pagePaths []string
+	fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/workspaces":
+			serveWorkspaces("ws-1", "ws-2").ServeHTTP(w, r)
+		case r.URL.Path == "/api/v1/needs-you-inbox" && r.URL.Query().Get("workspace_id") == "ws-1":
+			mu.Lock()
+			pagePaths = append(pagePaths, r.URL.Path+"?"+r.URL.RawQuery)
+			mu.Unlock()
+			writeJSON(w, http.StatusOK, needsYouPage([]map[string]any{
+				fakeWaitingRow("mw-1", "2026-10-28T10:00:02Z"),
+				fakeQuestionRow("p-1", "2026-10-28T10:00:00Z"),
+			}, 2, false))
+		case r.URL.Path == "/api/v1/needs-you-inbox":
+			mu.Lock()
+			pagePaths = append(pagePaths, r.URL.Path+"?"+r.URL.RawQuery)
+			mu.Unlock()
+			writeJSON(w, http.StatusOK, needsYouPage([]map[string]any{
+				fakeWaitingRow("mw-0", "2026-10-28T09:59:00Z"),
+				fakeQuestionRow("p-2", "2026-10-28T10:00:01Z"),
+			}, 1, false))
+		default:
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		}
+	})
+
+	result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+	require.NotNil(t, result.Page)
+	require.Empty(t, result.Degraded)
+
+	page := result.Page
+	require.Len(t, page.Rows, 4)
+	// One merged page per workspace, addressed by that workspace's own id.
+	require.Equal(t, []string{
+		"/api/v1/needs-you-inbox?limit=50&workspace_id=ws-1",
+		"/api/v1/needs-you-inbox?limit=50&workspace_id=ws-2",
+	}, pagePaths)
+
+	// The merge key is the row's own reference time (question created_at,
+	// waiting reference_time) ascending, with the row id as the tie-break.
+	var kinds, ids []string
+	for _, row := range page.Rows {
+		kinds = append(kinds, row.Kind)
+		ids = append(ids, needsYouRowDisplayID(row))
+		require.Equal(t, testInstanceID, row.InstanceID)
+	}
+	require.Equal(t, []string{"waiting", "question", "question", "waiting"}, kinds)
+	require.Equal(t, []string{"mw-0", "p-1", "p-2", "mw-1"}, ids)
+	// Origin-workspace identity is stamped per page, not trusted from the row.
+	require.Equal(t, "ws-2", page.Rows[0].WorkspaceID)
+	require.Equal(t, "ws-1", page.Rows[1].WorkspaceID)
+	require.Equal(t, "ws-2", page.Rows[2].WorkspaceID)
+	require.Equal(t, "ws-1", page.Rows[3].WorkspaceID)
+	require.Equal(t, 4, page.Count)
+	require.Equal(t, 3, page.HiddenCount)
+	require.False(t, page.HasMore)
+}
+
+func needsYouRowDisplayID(row NeedsYouRow) string {
+	if row.Kind == RowKindWaiting {
+		return row.ID
+	}
+	return row.PendingID
+}
+
+func TestReadNeedsYouCapAndHasMore(t *testing.T) {
+	t.Run("overflow truncates to limit and flags has_more", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/workspaces":
+				serveWorkspaces("ws-1").ServeHTTP(w, r)
+			default:
+				writeJSON(w, http.StatusOK, needsYouPage([]map[string]any{
+					fakeQuestionRow("p-1", "2026-10-28T10:00:00Z"),
+					fakeWaitingRow("mw-2", "2026-10-28T10:00:01Z"),
+					fakeQuestionRow("p-3", "2026-10-28T10:00:02Z"),
+				}, 0, false))
+			}
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 2)
+		require.NotNil(t, result.Page)
+		require.Len(t, result.Page.Rows, 2)
+		require.Equal(t, 2, result.Page.Count)
+		require.True(t, result.Page.HasMore)
+	})
+
+	t.Run("a workspace's own has_more flags the instance page", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/api/v1/workspaces":
+				serveWorkspaces("ws-1", "ws-2").ServeHTTP(w, r)
+			case r.URL.Query().Get("workspace_id") == "ws-1":
+				writeJSON(w, http.StatusOK, needsYouPage([]map[string]any{
+					fakeQuestionRow("p-1", "2026-10-28T10:00:00Z"),
+				}, 0, true))
+			default:
+				writeJSON(w, http.StatusOK, needsYouPage([]map[string]any{
+					fakeWaitingRow("mw-2", "2026-10-28T10:00:01Z"),
+				}, 0, false))
+			}
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+		require.NotNil(t, result.Page)
+		require.True(t, result.Page.HasMore)
+	})
+}
+
+func TestReadNeedsYouDegradedReasons(t *testing.T) {
+	t.Run("old remote without the merged read 404s to inbox_disabled", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/workspaces" {
+				serveWorkspaces("ws-1").ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+		require.Nil(t, result.Page)
+		require.Equal(t, ReasonInboxDisabled, result.Degraded)
+	})
+
+	t.Run("remote 401 on the merged read is unauthorized", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/workspaces" {
+				serveWorkspaces("ws-1").ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+		require.Equal(t, ReasonUnauthorized, result.Degraded)
+	})
+
+	t.Run("remote 403 on the merged read is unauthorized", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/workspaces" {
+				serveWorkspaces("ws-1").ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+		require.Equal(t, ReasonUnauthorized, result.Degraded)
+	})
+
+	t.Run("dial failure is unreachable", func(t *testing.T) {
+		dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		dead.Close()
+		client := New(
+			instances.Instance{ID: testInstanceID, Name: "dead", BaseURL: dead.URL},
+			func() (string, error) { return "", nil },
+			dead.Client(),
+		)
+		result := client.ReadNeedsYou(context.Background(), 50)
+		require.Nil(t, result.Page)
+		require.Equal(t, ReasonUnreachable, result.Degraded)
+	})
+
+	t.Run("remote 500 is error", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/workspaces" {
+				serveWorkspaces("ws-1").ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "boom"})
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+		require.Equal(t, ReasonError, result.Degraded)
+	})
+
+	t.Run("zero workspaces is an ok empty page", func(t *testing.T) {
+		fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+			serveWorkspaces().ServeHTTP(w, r)
+		})
+		result := fake.client("", nil).ReadNeedsYou(context.Background(), 50)
+		require.Empty(t, result.Degraded)
+		require.NotNil(t, result.Page)
+		require.NotNil(t, result.Page.Rows)
+		require.Empty(t, result.Page.Rows)
+		require.Equal(t, 0, result.Page.Count)
+	})
+}
+
+func TestReadNeedsYouHiddenAggregates(t *testing.T) {
+	until := "2026-10-28T12:00:00Z"
+	fake := startFakeRemote(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/workspaces":
+			serveWorkspaces("ws-1", "ws-2").ServeHTTP(w, r)
+		case r.URL.Path == "/api/v1/needs-you-inbox/hidden" && r.URL.Query().Get("workspace_id") == "ws-1":
+			writeJSON(w, http.StatusOK, needsYouHiddenPage([]map[string]any{
+				hiddenBundle("p-1", "2026-10-28T10:00:00Z", "snoozed", &until),
+				fakeHiddenWaitingRow("mw-1", "2026-10-28T10:00:30Z", "dismissed", nil),
+			}, 5))
+		case r.URL.Path == "/api/v1/needs-you-inbox/hidden":
+			writeJSON(w, http.StatusOK, needsYouHiddenPage([]map[string]any{
+				fakeHiddenWaitingRow("mw-2", "2026-10-28T09:00:00Z", "dismissed", nil),
+			}, 2))
+		default:
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		}
+	})
+	result := fake.client("", nil).ReadNeedsYouHidden(context.Background(), 50)
+	require.Empty(t, result.Degraded)
+	require.NotNil(t, result.Page)
+
+	require.Len(t, result.Page.Rows, 3)
+	require.Equal(t, "mw-2", result.Page.Rows[0].ID)
+	require.Equal(t, "dismissed", result.Page.Rows[0].State)
+	require.Equal(t, "p-1", result.Page.Rows[1].PendingID)
+	require.Equal(t, "snoozed", result.Page.Rows[1].State)
+	require.NotNil(t, result.Page.Rows[1].SnoozeUntil)
+	require.Equal(t, "mw-1", result.Page.Rows[2].ID)
+	require.Equal(t, 7, result.Page.Total)
+}
+
 func TestRespondPassthrough(t *testing.T) {
 	envelope := `{"outcome":"win","message_ids":["m-1"]}`
 	conflict := `{"error":{"code":"not_active","detail":"already answered"}}`

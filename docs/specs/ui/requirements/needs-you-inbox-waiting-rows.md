@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 system: ui
 created: 2026-10-28
 owners:
@@ -55,8 +55,8 @@ specifications in `openspec/specs/cross-instance-notifications/`.
   clarification request, a manual-step wait beginning, or an Office inbox
   item. A turn finishing is informational and is not one.
 - **Origin tag:** The instance identity a relayed event carries into the local
-  notification pipeline, used for labeling and navigation, never for choosing
-  a different presentation rule.
+  notification pipeline, used for labeling and Inbox-row navigation, never for
+  choosing a different presentation rule.
 
 ## Requirements
 
@@ -125,19 +125,21 @@ set of notification settings covers every instance I run.
 - **AC-UI-NEEDS-YOU-INBOX-004.1:** A relayed occurrence shall be delivered
   through the same notification pipeline as a locally emitted event of the
   same kind: the same event-kind subscriptions, the same provider set, the
-  same sound, browser-native notification, and toast behavior, and the same
-  default-subscription state. A kind that is quiet by default locally shall be
-  quiet by default when relayed, and a kind the operator subscribed to shall
-  notify identically when relayed.
+  same sound, browser-native or desktop-native notification, and
+  viewing-suppression behavior, and the same default-subscription state. A
+  kind that is quiet by default locally shall be quiet by default when
+  relayed, and a kind the operator subscribed to shall notify identically when
+  relayed.
 - **AC-UI-NEEDS-YOU-INBOX-004.2:** A relayed needs-you occurrence shall
   additionally refresh the Inbox read, exactly as the locally emitted event of
   the same kind does. A relayed informational occurrence shall not create or
   alter an Inbox row.
-- **AC-UI-NEEDS-YOU-INBOX-004.3:** A relayed notification that the operator
-  opens shall navigate to its task by the standard instance-switch path when
-  its origin is a remote instance, and shall navigate locally otherwise. The
-  origin shall be visible as a label on the notification and, for Inbox rows,
-  on the row.
+- **AC-UI-NEEDS-YOU-INBOX-004.3:** Relayed notifications shall not expose an
+  open action. Navigation to a relayed task shall be available only by opening
+  its Inbox row; informational relayed kinds, which have no Inbox row, expose
+  no task navigation and are reached by switching to the origin instance
+  through the standard instance-switch path. The origin shall be visible as a
+  label on the notification and, for Inbox rows, on the row.
 - **AC-UI-NEEDS-YOU-INBOX-004.4:** Viewing suppression shall apply across
   origins by the same rule: a notification for a task shall be suppressed when
   the panel is currently viewing that task, on the local instance or through
@@ -164,11 +166,11 @@ different truth from the list I would open.
 #### Acceptance criteria
 
 - **AC-UI-NEEDS-YOU-INBOX-005.1:** The needs-you list, its count, the hidden
-  count, and the truncation indicator for all row kinds shall come from one
-  aggregated response of one read path. The rendered count shall equal the
-  number of listed rows across kinds, including hidden rows' exclusion and
-  truncation bounds, extending AC-UI-NEEDS-YOU-INBOX-001.12, .23, and .40 to
-  the merged set.
+  count, and the truncation indicator for the local row kinds shall come from
+  one aggregated response of one read path. Remote rows follow AC-005.6 and
+  are read per instance. The rendered count shall equal the number of listed
+  rows across kinds, including hidden rows' exclusion and truncation bounds,
+  extending AC-UI-NEEDS-YOU-INBOX-001.12, .23, and .40 to the merged set.
 - **AC-UI-NEEDS-YOU-INBOX-005.2:** Rows shall be ordered oldest wait first by
   each row's reference time ascending, the bundle creation time for question
   rows, the episode start for waiting rows, and the remote row's own reference
@@ -206,11 +208,9 @@ different truth from the list I would open.
   shall be localized in every shipped locale and shall contain no Unicode em
   dash.
 
-## Supersession upon activation
+## Supersession
 
-While this document is a draft, REQ-UI-NEEDS-YOU-INBOX-001 remains
-authoritative as written. When this document activates, it supersedes, in
-part:
+This document is active and supersedes REQ-UI-NEEDS-YOU-INBOX-001, in part:
 
 - AC-UI-NEEDS-YOU-INBOX-001.5 and .6, whose "and no others" row-set
   exclusivity and waiting-session fixture become statements about question

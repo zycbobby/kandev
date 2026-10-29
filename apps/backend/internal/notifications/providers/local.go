@@ -49,6 +49,15 @@ func (p *LocalProvider) Send(_ context.Context, message Message) error {
 	if payload["notification_kind"] == "" {
 		delete(payload, "notification_kind")
 	}
+	// Origin identity for relayed occurrences, so the unified frontend
+	// handler can label and suppress by instance. Local events carry no
+	// origin and never emit these keys.
+	if message.OriginInstanceID != "" {
+		payload["origin_instance_id"] = message.OriginInstanceID
+	}
+	if message.OriginInstanceName != "" {
+		payload["origin_instance_name"] = message.OriginInstanceName
+	}
 	if len(message.RuntimeUpdates) > 0 {
 		payload["runtime_updates"] = message.RuntimeUpdates
 	}

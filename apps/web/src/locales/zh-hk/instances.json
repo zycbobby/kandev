@@ -43,8 +43,5 @@
   "healthDotHealthy": "健康",
   "healthDotUnreachable": "無法連接",
   "healthDotUnsupported": "版本不受支援",
-  "healthDotUnknown": "尚未檢查健康狀態",
-  "notificationsSectionLabel": "遠端通知",
-  "notificationsMarkAllRead": "全部標為已讀",
-  "notificationDismiss": "忽略通知"
+  "healthDotUnknown": "尚未檢查健康狀態"
 }

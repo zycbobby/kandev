@@ -3,25 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StateProvider, useAppStoreApi } from "@/components/state-provider";
 import { defaultFeatureFlags } from "@/lib/state/slices/features/types";
 import type { HydrationState } from "@/lib/state/store";
-import type { RemoteInboxPage } from "@/lib/types/remote-inbox";
+import type { RemoteNeedsYouPage } from "@/lib/types/remote-inbox";
 
-const listRemoteClarificationInboxMock = vi.fn();
+const listRemoteNeedsYouInboxMock = vi.fn();
 vi.mock("@/lib/api/domains/remote-inbox-api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/api/domains/remote-inbox-api")>();
   return {
     ...original,
-    listRemoteClarificationInbox: (...args: unknown[]) => listRemoteClarificationInboxMock(...args),
+    listRemoteNeedsYouInbox: (...args: unknown[]) => listRemoteNeedsYouInboxMock(...args),
   };
 });
 
-type WsHandler = (message?: { payload?: { instance_id: string; event: string } }) => void;
+type WsHandler = (message?: { payload?: { origin_instance_id?: string } }) => void;
 const wsMocks = vi.hoisted(() => ({
   handlers: new Map<string, Set<WsHandler>>(),
 }));
 
-function emitWsRemoteNotification(instanceId: string, event: string) {
-  for (const handler of wsMocks.handlers.get("remote_notification") ?? []) {
-    handler({ payload: { instance_id: instanceId, event } });
+/** Emits one shared notification frame, as the local backend's unified
+ *  notification pipeline broadcasts it for a relayed occurrence. */
+function emitNotificationFrame(action: string, originInstanceId?: string) {
+  for (const handler of wsMocks.handlers.get(action) ?? []) {
+    handler({ payload: { origin_instance_id: originInstanceId } });
   }
 }
 
@@ -46,12 +48,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function remotePage(overrides: Partial<RemoteInboxPage> = {}): RemoteInboxPage {
+function remotePage(overrides: Partial<RemoteNeedsYouPage> = {}): RemoteNeedsYouPage {
   return {
     instance_id: "i1",
     instance_name: "Remote A",
     status: "ok",
-    bundles: [],
+    rows: [],
     count: 0,
     hidden_count: 0,
     next_snooze_expiry: null,
@@ -129,8 +131,8 @@ function renderController(options: RenderOptions = {}) {
 }
 
 beforeEach(() => {
-  listRemoteClarificationInboxMock.mockReset();
-  listRemoteClarificationInboxMock.mockResolvedValue(remotePage());
+  listRemoteNeedsYouInboxMock.mockReset();
+  listRemoteNeedsYouInboxMock.mockResolvedValue(remotePage());
   wsMocks.handlers.clear();
 });
 
@@ -143,9 +145,9 @@ describe("useRemoteInboxController — gating", () => {
   it("reads one page per enabled instance on mount", async () => {
     renderController();
 
-    await waitFor(() => expect(listRemoteClarificationInboxMock).toHaveBeenCalledTimes(2));
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledWith("i1", expect.anything());
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledWith("i2", expect.anything());
+    await waitFor(() => expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(2));
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledWith("i1", expect.anything());
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledWith("i2", expect.anything());
   });
 
   it("issues no reads while viewing a remote instance", async () => {
@@ -154,7 +156,7 @@ describe("useRemoteInboxController — gating", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(listRemoteClarificationInboxMock).not.toHaveBeenCalled();
+    expect(listRemoteNeedsYouInboxMock).not.toHaveBeenCalled();
   });
 
   it("issues no reads when either flag is off", async () => {
@@ -162,16 +164,16 @@ describe("useRemoteInboxController — gating", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(listRemoteClarificationInboxMock).not.toHaveBeenCalled();
+    expect(listRemoteNeedsYouInboxMock).not.toHaveBeenCalled();
 
     cleanup();
-    listRemoteClarificationInboxMock.mockClear();
+    listRemoteNeedsYouInboxMock.mockClear();
 
     renderController({ multiInstance: false });
     await act(async () => {
       await Promise.resolve();
     });
-    expect(listRemoteClarificationInboxMock).not.toHaveBeenCalled();
+    expect(listRemoteNeedsYouInboxMock).not.toHaveBeenCalled();
   });
 
   it("skips disabled instances", async () => {
@@ -180,12 +182,12 @@ describe("useRemoteInboxController — gating", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(listRemoteClarificationInboxMock).not.toHaveBeenCalled();
+    expect(listRemoteNeedsYouInboxMock).not.toHaveBeenCalled();
   });
 
   it("removes disabled or deleted instances and ignores their late responses", async () => {
-    const slowRead = deferred<RemoteInboxPage>();
-    listRemoteClarificationInboxMock.mockImplementation((id: string) =>
+    const slowRead = deferred<RemoteNeedsYouPage>();
+    listRemoteNeedsYouInboxMock.mockImplementation((id: string) =>
       id === "i1" ? slowRead.promise : Promise.resolve(remotePage({ instance_id: id, count: 1 })),
     );
     const { result } = renderController();
@@ -208,7 +210,7 @@ describe("useRemoteInboxController — gating", () => {
 
 describe("useRemoteInboxController — trigger set", () => {
   it("applies an ok page and a degraded page into the slice", async () => {
-    listRemoteClarificationInboxMock.mockImplementation(async (instanceId: string) => {
+    listRemoteNeedsYouInboxMock.mockImplementation(async (instanceId: string) => {
       if (instanceId === "i2") {
         return remotePage({
           instance_id: "i2",
@@ -234,34 +236,112 @@ describe("useRemoteInboxController — trigger set", () => {
       expect(remote.i2?.count).toBe(0);
     });
   });
+});
 
-  it("a clarification relay bump refreshes only the named instance", async () => {
+describe("useRemoteInboxController — merged page shape", () => {
+  it("applies a merged page's question and waiting rows kind-tagged", async () => {
+    listRemoteNeedsYouInboxMock.mockResolvedValue(
+      remotePage({
+        rows: [
+          {
+            kind: "question",
+            pending_id: "p1",
+            task_id: "t1",
+            session_id: "s1",
+            session_state: "WAITING_FOR_INPUT",
+            task_title: "Remote question",
+            created_at: "2026-10-28T10:00:00Z",
+            context: "",
+            messages: [],
+            instance_id: "i1",
+            workspace_id: "ws-r",
+          },
+          {
+            kind: "waiting",
+            id: "mw:t2:step-gate:7",
+            task_id: "t2",
+            task_title: "Remote parked task",
+            workspace_id: "ws-r",
+            step_id: "step-gate",
+            step_name: "Manual gate",
+            reference_time: "2026-10-28T09:00:00Z",
+            instance_id: "i1",
+          },
+        ],
+        count: 2,
+        hidden_count: 1,
+      }),
+    );
+    const { result } = renderController({ instances: [{ id: "i1", enabled: true }] });
+
+    await waitFor(() => {
+      expect(result.current.getState().needsYouInbox.remoteByInstanceId.i1?.status).toBe("ready");
+    });
+    const instance = result.current.getState().needsYouInbox.remoteByInstanceId.i1;
+    expect(instance?.rows).toHaveLength(2);
+    expect(instance?.rows[0]?.kind).toBe("question");
+    expect(instance?.rows[1]?.kind).toBe("waiting");
+    expect(instance?.count).toBe(2);
+    expect(instance?.hiddenCount).toBe(1);
+  });
+});
+
+describe("useRemoteInboxController — relayed refresh triggers", () => {
+  it("a relayed needs-you frame refreshes only the named instance", async () => {
     vi.useFakeTimers();
-    const { result } = renderController();
+    renderController();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(2);
 
     act(() => {
-      emitWsRemoteNotification("i2", "session.clarification_requested");
+      emitNotificationFrame("session.clarification_requested", "i2");
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
 
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledTimes(3);
-    expect(listRemoteClarificationInboxMock).toHaveBeenLastCalledWith("i2", expect.anything());
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(3);
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenLastCalledWith("i2", expect.anything());
 
-    // A non-clarification relay event bumps nothing.
+    // The other needs-you kind refreshes its named instance too.
     act(() => {
-      emitWsRemoteNotification("i1", "session.turn_finished");
+      emitNotificationFrame("task.manual_step_entered", "i1");
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledTimes(3);
-    void result;
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(4);
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenLastCalledWith("i1", expect.anything());
+  });
+
+  it("non-needs-you, local, and unregistered-origin frames bump nothing", async () => {
+    vi.useFakeTimers();
+    renderController();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(2);
+
+    // An informational relayed kind leaves the Inbox read alone.
+    act(() => {
+      emitNotificationFrame("session.turn_finished", "i1");
+    });
+    // A local needs-you event (no origin instance) bumps nothing here: the
+    // local controller owns that refresh.
+    act(() => {
+      emitNotificationFrame("session.clarification_requested");
+    });
+    // A frame naming an unregistered instance bumps nothing: the slice
+    // fence drops ticks for instances no coordinator reads.
+    act(() => {
+      emitNotificationFrame("session.clarification_requested", "i9");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(2);
   });
 
   it("a retry tick manually refreshes only that instance", async () => {
@@ -270,7 +350,7 @@ describe("useRemoteInboxController — trigger set", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledTimes(2);
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(2);
 
     act(() => {
       result.current.getState().bumpRemoteInboxRetryTick("i1");
@@ -278,13 +358,13 @@ describe("useRemoteInboxController — trigger set", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(listRemoteClarificationInboxMock).toHaveBeenCalledTimes(3);
-    expect(listRemoteClarificationInboxMock).toHaveBeenLastCalledWith("i1", expect.anything());
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenCalledTimes(3);
+    expect(listRemoteNeedsYouInboxMock).toHaveBeenLastCalledWith("i1", expect.anything());
   });
 
   it("a slow read for one instance never writes another instance's state", async () => {
-    const slowRead = deferred<RemoteInboxPage>();
-    listRemoteClarificationInboxMock.mockImplementation((instanceId: string) =>
+    const slowRead = deferred<RemoteNeedsYouPage>();
+    listRemoteNeedsYouInboxMock.mockImplementation((instanceId: string) =>
       instanceId === "i1" ? slowRead.promise : Promise.resolve(remotePage({ count: 7 })),
     );
     const { result } = renderController();

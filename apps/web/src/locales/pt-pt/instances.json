@@ -43,8 +43,5 @@
   "healthDotHealthy": "Saudável",
   "healthDotUnreachable": "Inacessível",
   "healthDotUnsupported": "Versão não suportada",
-  "healthDotUnknown": "Estado de saúde ainda não verificado",
-  "notificationsSectionLabel": "Notificações remotas",
-  "notificationsMarkAllRead": "Marcar todas como lidas",
-  "notificationDismiss": "Dispensar notificação"
+  "healthDotUnknown": "Estado de saúde ainda não verificado"
 }

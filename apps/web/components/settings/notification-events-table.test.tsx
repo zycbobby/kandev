@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED,
   NOTIFICATION_EVENT_SESSION_TURN_FINISHED,
+  NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED,
 } from "@/lib/notifications/events";
 import type { NotificationProvider } from "@/lib/types/http";
 import { NotificationEventsTable } from "./notification-events-table";
@@ -43,6 +44,15 @@ describe("NotificationEventsTable", () => {
     // mounted and hidden by CSS, so each string appears twice.
     expect(screen.getAllByText("Agent turn finished")).toHaveLength(2);
     expect(screen.getAllByText("Notify after each completed agent turn.")).toHaveLength(2);
+  });
+
+  it("renders the translated title and description for the manual step wait event", () => {
+    renderTable([NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED]);
+
+    expect(screen.getAllByText("Task waiting on you")).toHaveLength(2);
+    expect(
+      screen.getAllByText("Notify when a task moves to a step that waits for you."),
+    ).toHaveLength(2);
   });
 
   it("falls back to the raw event type for an event the catalog does not know", () => {

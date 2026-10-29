@@ -75,6 +75,7 @@ func (p *SystemProvider) Send(ctx context.Context, message Message) error {
 		return err
 	}
 	title, body := localizedSystemMessage(cfg, message)
+	title = withOriginLabel(message, title)
 	if err := p.sendNotification(ctx, cfg, title, body); err != nil {
 		return err
 	}
@@ -82,6 +83,17 @@ func (p *SystemProvider) Send(ctx context.Context, message Message) error {
 		_ = p.playSound(ctx, cfg)
 	}
 	return nil
+}
+
+// withOriginLabel surfaces the federating instance on OS-level
+// notifications, whose only label surfaces are the title and body: the
+// instance name is folded into the title. Local events carry no origin and
+// keep their title untouched.
+func withOriginLabel(message Message, title string) string {
+	if message.OriginInstanceName == "" {
+		return title
+	}
+	return fmt.Sprintf("[%s] %s", message.OriginInstanceName, title)
 }
 
 type systemConfig struct {

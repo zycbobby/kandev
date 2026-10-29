@@ -19,22 +19,26 @@ import (
 // fakeInstanceInboxForwarder stands in for the remote fan-out client so route
 // tests never touch the network.
 type fakeInstanceInboxForwarder struct {
-	mu              sync.Mutex
-	inboxResult     remoteinbox.ReadResult
-	hiddenResult    remoteinbox.ReadResult
-	readInboxCalls  int
-	readHiddenCalls int
-	respondCalls    []string
-	respondStatus   int
-	respondBody     []byte
-	respondErr      error
-	upsertCalls     []string
-	upsertBody      string
-	upsertStatus    int
-	upsertErr       error
-	deleteCalls     []string
-	deleteStatus    int
-	deleteErr       error
+	mu                 sync.Mutex
+	inboxResult        remoteinbox.ReadResult
+	hiddenResult       remoteinbox.ReadResult
+	needsYouResult     remoteinbox.NeedsYouReadResult
+	needsYouHidden     remoteinbox.NeedsYouReadResult
+	readInboxCalls     int
+	readHiddenCalls    int
+	readNeedsYouCalls  int
+	needsYouHiddenRead int
+	respondCalls       []string
+	respondStatus      int
+	respondBody        []byte
+	respondErr         error
+	upsertCalls        []string
+	upsertBody         string
+	upsertStatus       int
+	upsertErr          error
+	deleteCalls        []string
+	deleteStatus       int
+	deleteErr          error
 }
 
 func (f *fakeInstanceInboxForwarder) ReadInbox(ctx context.Context, limit int) remoteinbox.ReadResult {
@@ -49,6 +53,20 @@ func (f *fakeInstanceInboxForwarder) ReadHidden(ctx context.Context, limit int) 
 	defer f.mu.Unlock()
 	f.readHiddenCalls++
 	return f.hiddenResult
+}
+
+func (f *fakeInstanceInboxForwarder) ReadNeedsYou(ctx context.Context, limit int) remoteinbox.NeedsYouReadResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readNeedsYouCalls++
+	return f.needsYouResult
+}
+
+func (f *fakeInstanceInboxForwarder) ReadNeedsYouHidden(ctx context.Context, limit int) remoteinbox.NeedsYouReadResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.needsYouHiddenRead++
+	return f.needsYouHidden
 }
 
 func (f *fakeInstanceInboxForwarder) Respond(ctx context.Context, pendingID string, body []byte) (int, []byte, error) {
@@ -84,6 +102,12 @@ func (f *fakeInstanceInboxForwarder) readCounts() (inbox, hidden int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.readInboxCalls, f.readHiddenCalls
+}
+
+func (f *fakeInstanceInboxForwarder) needsYouReadCounts() (page, hidden int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readNeedsYouCalls, f.needsYouHiddenRead
 }
 
 // inboxForwarderFixture wires the routes over per-instance fakes. The
@@ -128,6 +152,8 @@ func TestInstanceInboxRoutesGatedByNeedsYouInboxFlag(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/v1/instances/x/clarification-inbox"},
 		{http.MethodGet, "/api/v1/instances/x/clarification-inbox/hidden"},
+		{http.MethodGet, "/api/v1/instances/x/needs-you-inbox"},
+		{http.MethodGet, "/api/v1/instances/x/needs-you-inbox/hidden"},
 		{http.MethodPost, "/api/v1/instances/x/clarification/p-1/respond"},
 		{http.MethodPut, "/api/v1/instances/x/clarification-inbox/sidecar/p-1"},
 		{http.MethodDelete, "/api/v1/instances/x/clarification-inbox/sidecar/p-1"},
@@ -153,6 +179,9 @@ func TestInstanceInboxForeignInstanceIs404(t *testing.T) {
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+id+"/clarification-inbox", nil))
 		require.Equal(t, http.StatusNotFound, rec.Code, id)
 		require.JSONEq(t, `{"error":"instance not found"}`, rec.Body.String())
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+id+"/needs-you-inbox", nil))
+		require.Equal(t, http.StatusNotFound, rec.Code, id)
 	}
 	responds, _, _, _ := watched.calls()
 	require.Empty(t, responds)
@@ -262,6 +291,161 @@ func TestInstanceInboxPageRouteIssuesSingleFanOut(t *testing.T) {
 	inbox, hidden = fake.readCounts()
 	require.Equal(t, 1, inbox)
 	require.Equal(t, 1, hidden)
+}
+
+// needsYouQuestionRow builds one merged question row as the remote fan-out
+// decodes it; instance identity is left blank for the route to stamp.
+func needsYouQuestionRow() remoteinbox.NeedsYouRow {
+	return remoteinbox.NeedsYouRow{
+		Kind:         remoteinbox.RowKindQuestion,
+		PendingID:    "p-1",
+		TaskID:       "t-1",
+		SessionID:    "s-1",
+		SessionState: "WAITING_FOR_INPUT",
+		TaskTitle:    "Fix the deploy",
+		CreatedAt:    "2026-10-28T10:00:00Z",
+		Messages:     []byte(`[{"id":"m-1"}]`),
+		WorkspaceID:  "ws-9",
+	}
+}
+
+// needsYouWaitingRow builds one merged manual-step waiting row.
+func needsYouWaitingRow() remoteinbox.NeedsYouRow {
+	return remoteinbox.NeedsYouRow{
+		Kind:          remoteinbox.RowKindWaiting,
+		ID:            "mw:t2:step-gate:7",
+		TaskID:        "t-2",
+		TaskTitle:     "Parked release",
+		StepID:        "step-gate",
+		StepName:      "Manual gate",
+		ReferenceTime: "2026-10-28T09:00:00Z",
+		WorkspaceID:   "ws-9",
+	}
+}
+
+func TestInstanceNeedsYouPageEnvelope(t *testing.T) {
+	t.Run("ok page carries kind-tagged rows stamped with instance identity", func(t *testing.T) {
+		router, services, register := inboxForwarderFixture(t)
+		item := createOwnedInstance(t, services, "Remote A", "http://localhost:1", true)
+		register(item.ID, &fakeInstanceInboxForwarder{needsYouResult: remoteinbox.NeedsYouReadResult{
+			Page: &remoteinbox.NeedsYouPage{
+				Rows:  []remoteinbox.NeedsYouRow{needsYouQuestionRow(), needsYouWaitingRow()},
+				Count: 2, HiddenCount: 2, HasMore: true,
+			},
+		}})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+item.ID+"/needs-you-inbox", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{
+			"instance_id": "`+item.ID+`",
+			"instance_name": "Remote A",
+			"status": "ok",
+			"rows": [
+				{"kind":"question","pending_id":"p-1","task_id":"t-1","session_id":"s-1","session_state":"WAITING_FOR_INPUT","task_title":"Fix the deploy","created_at":"2026-10-28T10:00:00Z","context":"","messages":[{"id":"m-1"}],"id":"","step_id":"","step_name":"","reference_time":"","instance_id":"`+item.ID+`","workspace_id":"ws-9"},
+				{"kind":"waiting","pending_id":"","task_id":"t-2","session_id":"","session_state":"","task_title":"Parked release","created_at":"","context":"","messages":null,"id":"mw:t2:step-gate:7","step_id":"step-gate","step_name":"Manual gate","reference_time":"2026-10-28T09:00:00Z","instance_id":"`+item.ID+`","workspace_id":"ws-9"}
+			],
+			"count": 2,
+			"hidden_count": 2,
+			"next_snooze_expiry": null,
+			"has_more": true
+		}`, rec.Body.String())
+	})
+
+	t.Run("degraded page is 200 with reason and empty rows", func(t *testing.T) {
+		router, services, register := inboxForwarderFixture(t)
+		item := createOwnedInstance(t, services, "Remote A", "http://localhost:1", true)
+		register(item.ID, &fakeInstanceInboxForwarder{needsYouResult: remoteinbox.NeedsYouReadResult{
+			Degraded: remoteinbox.ReasonInboxDisabled,
+		}})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+item.ID+"/needs-you-inbox", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{
+			"instance_id": "`+item.ID+`",
+			"instance_name": "Remote A",
+			"status": "degraded",
+			"degraded_reason": "inbox_disabled",
+			"rows": [],
+			"count": 0,
+			"hidden_count": 0,
+			"next_snooze_expiry": null,
+			"has_more": false
+		}`, rec.Body.String())
+	})
+
+	t.Run("hidden page adds total and carries sidecar state", func(t *testing.T) {
+		router, services, register := inboxForwarderFixture(t)
+		item := createOwnedInstance(t, services, "Remote A", "http://localhost:1", true)
+		expiry := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+		until := "2026-10-28T12:00:00Z"
+		hiddenWaiting := needsYouWaitingRow()
+		hiddenWaiting.State = "snoozed"
+		hiddenWaiting.SnoozeUntil = &until
+		register(item.ID, &fakeInstanceInboxForwarder{needsYouHidden: remoteinbox.NeedsYouReadResult{
+			Page: &remoteinbox.NeedsYouPage{
+				Rows: []remoteinbox.NeedsYouRow{hiddenWaiting}, Count: 1, Total: 7,
+				NextSnoozeExpiry: &expiry,
+			},
+		}})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+item.ID+"/needs-you-inbox/hidden", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{
+			"instance_id": "`+item.ID+`",
+			"instance_name": "Remote A",
+			"status": "ok",
+			"rows": [
+				{"kind":"waiting","pending_id":"","task_id":"t-2","session_id":"","session_state":"","task_title":"Parked release","created_at":"","context":"","messages":null,"id":"mw:t2:step-gate:7","step_id":"step-gate","step_name":"Manual gate","reference_time":"2026-10-28T09:00:00Z","state":"snoozed","snooze_until":"2026-10-28T12:00:00Z","instance_id":"`+item.ID+`","workspace_id":"ws-9"}
+			],
+			"count": 1,
+			"hidden_count": 0,
+			"total": 7,
+			"next_snooze_expiry": "2026-10-28T12:00:00Z",
+			"has_more": false
+		}`, rec.Body.String())
+	})
+
+	t.Run("invalid limit is 400", func(t *testing.T) {
+		router, services, register := inboxForwarderFixture(t)
+		item := createOwnedInstance(t, services, "Remote A", "http://localhost:1", true)
+		register(item.ID, &fakeInstanceInboxForwarder{})
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/v1/instances/"+item.ID+"/needs-you-inbox?limit=zero", nil))
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+}
+
+func TestInstanceNeedsYouPageRouteIssuesSingleFanOut(t *testing.T) {
+	router, services, register := inboxForwarderFixture(t)
+	item := createOwnedInstance(t, services, "Remote A", "http://localhost:1", true)
+	fake := &fakeInstanceInboxForwarder{}
+	register(item.ID, fake)
+
+	get := func(path string) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	get("/api/v1/instances/" + item.ID + "/needs-you-inbox")
+	page, hidden := fake.needsYouReadCounts()
+	require.Equal(t, 1, page)
+	require.Equal(t, 0, hidden)
+	inbox, clarificationHidden := fake.readCounts()
+	require.Equal(t, 0, inbox)
+	require.Equal(t, 0, clarificationHidden)
+
+	get("/api/v1/instances/" + item.ID + "/needs-you-inbox/hidden")
+	page, hidden = fake.needsYouReadCounts()
+	require.Equal(t, 1, page)
+	require.Equal(t, 1, hidden)
+	inbox, clarificationHidden = fake.readCounts()
+	require.Equal(t, 0, inbox)
+	require.Equal(t, 0, clarificationHidden)
 }
 
 func TestInstanceInboxRespondForwarding(t *testing.T) {

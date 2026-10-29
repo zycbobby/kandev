@@ -17,8 +17,7 @@ import (
 // registerInstanceRoutes mounts the remote-instance registry REST group on
 // /api/v1/instances. The group exists only when features.multiInstance is on
 // (the instance service is assembled by initInstanceProxies under the flag);
-// with the flag off every route here is a plain 404, mirroring
-// registerRemoteNotificationRoutes' gating. Caller scoping follows the
+// with the flag off every route here is a plain 404. Caller scoping follows the
 // settings convention: the global auth middleware guards the group and the
 // owner is resolved per request, with the synthetic admin owning everything
 // while auth is disabled.
@@ -36,9 +35,9 @@ func registerInstanceRoutes(p routeParams) {
 	api.POST("/:id/select", selectInstanceRoute(svc, p.services.InstanceProxies))
 }
 
-// instanceCallerUserID resolves the owner scope for the instance routes,
-// mirroring remoteNotificationOwner: the authenticated caller, or the
-// synthetic admin (DefaultUserID) when auth is disabled.
+// instanceCallerUserID resolves the owner scope for the instance routes: the
+// authenticated caller, or the synthetic admin (DefaultUserID) when auth is
+// disabled.
 func instanceCallerUserID(c *gin.Context) string {
 	identity, ok := authn.FromGin(c)
 	if !ok || identity.Synthetic || identity.UserID == "" {

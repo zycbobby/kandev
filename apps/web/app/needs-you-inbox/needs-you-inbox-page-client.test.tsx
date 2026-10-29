@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionId as toSessionId, taskId as toTaskId } from "@/lib/types/http";
 import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
+import type { NeedsYouInboxRow } from "@/lib/types/needs-you-inbox";
 import type { FailedInboxRow as FailedInboxRowData } from "@/lib/types/failed-inbox";
 
 const mocks = vi.hoisted(() => ({
@@ -17,7 +18,7 @@ const HISTORY_TAB_TESTID = "inbox-tab-history";
 
 let needsYouState: {
   status: "idle" | "loading" | "ready" | "error";
-  bundles: ClarificationInboxBundle[];
+  rows: NeedsYouInboxRow[];
   hiddenCount: number;
   hasMore: boolean;
   appliedGeneration?: number;
@@ -98,6 +99,12 @@ vi.mock("@/components/needs-you-inbox/needs-you-inbox-row", () => ({
   ),
 }));
 
+vi.mock("@/components/needs-you-inbox/needs-you-waiting-row", () => ({
+  NeedsYouWaitingRow: ({ row }: { row: { id: string } }) => (
+    <div data-testid="stub-waiting-row">{row.id}</div>
+  ),
+}));
+
 vi.mock("@/components/needs-you-inbox/needs-you-inbox-hidden-panel", () => ({
   NeedsYouInboxHiddenPanel: ({ hiddenCount }: { hiddenCount: number }) => (
     <div data-testid="stub-hidden-panel">{hiddenCount}</div>
@@ -118,8 +125,9 @@ vi.mock("@/hooks/use-late-clarification-message", () => ({
 
 import { NeedsYouInboxPageClient } from "./needs-you-inbox-page-client";
 
-function bundle(id: string): ClarificationInboxBundle {
+function bundle(id: string): NeedsYouInboxRow {
   return {
+    kind: "question",
     pending_id: id,
     task_id: "t1",
     session_id: "s1",
@@ -146,6 +154,19 @@ function bundle(id: string): ClarificationInboxBundle {
   };
 }
 
+function waitingRow(id: string): NeedsYouInboxRow {
+  return {
+    kind: "waiting",
+    id,
+    task_id: "t-wait",
+    task_title: "Waiting task",
+    workspace_id: "w1",
+    step_id: "step-manual",
+    step_name: "Manual review",
+    reference_time: "2026-09-03T05:00:00Z",
+  };
+}
+
 function failedRow(id: string): FailedInboxRowData {
   return {
     task_id: id,
@@ -166,7 +187,7 @@ beforeEach(() => {
   mocks.useFailedInboxController.mockReset();
   mocks.inboxHistoryRefresh.mockReset();
   mocks.inboxHistoryLoadMore.mockReset();
-  needsYouState = { status: "idle", bundles: [], hiddenCount: 0, hasMore: false };
+  needsYouState = { status: "idle", rows: [], hiddenCount: 0, hasMore: false };
   failedState = { rows: [], count: 0, truncated: false, status: "idle" };
   historyState = { status: "idle", bundles: [], total: 0, hasMore: false };
   workspacesActiveId = "w1";
@@ -188,7 +209,7 @@ describe("NeedsYouInboxPageClient", () => {
   it("renders a row per listed bundle", () => {
     needsYouState = {
       status: "ready",
-      bundles: [bundle("p1"), bundle("p2")],
+      rows: [bundle("p1"), bundle("p2")],
       hiddenCount: 0,
       hasMore: false,
     };
@@ -197,15 +218,43 @@ describe("NeedsYouInboxPageClient", () => {
     expect(screen.getAllByTestId("stub-row")).toHaveLength(2);
   });
 
+  it("renders waiting rows alongside question rows in the merged order", () => {
+    needsYouState = {
+      status: "ready",
+      rows: [bundle("p1"), waitingRow("mw:t-wait:step-manual:7")],
+      hiddenCount: 0,
+      hasMore: false,
+    };
+    render(<NeedsYouInboxPageClient />);
+
+    expect(screen.getAllByTestId("stub-row")).toHaveLength(1);
+    const waiting = screen.getAllByTestId("stub-waiting-row");
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].textContent).toBe("mw:t-wait:step-manual:7");
+  });
+
+  it("renders the list, not the empty state, when only waiting rows exist", () => {
+    needsYouState = {
+      status: "ready",
+      rows: [waitingRow("mw:t-wait:step-manual:7")],
+      hiddenCount: 0,
+      hasMore: false,
+    };
+    render(<NeedsYouInboxPageClient />);
+
+    expect(screen.getAllByTestId("stub-waiting-row")).toHaveLength(1);
+    expect(screen.queryByTestId(EMPTY_TESTID)).toBeNull();
+  });
+
   it("renders the empty state when the read succeeded with no rows and no truncation", () => {
-    needsYouState = { status: "ready", bundles: [], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "ready", rows: [], hiddenCount: 0, hasMore: false };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.getByTestId(EMPTY_TESTID)).not.toBeNull();
   });
 
   it("renders the error state, not the empty state, when the read failed (AC .21)", () => {
-    needsYouState = { status: "error", bundles: [], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "error", rows: [], hiddenCount: 0, hasMore: false };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.getByTestId(ERROR_TESTID)).not.toBeNull();
@@ -213,7 +262,7 @@ describe("NeedsYouInboxPageClient", () => {
   });
 
   it("renders the error state for a zero-row truncated page rather than caught up (F42)", () => {
-    needsYouState = { status: "ready", bundles: [], hiddenCount: 0, hasMore: true };
+    needsYouState = { status: "ready", rows: [], hiddenCount: 0, hasMore: true };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.getByTestId(ERROR_TESTID)).not.toBeNull();
@@ -221,21 +270,21 @@ describe("NeedsYouInboxPageClient", () => {
   });
 
   it("shows the truncation notice when the page is bounded (AC .11)", () => {
-    needsYouState = { status: "ready", bundles: [bundle("p1")], hiddenCount: 0, hasMore: true };
+    needsYouState = { status: "ready", rows: [bundle("p1")], hiddenCount: 0, hasMore: true };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.getByTestId("needs-you-inbox-truncated")).not.toBeNull();
   });
 
   it("does not show the truncation notice when the page is exhaustive", () => {
-    needsYouState = { status: "ready", bundles: [bundle("p1")], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "ready", rows: [bundle("p1")], hiddenCount: 0, hasMore: false };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.queryByTestId("needs-you-inbox-truncated")).toBeNull();
   });
 
   it("shows the hidden panel alongside a non-empty list when bundles are hidden", () => {
-    needsYouState = { status: "ready", bundles: [bundle("p1")], hiddenCount: 2, hasMore: false };
+    needsYouState = { status: "ready", rows: [bundle("p1")], hiddenCount: 2, hasMore: false };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.getByTestId("stub-hidden-panel").textContent).toBe("2");
@@ -246,7 +295,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
   it("shows a loading indicator on the very first read, not the empty state", () => {
     needsYouState = {
       status: "loading",
-      bundles: [],
+      rows: [],
       hiddenCount: 0,
       hasMore: false,
       appliedGeneration: 0,
@@ -261,7 +310,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
   it("keeps the settled empty state during a background refresh, instead of re-flashing loading", () => {
     needsYouState = {
       status: "loading",
-      bundles: [],
+      rows: [],
       hiddenCount: 0,
       hasMore: false,
       appliedGeneration: 1,
@@ -276,7 +325,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
   it("keeps the settled list during a background refresh, instead of re-flashing loading", () => {
     needsYouState = {
       status: "loading",
-      bundles: [bundle("p1")],
+      rows: [bundle("p1")],
       hiddenCount: 0,
       hasMore: false,
       appliedGeneration: 1,
@@ -291,7 +340,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
   it("does not flash the error state for a truncated boot payload before the first read resolves", () => {
     needsYouState = {
       status: "loading",
-      bundles: [],
+      rows: [],
       hiddenCount: 0,
       hasMore: true,
       appliedGeneration: 0,
@@ -312,7 +361,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
   it("shows the loading indicator, not a false empty state, during a refresh that follows a failed read", () => {
     needsYouState = {
       status: "loading",
-      bundles: [],
+      rows: [],
       hiddenCount: 0,
       hasMore: false,
       appliedGeneration: 3,
@@ -332,7 +381,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
   it("shows the loading indicator, not a false empty state, for an idle truncated boot seed", () => {
     needsYouState = {
       status: "idle",
-      bundles: [],
+      rows: [],
       hiddenCount: 0,
       hasMore: true,
       appliedGeneration: 0,
@@ -353,7 +402,7 @@ describe("NeedsYouInboxPageClient loading vs. settled/refresh states", () => {
     workspacesActiveId = null;
     needsYouState = {
       status: "idle",
-      bundles: [],
+      rows: [],
       hiddenCount: 0,
       hasMore: false,
       appliedGeneration: 0,
@@ -376,7 +425,7 @@ describe("NeedsYouInboxPageClient — Failed tab (REQ-UI-INBOX-FAILED-001)", () 
 
   it("renders the Failed tab directly from ?tab=failed, without first rendering Needs you (AC .2)", () => {
     setLocation("/needs-you-inbox?tab=failed");
-    needsYouState = { status: "ready", bundles: [bundle("p1")], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "ready", rows: [bundle("p1")], hiddenCount: 0, hasMore: false };
     failedState = { rows: [failedRow("t1")], count: 1, truncated: false, status: "ready" };
 
     render(<NeedsYouInboxPageClient />);
@@ -387,7 +436,7 @@ describe("NeedsYouInboxPageClient — Failed tab (REQ-UI-INBOX-FAILED-001)", () 
 
   it("renders Needs you for an unrecognised tab value rather than an error (AC .2)", () => {
     setLocation("/needs-you-inbox?tab=bogus");
-    needsYouState = { status: "ready", bundles: [bundle("p1")], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "ready", rows: [bundle("p1")], hiddenCount: 0, hasMore: false };
 
     render(<NeedsYouInboxPageClient />);
 
@@ -402,7 +451,7 @@ describe("NeedsYouInboxPageClient — Failed tab (REQ-UI-INBOX-FAILED-001)", () 
   });
 
   it("passes the failed count into the Needs-you empty state's AC .23 clause", () => {
-    needsYouState = { status: "ready", bundles: [], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "ready", rows: [], hiddenCount: 0, hasMore: false };
     failedState = { rows: [failedRow("t1")], count: 1, truncated: false, status: "ready" };
 
     render(<NeedsYouInboxPageClient />);
@@ -422,7 +471,7 @@ describe("NeedsYouInboxPageClient — Failed tab (REQ-UI-INBOX-FAILED-001)", () 
 // "History" second. AC .16: the History tab's own bundle count.
 describe("NeedsYouInboxPageClient — tab strip", () => {
   it("selects Needs you by default, with its row set, count and behavior unchanged (AC .1)", () => {
-    needsYouState = { status: "ready", bundles: [bundle("p1")], hiddenCount: 0, hasMore: false };
+    needsYouState = { status: "ready", rows: [bundle("p1")], hiddenCount: 0, hasMore: false };
     render(<NeedsYouInboxPageClient />);
 
     expect(screen.getAllByTestId("stub-row")).toHaveLength(1);

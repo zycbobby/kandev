@@ -427,3 +427,60 @@ describe("classify - age computation", () => {
     expect(result.needsYou[0].ageMs).toBe(NOW_MS - new Date(T_11).getTime());
   });
 });
+
+// Manual-step waiting rows (needs-you-inbox-waiting-rows REQ-003) widen the
+// Needs-you Inbox's row set, not the Threads needs-action classifier: a task
+// parked on a manual step with no pending action, no error, and no stall is a
+// waiting row in the Inbox, and here it stays an ordinary queue item. This is
+// a difference test, not a behavior change (design non-goal: the classifier is
+// unchanged).
+describe("classify - manual-step waiting tasks stay out of Needs you", () => {
+  it("does not classify a sessionless task parked on a manual workflow step", () => {
+    const waiting = task({
+      id: "t-waiting",
+      workflowId: "wf-1",
+      workflowStepId: "step-manual",
+      state: "TODO",
+      statusSummary: { last_activity_at: T_11, primary_session: null },
+    });
+    const result = classify([waiting], [], [], NOW);
+
+    expect(result.needsYou).toHaveLength(0);
+    expect(result.queue.other.map((item) => item.id)).toEqual(["t-waiting"]);
+  });
+
+  it("does not classify a task whose only session is idle-waiting for input", () => {
+    const waiting = task({
+      id: "t-waiting-input",
+      workflowId: "wf-1",
+      workflowStepId: "step-manual",
+      state: "TODO",
+      statusSummary: {
+        last_activity_at: T_11,
+        primary_session: { id: "s-1", state: "WAITING_FOR_INPUT" },
+      },
+    });
+    const result = classify([waiting], [], [], NOW);
+
+    expect(result.needsYou).toHaveLength(0);
+    expect(result.queue.other.map((item) => item.id)).toEqual(["t-waiting-input"]);
+  });
+
+  it("still classifies a manual-step task that has a real pending action", () => {
+    const blocked = task({
+      id: "t-blocked",
+      workflowId: "wf-1",
+      workflowStepId: "step-manual",
+      state: "TODO",
+      statusSummary: {
+        last_activity_at: T_11,
+        primary_session: { id: "s-2", state: "WAITING_FOR_INPUT" },
+        pending_action: "clarification",
+      },
+    });
+    const result = classify([blocked], [], [], NOW);
+
+    expect(result.needsYou).toHaveLength(1);
+    expect(result.needsYou[0].kind).toBe("question");
+  });
+});

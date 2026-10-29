@@ -1,5 +1,5 @@
-import type { ClarificationInboxBundle } from "@/lib/types/clarification-inbox";
-import type { RemoteInboxBundle, RemoteInboxDegradedReason } from "@/lib/types/remote-inbox";
+import type { NeedsYouInboxRow } from "@/lib/types/needs-you-inbox";
+import type { RemoteInboxDegradedReason, RemoteNeedsYouRow } from "@/lib/types/remote-inbox";
 import type { ClarificationAnswer } from "@/lib/types/http";
 
 export type NeedsYouInboxReadStatus = "idle" | "loading" | "ready" | "error";
@@ -7,7 +7,8 @@ export type NeedsYouInboxReadStatus = "idle" | "loading" | "ready" | "error";
 // The boot-hydration producer's wire shape (needs-you-inbox
 // design-01#Data-and-contracts): carried on the boot payload's
 // `initialState.needsYouInboxBoot`, distinct from the `needsYouInbox` slice
-// shape itself, and consumed once via seedNeedsYouInboxBoot.
+// shape itself, and consumed once via seedNeedsYouInboxBoot. The merged boot
+// summary counts questions and waiting rows together.
 export type NeedsYouInboxBootSeed = {
   workspaceId: string;
   count: number;
@@ -16,7 +17,7 @@ export type NeedsYouInboxBootSeed = {
 };
 
 export type NeedsYouInboxWorkspaceState = {
-  bundles: ClarificationInboxBundle[];
+  rows: NeedsYouInboxRow[];
   count: number;
   hiddenCount: number;
   nextSnoozeExpiry: string | null;
@@ -34,14 +35,17 @@ export type NeedsYouInboxWorkspaceState = {
   lastAppliedOk: boolean;
 };
 
-/** One remote instance's aggregated page, under the same stale-response
- * discipline as the local workspace rows but keyed by instance. */
+/** One remote instance's aggregated merged needs-you page, under the same
+ * stale-response discipline as the local workspace rows but keyed by
+ * instance. Rows are kind-tagged exactly like the local read's rows
+ * (question or waiting), each carrying instance and origin-workspace
+ * identity. */
 export type RemoteInboxInstanceState = {
   instanceId: string;
   status: NeedsYouInboxReadStatus;
   /** Present only on a degraded read (status "error"). */
   degradedReason?: RemoteInboxDegradedReason;
-  bundles: RemoteInboxBundle[];
+  rows: RemoteNeedsYouRow[];
   count: number;
   hiddenCount: number;
   nextSnoozeExpiry: string | null;
@@ -58,9 +62,10 @@ export type NeedsYouInboxSliceState = {
     // equals this counter -- anything older lost the race and is dropped.
     generationByWorkspaceId: Record<string, number>;
     // Bumped by the WS-action refresh triggers (design-02#Control-flow):
-    // session.pending_action_changed and session.state_changed. Not
-    // per-workspace -- every trigger re-reads whichever workspace is active
-    // when it fires, never the one the event happened to name.
+    // session.pending_action_changed, session.state_changed, and
+    // task.manual_step_entered (a new waiting episode). Not per-workspace --
+    // every trigger re-reads whichever workspace is active when it fires,
+    // never the one the event happened to name.
     refreshTick: number;
     manualRetryTick: number;
     // Remote instance pages (cross-instance-inbox): same per-key generation
@@ -79,12 +84,12 @@ export type NeedsYouInboxSliceState = {
 export type NeedsYouInboxSliceActions = {
   /** Bumps and returns the new request generation for a workspace read. */
   beginNeedsYouInboxRead: (workspaceId: string) => number;
-  /** Applies a successful page read if its generation is still current. */
+  /** Applies a successful merged page read if its generation is still current. */
   setNeedsYouInboxPage: (
     workspaceId: string,
     generation: number,
     page: {
-      bundles: ClarificationInboxBundle[];
+      rows: NeedsYouInboxRow[];
       count: number;
       hiddenCount: number;
       nextSnoozeExpiry: string | null;
@@ -121,7 +126,7 @@ export type NeedsYouInboxSliceActions = {
     instanceId: string,
     generation: number,
     page: {
-      bundles: RemoteInboxBundle[];
+      rows: RemoteNeedsYouRow[];
       count: number;
       hiddenCount: number;
       nextSnoozeExpiry: string | null;

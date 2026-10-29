@@ -74,13 +74,12 @@ so that a blocked agent is never invisible and I can unblock it in place.
 **Row set**
 
 - **AC-UI-NEEDS-YOU-INBOX-001.5:** The Inbox shall list exactly the answerable
-  bundles whose owning task belongs to the active workspace, and no others.
+  bundles whose owning task belongs to the active workspace as question rows.
   Switching the active workspace shall replace the list with that workspace's
-  bundles.
-- **AC-UI-NEEDS-YOU-INBOX-001.6:** A row shall exist only when its bundle is
-  answerable. The Inbox shall not derive a row from session state. Given a
-  fixture of sessions in a waiting state that hold no answerable bundle, the
-  Inbox shall list zero rows.
+  question rows.
+- **AC-UI-NEEDS-YOU-INBOX-001.6:** A question row shall exist only when its
+  bundle is answerable, never derived from session state; sessions in a
+  waiting state with no answerable bundle yield zero question rows.
 - **AC-UI-NEEDS-YOU-INBOX-001.7:** Given a bundle whose newest turns are
   lifecycle-only, the Inbox shall still list that bundle, because the current
   turn is resolved by the shared turn-authority rule that excludes
@@ -229,14 +228,14 @@ so that a blocked agent is never invisible and I can unblock it in place.
 
 - **AC-UI-NEEDS-YOU-INBOX-001.20:** When the Inbox lists no rows for the active
   workspace, it shall render an empty state that names what it is not counting:
-  bundles in other workspaces, pending tool-permission requests,
-  parent-question records, and the operator's own snoozed or dismissed rows.
-  The trigger shall be the absence of listed rows, not the absence of
-  answerable bundles, because a dismissed or snoozed bundle remains answerable
-  under AC-UI-NEEDS-YOU-INBOX-001.22. When the operator's own dismiss or snooze
-  is hiding at least one bundle, the empty state shall say so and offer the
-  restore affordance of AC-UI-NEEDS-YOU-INBOX-001.33; when nothing is hidden it
-  shall not imply that anything is.
+  rows in other workspaces, pending tool-permission requests, parent-question
+  records, and the operator's own snoozed or dismissed rows. The trigger shall
+  be the absence of listed rows, not the absence of answerable bundles, because
+  a dismissed or snoozed bundle remains answerable under
+  AC-UI-NEEDS-YOU-INBOX-001.22. When the operator's own dismiss or snooze is
+  hiding at least one row, the empty state shall say so and offer the restore
+  affordance of AC-UI-NEEDS-YOU-INBOX-001.33; when nothing is hidden it shall
+  not imply that anything is.
 - **AC-UI-NEEDS-YOU-INBOX-001.21:** If the read fails, then the Inbox shall
   render an error state distinct from the empty state, shall not state that
   the operator is caught up, and no count shall be rendered.
@@ -303,7 +302,8 @@ so that a blocked agent is never invisible and I can unblock it in place.
   differ by contract, a test shall assert the difference rather than hide it:
   a pending tool-permission request, a parent-question record, a bundle with no
   resolvable question identifier, and a terminal session shall each appear in
-  the Threads preset and shall not appear in the Inbox.
+  the Threads preset and shall not appear in the Inbox; a manual-step wait
+  shall appear in the Inbox only.
 
 **Non-collision, copy, and coverage**
 

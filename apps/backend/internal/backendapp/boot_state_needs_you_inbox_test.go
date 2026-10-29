@@ -81,6 +81,53 @@ func seedInboxAnswerableBundle(t *testing.T, repo *sqlitetaskrepo.Repository, n 
 	return pendingID
 }
 
+// TestBootNeedsYouInbox_FlagOnWithWaitingRow_MergedCount proves the boot
+// producer reads the merged set: one answerable bundle plus one manual-step
+// waiting task seeds count 2, where the bundle-only producer would say 1.
+func TestBootNeedsYouInbox_FlagOnWithWaitingRow_MergedCount(t *testing.T) {
+	harness := newBootStateTestHarness(t)
+	ctx := context.Background()
+	if err := harness.taskRepo.CreateWorkspace(ctx, &models.Workspace{ID: "ws-1", Name: "Only"}); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	now := time.Now().UTC()
+	seedInboxAnswerableBundle(t, harness.taskRepo, 0, "ws-1", now)
+	// One manual workflow step (no on_enter actions, no complete-on-enter)
+	// with one sessionless, non-terminal task parked on it.
+	if _, err := harness.db.Exec(`
+		INSERT INTO workflow_steps (id, workflow_id, name, position, events, complete_task_on_enter, pull_from_step_id, created_at, updated_at)
+		VALUES ('boot-wait-step', 'boot-wait-wf', 'Manual review', 0, '{}', 0, '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert workflow step: %v", err)
+	}
+	if err := harness.taskRepo.CreateTask(ctx, &models.Task{
+		ID: "boot-wait-task", WorkspaceID: "ws-1", WorkflowID: "boot-wait-wf",
+		WorkflowStepID: "boot-wait-step", Title: "Waiting on the operator",
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	params := routeParams{
+		taskSvc:  harness.taskSvc,
+		taskRepo: harness.taskRepo,
+		userCtrl: harness.userCtrl,
+		features: config.FeaturesConfig{NeedsYouInbox: true},
+	}
+	state := bootInitialState(t.Context(), req, params, webapp.RouteClassification{Route: webapp.RouteHome})
+
+	decoded := decodeNeedsYouInboxBoot(t, state)
+	if decoded.NeedsYouInboxBoot == nil {
+		t.Fatal("needsYouInboxBoot absent, want the merged boot summary")
+	}
+	if decoded.NeedsYouInboxBoot.Count != 2 {
+		t.Errorf("count = %d, want 2 (one question bundle + one waiting row)", decoded.NeedsYouInboxBoot.Count)
+	}
+	if decoded.NeedsYouInboxBoot.HasMore {
+		t.Error("hasMore = true, want false")
+	}
+}
+
 func TestBootNeedsYouInbox_FlagOff_KeyAbsent(t *testing.T) {
 	harness := newBootStateTestHarness(t)
 	ctx := context.Background()

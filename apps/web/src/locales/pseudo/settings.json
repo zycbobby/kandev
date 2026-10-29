@@ -503,6 +503,8 @@
   "notInstalled": "Ńōţ ĩńśţàĺĺēď",
   "notificationEventClarificationRequested": "Àĝēńţ ńēēďś àń àńśŵēŕ",
   "notificationEventClarificationRequestedDescription": "Ńōţĩƒŷ ŵĥēń ţĥē àĝēńţ ēxƥĺĩćĩţĺŷ àśķś ŷōũ à qũēśţĩōń.",
+  "notificationEventManualStepEntered": "Ţàśķ ŵàĩţĩńĝ ōń ŷōũ",
+  "notificationEventManualStepEnteredDescription": "Ńōţĩƒŷ ŵĥēń à ţàśķ ḿōvēś ţō à śţēƥ ţĥàţ ŵàĩţś ƒōŕ ŷōũ.",
   "notificationEventOfficeInboxItem": "Ōƒƒĩćē ĩńƀōx ĩţēḿ",
   "notificationEventOfficeInboxItemDescription": "Ńōţĩƒŷ ŵĥēń à ńēŵ ĩńƀōx ĩţēḿ ńēēďś ŷōũŕ àţţēńţĩōń.",
   "notificationEventToggle": "{{event}} ƒōŕ {{name}}",

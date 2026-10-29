@@ -28,7 +28,7 @@ func TestRegisterRoutes_InboxGatedByFlag(t *testing.T) {
 
 	t.Run("flag off: inbox routes absent, original routes present", func(t *testing.T) {
 		router := gin.New()
-		RegisterRoutes(router, nil, nil, nil, nil, nil, nil, logger.Default(), nil, nil, false)
+		RegisterRoutes(router, nil, nil, nil, nil, nil, nil, logger.Default(), nil, nil, false, nil)
 		paths := registeredPaths(router)
 
 		if !paths["/api/v1/clarification/request"] {
@@ -47,7 +47,7 @@ func TestRegisterRoutes_InboxGatedByFlag(t *testing.T) {
 
 	t.Run("flag on: inbox routes present alongside the original routes", func(t *testing.T) {
 		router := gin.New()
-		RegisterRoutes(router, nil, nil, nil, nil, nil, nil, logger.Default(), nil, nil, true)
+		RegisterRoutes(router, nil, nil, nil, nil, nil, nil, logger.Default(), nil, nil, true, nil)
 		paths := registeredPaths(router)
 
 		for _, path := range []string{

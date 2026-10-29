@@ -1,5 +1,5 @@
 ---
-status: draft
+status: current
 system: ui
 requirements:
   - REQ-UI-NEEDS-YOU-INBOX-003
@@ -58,55 +58,66 @@ The design preserves two invariants explicitly:
 
 | ACs | Design section |
 | --- | --- |
-| 002.1, 002.2, 002.3 | [Waiting-row read path](#waiting-row-read-path) |
-| 002.4, 002.5, 002.7 | [Episode occurrence and notification](#episode-occurrence-and-notification) |
-| 002.6 | [Sidecar generalization](#sidecar-generalization) |
-| 002.8 | [Waiting-row read path](#waiting-row-read-path) (classifier untouched) |
-| 003.1, 003.2, 003.5 | [Unified notification bridge](#unified-notification-bridge) |
-| 003.3, 003.4 | [Unified notification bridge](#unified-notification-bridge), [Frontend surfaces](#frontend-surfaces) |
-| 003.6 | [Flags and profiles](#flags-and-profiles) |
-| 004.1 through 004.5, 004.7, 004.8 | [Aggregated read contract](#aggregated-read-contract) |
-| 004.6 | [Remote waiting rows](#remote-waiting-rows) |
-| 004.9 | [Frontend surfaces](#frontend-surfaces) |
+| 003.1, 003.2, 003.3 | [Waiting-row read path](#waiting-row-read-path) |
+| 003.4, 003.5, 003.7 | [Episode occurrence and notification](#episode-occurrence-and-notification) |
+| 003.6 | [Sidecar generalization](#sidecar-generalization) |
+| 003.8 | [Waiting-row read path](#waiting-row-read-path) (classifier untouched) |
+| 004.1, 004.2, 004.5 | [Unified notification bridge](#unified-notification-bridge) |
+| 004.3, 004.4 | [Unified notification bridge](#unified-notification-bridge), [Frontend surfaces](#frontend-surfaces) |
+| 004.6 | [Flags and profiles](#flags-and-profiles) |
+| 005.1 through 005.5, 005.7, 005.8 | [Aggregated read contract](#aggregated-read-contract) |
+| 005.6 | [Remote waiting rows](#remote-waiting-rows) |
+| 005.9 | [Frontend surfaces](#frontend-surfaces) |
 
 ## Episode occurrence and notification
 
-A waiting episode begins at exactly the two places the runtime already
-decides "this step will not start an agent":
+A waiting episode begins wherever the runtime converges a task onto "this
+step will not start an agent":
 
-- With a session: the orchestrator's manual branch of `processOnEnter`
-  (`apps/backend/internal/orchestrator/event_handlers_workflow.go:4580`),
-  which queues move instructions, sets the session to `WAITING_FOR_INPUT`,
-  and publishes the state change through `publishSessionWaitingEvent`
-  (`:7608`).
-- Without a session: `handleTaskMovedNoSession`
-  (`apps/backend/internal/orchestrator/event_handlers_workflow.go:798`),
-  where `autoStartTaskForStep` starts nothing for a manual step.
+- With a session: every path that settles a session into `WAITING_FOR_INPUT`
+  funnels through `publishSessionWaitingEvent`
+  (`apps/backend/internal/orchestrator/event_handlers_workflow.go:7614`),
+  whose eleven call sites cover the manual branch of `processOnEnter`, the
+  non-starting on-enter dispatch branch, and the failure-settlement paths.
+- Without a session: the manual branch of `autoStartTaskForLoadedStep`
+  (`apps/backend/internal/orchestrator/event_handlers_workflow.go:2130`),
+  reached from `handleTaskMovedNoSession`, queue promotion, and task
+  creation.
 
-Both sites call one shared emitter, gated on the step being manual
-(`StepRunsOnEntry` false, `CompleteTaskOnEnter` false) and on the move's actor
-not being the local operator identity (`InboxUserID`,
-`apps/backend/internal/clarification/inbox_handlers.go:648`, which already
-resolves the single-user fallback when auth is off). The emitter publishes a
-new semantic event, `task.manual_step_entered`, on the internal event bus once
-per entry, carrying task id, workspace id, step id and name, and the move
-timestamp. Entering a manual step from another manual step in an automated
-chain is a new episode and notifies again; that is deliberate (the operator is
-now owed a different action in a different step) and is the behavior the
-product decision selected.
+Both sites call one shared emitter, `notifyManualStepWait`
+(`apps/backend/internal/orchestrator/manual_step_wait.go`), gated on the step
+being manual (`StepRunsOnEntry` false, `CompleteTaskOnEnter` false). The
+emitter publishes the semantic event `task.manual_step_entered` on the
+internal event bus, carrying task id, session id, step id, the episode
+occurrence id, the move's actor kind and id, and the move timestamp. The
+episode identity (`mw:<task_id>:<step_id>:<transitionID>`, from the immutable
+`task_step_transitions` ledger row) is stable across a whole episode, so the
+notification service's occurrence dedup delivers exactly one notification per
+episode even though the emitter fires on every waiting convergence. The
+move's actor travels on the event: the notification service excludes the
+moving operator's user from the recipients (a human actor with no id maps to
+the single-user fallback identity), so an episode begun by the operator's own
+move is listed but never pushes, while agent and other-operator moves notify.
+Entering a manual step from another manual step in an automated chain is a
+new episode and notifies again; that is deliberate (the operator is now owed
+a different action in a different step) and is the behavior the product
+decision selected.
 
 The notification pipeline grows symmetrically with clarifications:
 
 - `internal/notifications/service/service.go` adds the event constant to
   `AvailableEvents` and a `HandleManualStepWait` entry point next to
-  `HandleClarificationRequested` (`:225`).
+  `HandleClarificationRequested` (`:227`).
 - `internal/backendapp/gateway.go` subscribes the bus event next to the
-  clarification subscription (`:455`), reusing the same occurrence-filter
-  discipline: exactly one notification per episode.
-- `ensureDefaultProviders` (`service.go:559`) subscribes the default Local and
-  System providers to the new kind, so push presentation, sound, and native
-  notifications behave exactly as for a question, including the frontend's
-  viewing suppression (`apps/web/lib/ws/handlers/notifications.ts:24`).
+  clarification subscription (`subscribeManualStepWaitNotifications`, `:67`,
+  wired at `:530`), reusing the same occurrence-filter discipline: exactly one
+  notification per episode.
+- `ensureDefaultProviders` (`service.go:667`) subscribes the default Local and
+  System providers to the new kind, fresh installs through the creation lists
+  and existing installs through the one-time subscription migration, so push
+  presentation, sound, and native notifications behave exactly as for a
+  question, including the frontend's viewing suppression
+  (`apps/web/lib/ws/handlers/notifications.ts:25`).
 - Delivery is independent of `features.NeedsYouInbox`, exactly as
   clarification notifications are today; enabling the flag never backfills
   episodes that already began.
@@ -124,29 +135,30 @@ and keeps a task only when no turn is executing or queued. Step predicates are
 evaluated in Go through `StepRunsOnEntry` after the SQL narrows candidates by
 workspace and non-terminal task state, so the predicate has exactly one
 definition in the codebase. The row identity for sidecar and ordering is
-`mw:<task_id>:<step_id>:<moved_at>`, where `<moved_at>` is the timestamp of
-the move that started the current episode, read from the manual-step
-transition audit trail (`recordManualStepTransition`,
-`apps/backend/internal/task/service/service_workflow.go:1608`); a later
-episode produces a different identity, and the prior sidecar state does not
-apply.
+`mw:<task_id>:<step_id>:<transitionID>`, where `<transitionID>` is the
+immutable row id of the newest `task_step_transitions` row that moved the
+task into the current step (the transactional ledger
+`recordManualStepTransition` writes,
+`apps/backend/internal/task/service/service_workflow.go`; built by
+`ManualStepWaitRowID`,
+`apps/backend/internal/task/models/needs_you_waiting.go`); a missing ledger
+row falls back to `:0`, and a later episode produces a different identity, so
+the prior sidecar state does not apply.
 
 Because the row set is derived, resolution converges by re-reading: leaving
 the step, starting a turn, completing, or archiving the task all change the
-read result, and the inbox controller already re-reads on
-`task.moved`-adjacent `session.state_changed` frames
-(`apps/web/hooks/domains/needs-you-inbox/use-needs-you-inbox-controller.ts:116`).
-The Threads needs-action classifier
-(`apps/web/lib/coordinator/attention.ts:277`) is deliberately untouched; the
+read result, and the inbox controller re-reads on the episode event
+`task.manual_step_entered` alongside the session-state frames
+(`apps/web/hooks/domains/needs-you-inbox/use-needs-you-inbox-controller.ts`),
+so a sessionless wait is also signaled. The Threads needs-action classifier
+(`apps/web/lib/coordinator/attention.ts`) is deliberately untouched; the
 asserted difference of AC-003.8 is a test, not a classifier change.
 
 ## Unified notification bridge
 
-Today the relay re-publishes retained occurrences on its own wire:
-`ws.ActionRemoteNotification` (`apps/backend/internal/instances/relay/relay.go:202`)
-consumed only by the sidebar notifications module
-(`apps/web/components/app-sidebar/sections/notifications-section.tsx`). The
-unification removes that dedicated path:
+Before this change, the relay re-published retained occurrences on its own
+wire (`ws.ActionRemoteNotification`), consumed only by the sidebar
+notifications module. The unification removes that dedicated path:
 
 - The relay keeps its subscription, reconciliation, and dedup key (instance,
   event, occurrence), but instead of broadcasting its own action it feeds
@@ -154,17 +166,22 @@ unification removes that dedicated path:
   of the same kind the remote emitted, carrying an origin tag with the
   instance identity. Dedup guarantees one delivery per occurrence, so replay
   and reconciliation never re-notify.
-- Provider routing, per-kind subscriptions, sound, native notifications, and
-  toasts therefore behave identically for relayed and local events with no
-  remote-specific presentation code: a kind quiet by default stays quiet when
-  relayed, a subscribed kind notifies identically when relayed
-  (AC-004.1).
+- Provider routing, per-kind subscriptions, sound, and browser or desktop
+  native notifications therefore behave identically for relayed and local
+  events with no remote-specific presentation code: a kind quiet by default
+  stays quiet when relayed, a subscribed kind notifies identically when
+  relayed (AC-004.1).
 - The frontend handles origin-tagged notifications in the existing handler
-  (`apps/web/lib/ws/handlers/notifications.ts`): opening one navigates by the
-  standard instance-switch path when the origin is remote
-  (`apps/web/lib/instances/switch-instance.ts`,
-  `apps/web/lib/links.ts`), and viewing suppression compares the active
-  instance and task, not only the local task id (AC-004.3, AC-004.4).
+  (`apps/web/lib/ws/handlers/notifications.ts`): a notification shows its
+  origin label but exposes no open action. Navigation to a relayed task
+  happens by opening its Inbox row; informational kinds, which have no Inbox
+  row, are reached by switching to the origin instance through the standard
+  instance-switch path (`apps/web/lib/instances/switch-instance.ts`,
+  `apps/web/lib/links.ts`). Viewing suppression compares the active instance
+  and task, not only the local task id (AC-004.3, AC-004.4). The desktop
+  native notification plugin stays at its current version, which does not
+  deliver desktop click callbacks; adding an open action would require a
+  plugin upgrade and is explicitly out of scope.
 - The sidebar notifications module, the remote-notifications slice, and the
   module's REST read and dismiss endpoints are removed. The relay store
   (`remote_notification_occurrences`,
@@ -220,9 +237,10 @@ One endpoint family serves the needs-you tab, registered under the existing
 - `GET /api/v1/needs-you-inbox` merges question rows and waiting rows into
   one page: rows carry a `kind` discriminator, question rows keep their
   existing shape, waiting rows carry task, step, and episode reference time.
-  With federation enabled, the same response attaches per-instance remote
-  pages and their degradation states through the landed composition
-  mechanism.
+  With federation enabled, remote rows are read separately for each instance
+  through `GET /api/v1/instances/:id/needs-you-inbox` (and `/hidden`) and
+  composed in the SPA; this response never carries remote rows, so a failed
+  instance degrades only its own section.
 - `GET /api/v1/needs-you-inbox/hidden` generalizes the hidden enumeration
   across local kinds with the same workspace-wide totals discipline.
 
@@ -258,9 +276,11 @@ contract is unchanged.
   move to the new endpoint; refresh triggers add the local episode event and
   the needs-you relayed kinds through the unified handler; the boot seed
   consumes the extended boot summary.
-- The sidebar notifications module is removed; the notification center and
-  push surfaces handle origin-tagged events uniformly through the existing
-  notification settings, which gain no remote-specific switches.
+- The sidebar notifications module is removed; the push surfaces handle
+  origin-tagged events uniformly through the existing notification settings,
+  which gain no remote-specific switches. No notification open action is
+  added: the Inbox row is the only navigation surface for relayed needs-you
+  kinds, and informational relayed kinds remain push-only.
 - Copy is added through `t()` in every shipped locale
   (`needsYouInbox.json`, `instances.json`), using `pnpm run i18n:zh-hant` for
   the Traditional Chinese pair, with no Unicode em dash.

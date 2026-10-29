@@ -15,6 +15,7 @@ import (
 	"github.com/kandev/kandev/internal/notifications/models"
 	"github.com/kandev/kandev/internal/notifications/providers"
 	notificationstore "github.com/kandev/kandev/internal/notifications/store"
+	"github.com/kandev/kandev/internal/steptelemetry"
 	taskmodels "github.com/kandev/kandev/internal/task/models"
 	userstore "github.com/kandev/kandev/internal/user/store"
 	"go.uber.org/zap"
@@ -23,6 +24,7 @@ import (
 const (
 	EventTaskSessionTurnFinished       = "session.turn_finished"
 	EventTaskSessionClarificationAsked = "session.clarification_requested"
+	EventTaskManualStepEntered         = "task.manual_step_entered"
 	EventOfficeInboxItem               = "office.inbox_item"
 	EventSystemUpdateAvailable         = "system.update_available"
 	desktopNativeNotificationsEnv      = "KANDEV_DESKTOP_NATIVE_NOTIFICATIONS"
@@ -108,7 +110,7 @@ func (s *Service) AppriseAvailable() bool {
 }
 
 func (s *Service) AvailableEvents() []string {
-	return []string{EventTaskSessionTurnFinished, EventTaskSessionClarificationAsked, EventOfficeInboxItem, EventSystemUpdateAvailable}
+	return []string{EventTaskSessionTurnFinished, EventTaskSessionClarificationAsked, EventTaskManualStepEntered, EventOfficeInboxItem, EventSystemUpdateAvailable}
 }
 
 func (s *Service) ListProviders(ctx context.Context, userID string) ([]*models.Provider, map[string][]string, error) {
@@ -226,6 +228,16 @@ func (s *Service) HandleClarificationRequested(ctx context.Context, taskID, sess
 	s.handleSemanticOccurrence(ctx, taskID, sessionID, pendingID, EventTaskSessionClarificationAsked, nil)
 }
 
+// HandleManualStepWait dispatches the notification for a task that just began
+// waiting at a manual workflow step. actorKind/actorID carry the move's
+// ledger attribution: a move by the recipient themselves must not notify
+// them, while a move by anybody else or by an agent must. The occurrenceID is
+// the episode identity, so repeated waiting convergences of one episode
+// collapse into a single delivery through the normal occurrence dedup.
+func (s *Service) HandleManualStepWait(ctx context.Context, taskID, sessionID, occurrenceID, actorKind, actorID string) {
+	s.handleSemanticOccurrenceWithActor(ctx, taskID, sessionID, occurrenceID, EventTaskManualStepEntered, nil, actorKind, actorID)
+}
+
 func (s *Service) HandleUpdateAvailable(ctx context.Context, version, releaseURL string) {
 	if version == "" {
 		return
@@ -236,12 +248,94 @@ func (s *Service) HandleUpdateAvailable(ctx context.Context, version, releaseURL
 	})
 }
 
+// HandleRelayedOccurrence delivers one occurrence a federating peer emitted,
+// through the same pipeline a locally emitted event of the same kind uses.
+// The recipient is explicit (the instance owner) because the remote task ID
+// has no local ownership to resolve, and the occurrence is never recorded
+// into the local history a peer reconciles against: the relay store is the
+// only deduplication and recovery ledger, so a relayed row cannot be
+// observed and re-relayed back to its origin. Remote title/body win; an
+// empty half falls back to the local copy for the kind.
+func (s *Service) HandleRelayedOccurrence(ctx context.Context, userID, originInstanceID, originInstanceName, eventType, taskID, sessionID, occurrenceID, title, body string) {
+	if userID == "" || occurrenceID == "" {
+		return
+	}
+	title, body = relayedMessageCopy(eventType, title, body)
+	message := notificationPayload{
+		TaskID:             taskID,
+		TaskSessionID:      sessionID,
+		OccurrenceID:       occurrenceID,
+		EventType:          eventType,
+		Title:              title,
+		Body:               body,
+		OriginInstanceID:   originInstanceID,
+		OriginInstanceName: originInstanceName,
+	}
+	s.deliverOccurrence(ctx, userID, message)
+}
+
+// relayedMessageCopy keeps whatever the remote composed and only replaces an
+// empty half with the local fallback for that kind.
+func relayedMessageCopy(eventType, title, body string) (string, string) {
+	if title != "" && body != "" {
+		return title, body
+	}
+	fallbackTitle, fallbackBody := semanticMessageCopy(eventType, "")
+	if eventType == EventOfficeInboxItem {
+		fallbackTitle, fallbackBody = "New inbox item", "A new item needs your attention."
+	}
+	if title == "" {
+		title = fallbackTitle
+	}
+	if body == "" {
+		body = fallbackBody
+	}
+	return title, body
+}
+
+// actorExclusionUser resolves the user a move must not notify: the operator
+// who performed it themselves. Only a human actor is excludable; an empty
+// actor id is the pre-auth single-user install, which resolves to the default
+// user the same way the recipients resolution treats unowned rows. Agent,
+// system, and unknown actors never exclude anybody.
+func actorExclusionUser(actorKind, actorID string) string {
+	if actorKind != string(steptelemetry.ActorHuman) {
+		return ""
+	}
+	if actorID != "" {
+		return actorID
+	}
+	return userstore.DefaultUserID
+}
+
+// excludeActorRecipient drops the excluded user from the recipient list.
+func excludeActorRecipient(recipients []string, excludedUser string) []string {
+	if excludedUser == "" {
+		return recipients
+	}
+	kept := make([]string, 0, len(recipients))
+	for _, userID := range recipients {
+		if userID != excludedUser {
+			kept = append(kept, userID)
+		}
+	}
+	return kept
+}
+
 func (s *Service) handleSemanticOccurrence(ctx context.Context, taskID, sessionID, occurrenceID, eventType string, payload map[string]string) {
+	s.handleSemanticOccurrenceWithActor(ctx, taskID, sessionID, occurrenceID, eventType, payload, "", "")
+}
+
+func (s *Service) handleSemanticOccurrenceWithActor(ctx context.Context, taskID, sessionID, occurrenceID, eventType string, payload map[string]string, actorKind, actorID string) {
 	if occurrenceID == "" {
 		return
 	}
 	recipients, ok := s.recipients(ctx, taskID, eventType)
 	if !ok {
+		return
+	}
+	recipients = excludeActorRecipient(recipients, actorExclusionUser(actorKind, actorID))
+	if len(recipients) == 0 {
 		return
 	}
 	title, body := s.buildSemanticMessage(ctx, taskID, eventType, payload)
@@ -495,6 +589,12 @@ type notificationPayload struct {
 	Body           string
 	Payload        map[string]string
 	RuntimeUpdates []models.RuntimeUpdateMember
+	// OriginInstanceID and OriginInstanceName identify the federating
+	// instance a relayed occurrence came from; both stay empty for local
+	// events. Group 1 only carries the fields through; relayed delivery
+	// consumes them.
+	OriginInstanceID   string
+	OriginInstanceName string
 }
 
 // dispatchProvider hands the message to the adapter. Message.UserID is the
@@ -506,16 +606,18 @@ func (s *Service) dispatchProvider(ctx context.Context, userID string, provider 
 		return fmt.Errorf("unknown provider type: %s", provider.Type)
 	}
 	return adapter.Send(ctx, providers.Message{
-		EventType:      payload.EventType,
-		Title:          payload.Title,
-		Body:           payload.Body,
-		Payload:        payload.Payload,
-		TaskID:         payload.TaskID,
-		TaskSessionID:  payload.TaskSessionID,
-		OccurrenceID:   payload.OccurrenceID,
-		UserID:         userID,
-		Config:         provider.Config,
-		RuntimeUpdates: payload.RuntimeUpdates,
+		EventType:          payload.EventType,
+		Title:              payload.Title,
+		Body:               payload.Body,
+		Payload:            payload.Payload,
+		TaskID:             payload.TaskID,
+		TaskSessionID:      payload.TaskSessionID,
+		OccurrenceID:       payload.OccurrenceID,
+		UserID:             userID,
+		Config:             provider.Config,
+		RuntimeUpdates:     payload.RuntimeUpdates,
+		OriginInstanceID:   payload.OriginInstanceID,
+		OriginInstanceName: payload.OriginInstanceName,
 	})
 }
 
@@ -549,6 +651,12 @@ func semanticMessageCopy(eventType, taskTitle string) (string, string) {
 			return "Agent needs your answer", "The agent asked a question."
 		}
 		return "Agent needs your answer", fmt.Sprintf("The agent asked a question on \"%s\".", taskTitle)
+	}
+	if eventType == EventTaskManualStepEntered {
+		if taskTitle == "" {
+			return "Task waiting on you", "A task moved to a step that waits for you."
+		}
+		return "Task waiting on you", fmt.Sprintf("The task \"%s\" moved to a step that waits for you.", taskTitle)
 	}
 	if taskTitle == "" {
 		return "Agent turn finished", "The agent finished a turn."
@@ -585,6 +693,7 @@ func (s *Service) ensureDefaultProviders(ctx context.Context, userID string) err
 		}
 		if err := s.repo.CreateProviderWithSubscriptions(ctx, provider, []string{
 			EventTaskSessionClarificationAsked,
+			EventTaskManualStepEntered,
 			EventOfficeInboxItem,
 			EventSystemUpdateAvailable,
 		}); err != nil {
@@ -617,6 +726,7 @@ func (s *Service) ensureSystemProvider(ctx context.Context, userID string) error
 	}
 	return s.repo.CreateProviderWithSubscriptions(ctx, provider, []string{
 		EventTaskSessionClarificationAsked,
+		EventTaskManualStepEntered,
 		EventOfficeInboxItem,
 		EventSystemUpdateAvailable,
 	})
@@ -656,6 +766,7 @@ func (s *Service) validateEvents(events []string) error {
 	allowed := map[string]struct{}{
 		EventTaskSessionTurnFinished:       {},
 		EventTaskSessionClarificationAsked: {},
+		EventTaskManualStepEntered:         {},
 		EventOfficeInboxItem:               {},
 		EventSystemUpdateAvailable:         {},
 	}
