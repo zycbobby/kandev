@@ -70,7 +70,7 @@ Some actions bind to the machine serving the panel. While a remote instance is a
 - the preview panel, whose URLs are host-proxied;
 - the tunnel start toggle.
 
-Arbitrary TCP port proxying across instances is not provided.
+The file viewer's Preview HTML action is the exception: a session's published native HTML preview is bridged to the remote through the instance proxy as a session-scoped port-proxy. Arbitrary TCP port proxying across instances is not provided.
 
 ## Remote rows in your Inbox
 
