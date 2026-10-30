@@ -29,6 +29,7 @@ const REMOTE_TASK_TITLE = "Remote-only fixture task";
 const LOCAL_TASK_TITLE = "Local-only fixture task";
 const REMOTE_TURN_ONE_REPLY = "remote turn reply one";
 const REMOTE_TURN_TWO_REPLY = "remote turn reply two";
+const REMOTE_PREVIEW_MARKER = "kandev-preview-bridge";
 
 type InstanceHealth = {
   reachable: boolean;
@@ -137,7 +138,7 @@ test.describe("multi-instance", () => {
     await releaseMultiInstanceFlag?.();
   });
 
-  test("multi-instance register, switch, chat, relayed notification, and kill flows", async ({
+  test("multi-instance register, switch, chat, preview bridge, relayed notification, and kill flows", async ({
     testPage,
     backend,
     apiClient,
@@ -242,6 +243,35 @@ test.describe("multi-instance", () => {
       await expect(
         session.activeChat().getByText(REMOTE_TURN_ONE_REPLY, { exact: true }),
       ).toBeVisible();
+
+      // --- Flow 3b: native HTML preview bridges through the instance proxy
+      // port. Publish against the proxy like the SPA does, load the preview
+      // through the bridged /port-proxy/ subtree, and pin the route boundary:
+      // an unmatched path on the same port stays a 404.
+      const publishResponse = await testPage.request.post(
+        `http://localhost:${remoteProxyPort}/api/v1/task-sessions/${encodeURIComponent(remoteSessionId)}/html-previews`,
+        {
+          data: {
+            path: "index.html",
+            content: `<!doctype html><title>${REMOTE_PREVIEW_MARKER}</title>`,
+          },
+        },
+      );
+      expect(publishResponse.status()).toBe(200);
+      const preview = (await publishResponse.json()) as {
+        port: number;
+        path: string;
+        version: number;
+      };
+      const previewPage = await testPage.request.get(
+        `http://localhost:${remoteProxyPort}/port-proxy/${encodeURIComponent(remoteSessionId)}/${preview.port}/index.html?v=${preview.version}`,
+      );
+      expect(previewPage.status()).toBe(200);
+      expect(await previewPage.text()).toContain(REMOTE_PREVIEW_MARKER);
+      const unknownProxyPath = await testPage.request.get(
+        `http://localhost:${remoteProxyPort}/nope`,
+      );
+      expect(unknownProxyPath.status()).toBe(404);
 
       // --- Flow 4: switch back to A; a remote turn completion notifies ---
       // Relayed occurrences now flow through the shared notification
