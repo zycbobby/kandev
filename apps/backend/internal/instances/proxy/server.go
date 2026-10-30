@@ -77,7 +77,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.Handle("/api/v1/", s.requireBridgeAuth(s.httpProxy(target, run.transport)))
-	mux.Handle("/ws", s.requireBridgeAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.bridge(run, target, w, r) })))
+	mux.Handle("/ws", s.requireBridgeAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.bridge(run, wsTarget(target), w, r) })))
+	mux.Handle("/port-proxy/", s.requireBridgeAuth(s.portProxy(target, run)))
 	run.http = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return runCtx }}
 	s.port = listener.Addr().(*net.TCPAddr).Port
 	s.run = run
@@ -179,14 +180,41 @@ func allowedOrigin(r *http.Request) bool {
 	return origin == "" || httpmw.AllowedOrigin(origin, r.Host)
 }
 
+func wsScheme(scheme string) string {
+	if scheme == "https" {
+		return "wss"
+	}
+	return "ws"
+}
+
 func wsTarget(target *url.URL) string {
 	copyURL := *target
-	copyURL.Scheme = "ws"
-	if target.Scheme == "https" {
-		copyURL.Scheme = "wss"
-	}
+	copyURL.Scheme = wsScheme(target.Scheme)
 	copyURL.Path = strings.TrimRight(target.Path, "/") + "/ws"
 	copyURL.RawPath = ""
 	copyURL.RawQuery = ""
 	return copyURL.String()
+}
+
+// portProxy dispatches subtree traffic by shape: WebSocket upgrades bridge to the
+// remote gateway on the request's own path (keeping hijacked connections tracked
+// for Stop), everything else reuses the HTTP proxy.
+func (s *Server) portProxy(target *url.URL, run *serverRun) http.Handler {
+	proxy := s.httpProxy(target, run.transport)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			s.bridge(run, wsSubtreeTarget(target, r), w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+}
+
+// wsSubtreeTarget dials the remote at the request's own path and query; RawPath
+// must survive so pre-encoded session-id segments are not decoded a second time.
+func wsSubtreeTarget(target *url.URL, r *http.Request) string {
+	u := *target
+	u.Scheme = wsScheme(target.Scheme)
+	u.Path, u.RawPath, u.RawQuery = r.URL.Path, r.URL.RawPath, r.URL.RawQuery
+	return u.String()
 }

@@ -3,13 +3,12 @@ package proxy
 import (
 	"io"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-func (s *Server) bridge(run *serverRun, target *url.URL, w http.ResponseWriter, r *http.Request) {
+func (s *Server) bridge(run *serverRun, dialURL string, w http.ResponseWriter, r *http.Request) {
 	if !allowedOrigin(r) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
@@ -28,7 +27,7 @@ func (s *Server) bridge(run *serverRun, target *url.URL, w http.ResponseWriter, 
 		return
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, Subprotocols: websocket.Subprotocols(r)}
-	remote, response, err := dialer.DialContext(run.ctx, wsTarget(target), header)
+	remote, response, err := dialer.DialContext(run.ctx, dialURL, header)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
