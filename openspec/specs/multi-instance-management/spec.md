@@ -5,7 +5,6 @@
 用户同时运行多个 Kandev 实例（例如本机一台、3090Ti 上一台）时，只能为每个实例开一个浏览器面板并手动来回切换。浏览器直连第二个实例被 WebSocket 同源校验（防跨站 WS 劫持，`internal/gateway/websocket/origin.go`）与跨站 Cookie 策略阻止，因此「一个面板管理多实例」由本机后端充当联邦客户端实现：本机后端持有多实例注册表，并为每个已注册实例提供反向代理，SPA 把 API/WS base 指向该代理即可像操作本机实例一样操作远端实例。
 
 本 capability 覆盖：实例注册表、每实例代理端口、实例选择器与切换重水合、feature toggle 与桥接安全边界、宿主绑定能力的降级语义。跨实例通知的中继与展示归 `cross-instance-notifications`。
-
 ## Requirements
 ### Requirement: 实例注册表
 The local instance SHALL maintain a user-managed registry of remote Kandev instances, each carrying a display name, a base URL, and an optional personal-access-token credential, editable from the Settings UI, with per-instance health status (reachability and reported version) surfaced on the settings page and refreshed by a periodic poller.
@@ -23,7 +22,8 @@ The local instance SHALL maintain a user-managed registry of remote Kandev insta
 - **THEN** the UI shows no instance selector and all existing behavior is unchanged
 
 ### Requirement: 每实例本机代理端口
-For each enabled registered instance the local backend SHALL provide a reverse proxy on a dedicated local port bound to the same hostname as the local UI, forwarding the remote instance's HTTP API and a bidirectional WebSocket bridge, injecting the registered credential on upstream requests when present, and surfacing remote unreachability as an explicit error to the browser client.
+
+For each enabled registered instance the local backend SHALL provide a reverse proxy on a dedicated local port bound to the same hostname as the local UI, forwarding the remote instance's HTTP API, its session-scoped port-proxy subtree (`/port-proxy/:sessionId/:port/...`), and a bidirectional WebSocket bridge, injecting the registered credential on upstream requests when present, and surfacing remote unreachability as an explicit error to the browser client. The port-proxy subtree SHALL require the same local bridge authentication as the rest of the proxy surface, and the remote gateway remains the sole authority for session-scoped port access.
 
 #### Scenario: 直接操作远端任务
 - **WHEN** the panel is switched to a remote instance and the user sends a prompt, moves, or stops a task
@@ -40,6 +40,18 @@ For each enabled registered instance the local backend SHALL provide a reverse p
 #### Scenario: 不放宽既有信任策略
 - **WHEN** any browser origin other than the same hostname attempts to use the proxy port
 - **THEN** the existing origin checks apply unchanged and no global CORS or WebSocket origin policy is weakened
+
+#### Scenario: 预览 iframe 经桥加载
+- **WHEN** the panel views a remote instance and a session publishes a native HTML preview
+- **THEN** the preview iframe loads the published document and its assets through the proxy port's port-proxy subtree, with the credential injected upstream and the remote-minted capability traveling as the `kandev_cap` query parameter (remote Set-Cookie stays stripped by the bridge)
+
+#### Scenario: 预览凭据归属
+- **WHEN** the remote instance enforces authentication and the registered credential belongs to the remote owner of that session
+- **THEN** the remote gateway authorizes the port-proxy request via its session access check; a credential of a different user yields the remote's not-found answer, surfaced as the preview's load failure
+
+#### Scenario: 桥接子树的认证与路由边界
+- **WHEN** authentication is enabled and a request without the local bridge capability cookie hits the proxy port's port-proxy subtree, or any request hits a path outside the registered proxy subtrees
+- **THEN** the subtree answer is 401 without forwarding, and unknown paths still answer 404 without reaching the remote
 
 ### Requirement: 实例选择器与切换重水合
 The web UI SHALL provide an instance selector in the sidebar header area, and switching the active instance SHALL re-hydrate the entire panel for the selected instance via a full page reload, with the SPA's API and WebSocket base pointed at that instance's proxy port and the browser tab title carrying the instance name.
@@ -64,11 +76,20 @@ The capability SHALL ship behind a runtime feature toggle default-off in every s
 - **THEN** a browser client authenticated to the local instance can operate the remote instance through the bridge without a separate remote login prompt
 
 ### Requirement: 宿主绑定能力降级
-Cross-instance operation SHALL degrade cross-instance host-bound capabilities gracefully: desktop-privileged actions (open in editor/folder, desktop native notifications) and session port-proxy/file preview surfaces that bind to the serving host SHALL show an explicit unavailable-for-remote-instance affordance instead of failing or silently doing nothing, and arbitrary TCP port proxying across instances SHALL NOT be provided.
+
+Cross-instance operation SHALL degrade cross-instance host-bound capabilities gracefully: desktop-privileged actions (open in editor/folder, desktop native notifications), Browser-panel port-forward open actions, and the tunnel start toggle SHALL show an explicit unavailable-for-remote-instance affordance instead of failing or silently doing nothing. Arbitrary TCP port proxying and port tunneling across instances SHALL NOT be provided. The session-scoped port-proxy subtree that serves the native HTML preview is exempt from this degradation: it SHALL be bridged through the per-instance proxy under the same bridge authentication and remote session authorization as the rest of the proxy surface.
 
 #### Scenario: 远端任务上的宿主动作
 - **WHEN** the user triggers a host-bound action on a task of a remote instance
 - **THEN** the UI explains the action is unavailable for remote instances instead of opening a local folder or failing silently
+
+#### Scenario: 任意端口转发与隧道仍不可用
+- **WHEN** the user tries to open a Browser-panel port-forward or start a tunnel for a remote session
+- **THEN** the UI keeps showing the unavailable-for-remote explanation and no arbitrary TCP proxying or tunneling is provided
+
+#### Scenario: 原生 HTML 预览不再降级
+- **WHEN** the user activates `Preview HTML` on a remote session whose instance has a healthy proxy
+- **THEN** the preview loads through the bridged port-proxy subtree instead of an unavailable affordance or a silent failure
 
 ## Known Failure Modes
 
