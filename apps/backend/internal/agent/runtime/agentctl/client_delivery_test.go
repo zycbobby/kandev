@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -153,5 +154,24 @@ func TestDeliveryClientAcceptsSubmissionAndAcknowledges(t *testing.T) {
 	}
 	if err := c.AcknowledgeDelivery(context.Background(), "stream-1", 5); err != nil {
 		t.Fatalf("AcknowledgeDelivery: %v", err)
+	}
+}
+
+func TestIsDeliverySubmissionNotFound(t *testing.T) {
+	notFound := &DeliveryHTTPError{StatusCode: http.StatusNotFound, Body: `{"code":"SUBMISSION_NOT_FOUND"}`}
+	if !IsDeliverySubmissionNotFound(notFound) {
+		t.Fatal("SUBMISSION_NOT_FOUND 404 was not recognized")
+	}
+	if !IsDeliverySubmissionNotFound(fmt.Errorf("read durable delivery: %w", notFound)) {
+		t.Fatal("wrapped SUBMISSION_NOT_FOUND 404 was not recognized")
+	}
+	for _, err := range []error{
+		&DeliveryHTTPError{StatusCode: http.StatusNotFound, Body: `{"code":"OTHER"}`},
+		&DeliveryHTTPError{StatusCode: http.StatusConflict, Body: `{"code":"SUBMISSION_NOT_FOUND"}`},
+		errors.New("transport failure"),
+	} {
+		if IsDeliverySubmissionNotFound(err) {
+			t.Fatalf("error %v was wrongly recognized as a missing submission", err)
+		}
 	}
 }

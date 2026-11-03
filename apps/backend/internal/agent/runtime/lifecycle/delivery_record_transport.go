@@ -2,6 +2,8 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
+
 	agentctl "github.com/kandev/kandev/internal/agent/runtime/agentctl"
 	"github.com/kandev/kandev/internal/agentctl/journal"
 )
@@ -14,15 +16,27 @@ func (m *Manager) inspectDeliveryRecordTransport(ctx context.Context, lease *age
 }
 
 func (m *Manager) inspectRetainedDeliveryRecord(ctx context.Context, lease *agentctl.RuntimeLease, control *agentctl.ControlClient, request DeliveryRecordEvidenceRequest) (*DeliveryRecordEvidence, error) {
-	retained, readErr := control.ReadRetainedReconstructionEvidence(ctx, journal.RetainedReconstructionEvidenceRequest{
+	input := journal.RetainedReconstructionEvidenceRequest{
 		Root: m.dataDir, SessionID: request.SessionID, IncarnationID: request.IncarnationID,
 		HarnessGeneration: request.HarnessGeneration, OriginalRuntime: request.OriginalRuntime, RetiredSubmissionID: request.RetiredSubmissionID, StoredSubmissionID: request.StoredSubmissionID,
-	})
+		AbsentSubmissionID: request.AbsentSubmissionID,
+	}
+	retained, readErr := control.ReadRetainedReconstructionEvidence(ctx, input)
 	if readErr != nil {
 		return nil, deliveryEvidenceReadError(lease, readErr)
 	}
+	if request.AbsentSubmissionID != "" {
+		second, secondErr := control.ReadRetainedReconstructionEvidence(ctx, input)
+		if secondErr != nil {
+			return nil, deliveryEvidenceReadError(lease, secondErr)
+		}
+		if !sameDeliveryRecordDescriptor(retained.Descriptor, second.Descriptor) || retained.SubmissionAbsent != second.SubmissionAbsent {
+			return nil, errors.Join(ErrDeliveryRecordEvidenceStale, ErrDeliveryRecoveryBlocked)
+		}
+	}
 	return &DeliveryRecordEvidence{
 		Descriptor: retained.Descriptor, ProcessTerminated: retained.ProcessTerminated, RetiredSubmission: retained.RetiredSubmission, StoredSubmission: retained.StoredSubmission,
+		SubmissionAbsent: retained.SubmissionAbsent,
 	}, nil
 }
 
@@ -155,7 +169,12 @@ func (m *Manager) readLiveStoredEvidence(ctx context.Context, lease *agentctl.Ru
 			result.StoredSubmission = record
 		}
 	}
-	if request.RetiredSubmissionID == "" && request.StoredSubmissionID == "" {
+	if request.AbsentSubmissionID != "" {
+		if err := readLiveAbsentSubmission(ctx, client, request, result); err != nil {
+			return deliveryEvidenceReadError(lease, err)
+		}
+	}
+	if request.RetiredSubmissionID == "" && request.StoredSubmissionID == "" && request.AbsentSubmissionID == "" {
 		return nil
 	}
 	after, err := client.GetDeliveryStatus(ctx, "")
@@ -178,4 +197,25 @@ func readLiveSubmissionMetadata(ctx context.Context, client *agentctl.Client, re
 	}
 	record.Payload = nil
 	return record, nil
+}
+
+// readLiveAbsentSubmission marks the exact submission ID as absent only when
+// the live owner explicitly denies it with a submission-not-found response.
+func readLiveAbsentSubmission(ctx context.Context, client *agentctl.Client, request DeliveryRecordEvidenceRequest, result *DeliveryRecordEvidence) error {
+	record, err := client.GetDeliverySubmission(ctx, request.AbsentSubmissionID)
+	if agentctl.IsDeliverySubmissionNotFound(err) {
+		result.SubmissionAbsent = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		return nil
+	}
+	if record.SessionID != request.SessionID || record.IncarnationID != request.IncarnationID ||
+		record.HarnessGeneration == 0 || record.HarnessGeneration > request.HarnessGeneration {
+		return ErrDeliveryOwnerMismatch
+	}
+	return nil
 }

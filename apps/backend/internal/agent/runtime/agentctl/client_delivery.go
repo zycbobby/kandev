@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/kandev/kandev/internal/agentctl/journal"
 )
@@ -30,6 +32,16 @@ func (e *DeliveryHTTPError) Error() string {
 		return "durable delivery request failed"
 	}
 	return fmt.Sprintf("durable delivery request failed with status %d: %s", e.StatusCode, e.Body)
+}
+
+// IsDeliverySubmissionNotFound reports whether the peer explicitly denied the
+// existence of the requested submission. A generic 404 is not absence.
+func IsDeliverySubmissionNotFound(err error) bool {
+	var httpErr *DeliveryHTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	return strings.Contains(httpErr.Body, "SUBMISSION_NOT_FOUND")
 }
 
 // DurableDeliveryInfo is the initialize-time transport capability returned by

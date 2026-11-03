@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,7 @@ type RetainedRecoveryResponse struct {
 type RetainedReconstructionEvidenceRequest struct {
 	StoredSubmissionID  string                    `json:"stored_submission_id,omitempty"`
 	RetiredSubmissionID string                    `json:"retired_submission_id,omitempty"`
+	AbsentSubmissionID  string                    `json:"absent_submission_id,omitempty"`
 	Root                string                    `json:"root"`
 	SessionID           string                    `json:"session_id"`
 	IncarnationID       string                    `json:"incarnation_id"`
@@ -58,6 +60,7 @@ type RetainedReconstructionEvidenceRequest struct {
 type RetainedReconstructionEvidence struct {
 	StoredSubmission  *Submission        `json:"stored_submission,omitempty"`
 	RetiredSubmission *Submission        `json:"retired_submission,omitempty"`
+	SubmissionAbsent  bool               `json:"submission_absent,omitempty"`
 	Descriptor        RecoveryDescriptor `json:"descriptor"`
 	ProcessTerminated *bool              `json:"process_terminated,omitempty"`
 }
@@ -79,6 +82,9 @@ func ReadRetainedReconstructionEvidence(
 ) (*RetainedReconstructionEvidence, error) {
 	if request.SessionID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 {
 		return nil, ErrOwnerMismatch
+	}
+	if request.StoredSubmissionID != "" && request.AbsentSubmissionID != "" {
+		return nil, ErrSubmissionConflict
 	}
 	journal, err := openRetainedInspectionJournal(RetainedRecoveryRequest{
 		Root: request.Root, SessionID: request.SessionID,
@@ -121,6 +127,9 @@ func ReadRetainedReconstructionEvidence(
 }
 
 func (j *Journal) readStoredReconstructionEvidence(ctx context.Context, request RetainedReconstructionEvidenceRequest, result *RetainedReconstructionEvidence) error {
+	if request.AbsentSubmissionID != "" {
+		return j.readAbsentReconstructionEvidence(ctx, request, result)
+	}
 	if request.StoredSubmissionID == "" {
 		return nil
 	}
@@ -138,6 +147,24 @@ func (j *Journal) readStoredReconstructionEvidence(ctx context.Context, request 
 	}
 	result.Descriptor, err = j.RecoveryDescriptor(ctx, request.SessionID, request.IncarnationID, request.HarnessGeneration, stored.StreamID)
 	return err
+}
+
+// readAbsentReconstructionEvidence proves whether one exact submission ID is
+// missing from the authenticated retained journal. A record owned by another
+// session or incarnation is an ownership error, not proof of absence.
+func (j *Journal) readAbsentReconstructionEvidence(ctx context.Context, request RetainedReconstructionEvidenceRequest, result *RetainedReconstructionEvidence) error {
+	stored, err := j.GetSubmission(ctx, request.AbsentSubmissionID)
+	if errors.Is(err, ErrSubmissionNotFound) {
+		result.SubmissionAbsent = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !storedSubmissionOwnerMatches(stored, request) {
+		return ErrOwnerMismatch
+	}
+	return nil
 }
 
 // ReadRetainedReconstructionSubmission returns the payload only when the

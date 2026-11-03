@@ -29,6 +29,7 @@ var (
 type DeliveryRecordEvidenceRequest struct {
 	StoredSubmissionID  string
 	RetiredSubmissionID string
+	AbsentSubmissionID  string
 	TaskID              string
 	SessionID           string
 	ExecutionID         string
@@ -42,6 +43,7 @@ type DeliveryRecordEvidenceRequest struct {
 type DeliveryRecordEvidence struct {
 	StoredSubmission  *journal.Submission
 	RetiredSubmission *journal.Submission
+	SubmissionAbsent  bool
 	Descriptor        journal.RecoveryDescriptor
 	ProcessTerminated *bool
 	LiveExecutionID   string
