@@ -19,4 +19,7 @@ var (
 	ErrAgentDeliveryIdentityRetiring       = errors.New("agent delivery identity is retiring")
 	ErrAgentDeliveryReconstructionConflict = errors.New("agent delivery reconstruction conflicts with current state")
 	ErrAgentDeliveryReconstructionStale    = errors.New("agent delivery reconstruction owner changed")
+
+	ErrAgentDeliveryPreIntakeSettlementConflict = errors.New("agent delivery pre-intake settlement conflicts with current state")
+	ErrAgentDeliveryPreIntakeSettlementStale    = errors.New("agent delivery pre-intake settlement owner changed")
 )

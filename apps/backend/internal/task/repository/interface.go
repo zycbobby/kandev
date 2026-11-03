@@ -49,6 +49,8 @@ var ErrAgentDeliveryEffectConflict = repoerrors.ErrAgentDeliveryEffectConflict
 var ErrAgentDeliveryEffectNotFound = repoerrors.ErrAgentDeliveryEffectNotFound
 var ErrAgentDeliveryReconstructionConflict = repoerrors.ErrAgentDeliveryReconstructionConflict
 var ErrAgentDeliveryReconstructionStale = repoerrors.ErrAgentDeliveryReconstructionStale
+var ErrAgentDeliveryPreIntakeSettlementConflict = repoerrors.ErrAgentDeliveryPreIntakeSettlementConflict
+var ErrAgentDeliveryPreIntakeSettlementStale = repoerrors.ErrAgentDeliveryPreIntakeSettlementStale
 
 // WorkspaceRepository handles workspace CRUD.
 type WorkspaceRepository interface {
@@ -745,6 +747,16 @@ type AgentDeliveryReconstructionRepository interface {
 		ctx context.Context,
 		request *models.AgentDeliveryReconstructionRequest,
 	) (*models.AgentDeliveryReconstructionResult, error)
+}
+
+// AgentDeliveryPreIntakeSettlementRepository settles a submission that is
+// provably absent from the authenticated retained journal. The settlement
+// writes the failed state, its effect, and the bound block in one transaction.
+type AgentDeliveryPreIntakeSettlementRepository interface {
+	SettlePreIntakeAgentDeliverySubmission(
+		ctx context.Context,
+		request *models.AgentDeliveryPreIntakeSettlementRequest,
+	) (*models.AgentDeliveryPreIntakeSettlementResult, error)
 }
 
 // AgentDeliveryRepository owns the backend side of the durable agentctl
