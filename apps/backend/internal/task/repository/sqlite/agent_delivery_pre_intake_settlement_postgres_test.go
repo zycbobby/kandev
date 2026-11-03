@@ -63,15 +63,19 @@ func TestPostgresSettlePreIntakeAgentDeliverySubmissionSerializesConcurrentRetri
 		err   error
 	}
 	results := make(chan result, 2)
+	started := make(chan struct{}, 2)
 	var workers sync.WaitGroup
 	for range 2 {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
+			started <- struct{}{}
 			value, callErr := repo.SettlePreIntakeAgentDeliverySubmission(ctx, request)
 			results <- result{value: value, err: callErr}
 		}()
 	}
+	<-started
+	<-started
 	deadline := time.Now().Add(5 * time.Second)
 	for db.Stats().InUse < 3 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
