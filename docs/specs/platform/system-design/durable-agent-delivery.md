@@ -557,3 +557,4 @@ Routine successful reconnects do not append duplicate conversation messages.
 - [Durable sessions across harness generations](../../../decisions/2026-09-10-durable-harness-session-boundaries.md)
 - [Generation-fenced environment ownership](../../../decisions/2026-09-04-generation-fenced-task-environment-ownership.md)
 - [Required internal persistence](../../../decisions/2026-09-05-required-internal-persistence.md)
+- [Pre-intake settlement and admission health](durable-agent-delivery-settlement.md).

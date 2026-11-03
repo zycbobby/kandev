@@ -92,6 +92,12 @@ special case in `durable_adoption.go` until it passes these same proofs.
 | Payload | Original retained bytes with matching `journal.SubmissionHash`, valid bounded envelope, and matching summary hash |
 | Turn and prompt generation | Existing message/turn, queue receipt, or correlated inbox evidence, never the newest open turn |
 | Original process | Verified historical process identity or authenticated surviving execution evidence, evaluated separately |
+| Explicit absence | Authenticated, untruncated owner descriptor proves the exact ID is missing and reports no other unresolved candidate |
+
+A submission that never entered the journal is not a reconstruction candidate.
+When retry proves exact absence with an empty-stream block binding, it settles the submission `failed` through the pre-intake settlement transaction instead of importing retained bytes.
+The same conservative rules apply: another unresolved candidate, a truncated descriptor, a lost or unreachable journal, a non-empty block stream, or an owner/generation mismatch keeps recovery blocked.
+The absence proof depends on retained submissions never being deleted; retiring only marks a record, and compaction copies every bucket.
 
 A cursor alone proves a stream association, not the selected prompt or process.
 An absent cursor is valid only when replay can start at sequence one. An expired
@@ -143,6 +149,10 @@ storage. Extend typed models and repository contracts where necessary. Any
 required column needs the normal additive migration and store conformance tests.
 
 An identical concurrent import returns the existing identity and revision.
+
+Pre-intake settlement is a separate transaction with its own `agent_delivery.pre_intake_settlement` effect type.
+It never fabricates a terminal stream, sequence, turn, or `fully_settled_at`, and pending terminal settlement never picks it up.
+The submission, effect, and bound block commit together; the session recovery revision advances once when a block resolves.
 It does not update timestamps or advance recovery merely because Retry repeats.
 A conflicting row returns a typed conflict without overwriting any field.
 An import racing deletion, archive, generation change, Stop, or successor

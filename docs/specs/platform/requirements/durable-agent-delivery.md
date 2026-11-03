@@ -2,7 +2,7 @@
 status: draft
 system: platform
 created: 2026-09-10
-updated: 2026-10-11
+updated: 2026-11-04
 owners:
   - kandev
 ---
@@ -35,7 +35,7 @@ This draft defines proposed behavior. It does not claim that the current impleme
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-001.1:** When durable delivery is active, agentctl must commit normalized events before publication and recover committed records after a process crash.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-001.2:** When storage is unavailable, corrupt, locked, or full, agentctl must refuse unsafe admissions and expose a typed error. It must not silently discard unacknowledged records.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-001.3:** When an instance stops during journal access, the operation shall finish safely or return a typed unavailable result. Other instances shall remain operational, and committed records shall remain recoverable.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-001.4:** Before usable disk capacity is exhausted, agentctl shall expose delivery pressure and preserve capacity for control and recovery records. The fixed 256 MiB stream and 2 GiB journal thresholds shall not cancel ongoing work while usable disk capacity remains. At actual storage exhaustion or persistence failure, bounded flow control and exact-owner cancellation may protect recoverable state. Status, acknowledgment, replay, and Stop shall remain available where storage permits. Persistence failure shall preserve uncertainty and shall not establish process termination.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-001.4:** Before usable disk capacity is exhausted, agentctl shall expose delivery pressure and preserve capacity for control and recovery records. The fixed 256 MiB stream and 2 GiB journal thresholds shall not cancel ongoing work while usable disk capacity remains. At actual storage exhaustion or persistence failure, bounded flow control and exact-owner cancellation may protect recoverable state. Status, acknowledgment, replay, and Stop shall remain available where storage permits. Persistence failure shall preserve uncertainty and shall not establish process termination. A single event that cannot be retained within the per-event limit shall be skipped observably and shall not permanently block prompt admission or stop durable output forwarding.
 
 ### REQ-PLATFORM-DURABLE-AGENT-DELIVERY-002: Executor storage lifetime
 
@@ -119,6 +119,8 @@ This draft defines proposed behavior. It does not claim that the current impleme
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.22:** Desktop and phone shall not show a restart-resume form, session-selection list, acknowledgment checkbox, or continuation-instruction field. Unresolved failures shall remain inspectable within the affected session, without blocking unrelated sessions or the application layout.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.23:** Recovery shall verify current ownership, process termination, native identity, and independent admission restrictions. Missing or conflicting evidence shall preserve a blocked session. Archived, completed, Office-owned, and automation-owned sessions shall not enter ordinary automatic chat recovery.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.24:** Repeated restart or interrupted recovery shall reuse durable progress without duplicate restore or prompt dispatch. Resolved recovery metadata shall not trigger another recovery attempt or stale-owner warning. One blocked candidate shall not prevent other eligible candidates from recovering.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.25:** When agentctl refuses a durable prompt before writing its journal submission, Kandev shall settle the backend submission as `failed` and shall not create an `unknown_prompt_outcome` recovery block. When the refusal occurs after the journal record may have been written, the submission shall remain uncertain and use the existing recovery path.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.26:** Retry shall settle an `interrupted_unknown` submission as `failed` only when the authenticated retained journal proves the exact submission ID is absent, the descriptor is durable and untruncated with no other unresolved candidate, and the recovery block, session, incarnation, and generation match exactly. It shall resolve only the bound block in the same transaction, shall not resend the historical prompt, and shall remain blocked for any missing or conflicting evidence.
 
 ### REQ-PLATFORM-DURABLE-AGENT-DELIVERY-007: Compatible rollout
 
@@ -135,22 +137,7 @@ This draft defines proposed behavior. It does not claim that the current impleme
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-007.5:** When a backend adopts a surviving agent, it must establish delivery capability before accepting new work. An undiscovered capability must not imply legacy support.
 
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-007.6:** Reattachment to a surviving initialized agent shall preserve its existing session without ACP initialization or prompt dispatch. Failed reattachment shall not force-stop that process through new-start cleanup.
-
-### REQ-PLATFORM-DURABLE-AGENT-DELIVERY-008: Recovery of missing delivery records
-
-**Intent:** A retained delivery record can restore a missing backend association without repeating the interrupted instruction.
-
-This requirement extends recovery for existing installations. It does not change the authority of the canonical conversation.
-
-#### Acceptance criteria
-
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.1:** When an authorized user retries recovery, Kandev shall recover a uniquely verified retained submission whose backend association is missing. Recovery shall preserve the session, conversation, workspace, and recorded uncertainty.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.2:** Recovery shall refuse conflicting owners, incomplete candidate sets, invalid payloads, and ambiguous submissions. One valid candidate shall not override another unresolved candidate. Missing process evidence shall never imply termination.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.3:** Concurrent recovery requests and retries after interruption shall create at most one association. Conflicting existing records shall remain unchanged. Other recovery causes shall remain effective.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.4:** Reconstructing an association shall not dispatch a prompt, replay tools, release queued instructions, or fabricate completion. Retained output and authoritative terminal evidence shall use normal reconciliation.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.5:** Missing associations shall produce a persistent recovery notice on desktop and phone. A rejected instruction shall remain visible with its blocked delivery status. Retry shall show progress and the remaining cause after reload.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.6:** After reconstruction, restoration shall follow AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.20 through 006.24. Verified termination, current ownership, and native identity shall permit restoration of the same conversation without prompt dispatch. New instructions shall use ordinary admission after restoration; duplicate recovery shall not dispatch them.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-008.7:** Older or unsupported peers shall retain their records and expose a specific blocked result. Reconstruction shall not create a replacement conversation or downgrade unresolved durable work to legacy delivery.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-007.7:** While the durable journal is readable but cannot admit new submissions, the capability and recovery status shall expose the blocked admission health, and Kandev shall refuse the prompt before creating a durable SQL submission or a recovery block. The blocked state shall clear after capacity recovery when the update pump is alive.
 
 ## Implementation records
 
@@ -159,6 +146,7 @@ This requirement extends recovery for existing installations. It does not change
 
 - [Delivery record recovery design](../system-design/durable-agent-record-recovery.md).
 - [Missing delivery record fix package](../../../plans/durable-agent-record-recovery/plan.md).
+- [Pre-intake settlement and admission health design](../system-design/durable-agent-delivery-settlement.md).
 
 ## Out of scope
 
