@@ -67,7 +67,17 @@ func (s *Service) retryMissingCanonicalDeliverySubmission(ctx context.Context, s
 	if !ok {
 		return blocked(recoveryStateUnavailableReason)
 	}
-	selected, reason, err := s.readReconstructionSelection(ctx, client, session, incarnationID, generation, block)
+	evidence, err := client.InspectDeliveryRecordEvidence(ctx, agentruntime.DeliveryRecordEvidenceRequest{
+		TaskID: session.TaskID, SessionID: session.ID, IncarnationID: incarnationID,
+		HarnessGeneration: uint64(generation), AbsentSubmissionID: block.DeliverySubmissionID,
+	})
+	if err != nil {
+		return blocked(deliveryRecordEvidenceReason(err))
+	}
+	if preIntakeDeliverySettlementEligible(evidence, session, incarnationID, generation, block) {
+		return s.commitPreIntakeDeliverySettlement(ctx, session, incarnationID, generation, block, evidence)
+	}
+	selected, reason, err := s.readReconstructionSelection(ctx, client, session, incarnationID, generation, block, evidence)
 	if err != nil {
 		return nil, err
 	}

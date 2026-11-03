@@ -18,14 +18,10 @@ type reconstructionSelection struct {
 	canonical  *models.AgentDeliverySubmission
 }
 
-func (s *Service) readReconstructionSelection(ctx context.Context, client deliveryRecordEvidenceClient, session *models.TaskSession, incarnationID string, generation int64, block *models.SessionRecoveryBlock) (*reconstructionSelection, string, error) {
+func (s *Service) readReconstructionSelection(ctx context.Context, client deliveryRecordEvidenceClient, session *models.TaskSession, incarnationID string, generation int64, block *models.SessionRecoveryBlock, evidence *agentruntime.DeliveryRecordEvidence) (*reconstructionSelection, string, error) {
 	blocked := func(reason string) (*reconstructionSelection, string, error) { return nil, reason, nil }
-	evidence, err := client.InspectDeliveryRecordEvidence(ctx, agentruntime.DeliveryRecordEvidenceRequest{
-		TaskID: session.TaskID, SessionID: session.ID, IncarnationID: incarnationID,
-		HarnessGeneration: uint64(generation),
-	})
-	if err != nil {
-		return blocked(deliveryRecordEvidenceReason(err))
+	if evidence == nil {
+		return blocked(recoveryStateUnavailableReason)
 	}
 	candidate, stream, reason := selectReconstructionEvidence(evidence, session, incarnationID, generation, block)
 	if reason != "" {
