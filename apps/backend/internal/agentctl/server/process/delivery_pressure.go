@@ -21,7 +21,10 @@ type DeliveryHealth struct {
 	CancellationPending bool             `json:"cancellation_pending"`
 }
 
-const deliveryStorageError = "storage_error"
+const (
+	deliveryStorageError = "storage_error"
+	deliveryHealthyState = "healthy"
+)
 
 func (m *Manager) DeliveryHealth() DeliveryHealth {
 	if j, err := m.DeliveryJournal(); err == nil {
@@ -259,7 +262,7 @@ func (m *Manager) applyDeliveryCapacityLocked(capacity journal.Capacity) {
 		// recovered store with a live update pump clears the storage error.
 		if capacity.Recovered && !m.deliveryPumpStopped && !m.deliveryHealth.CancellationPending {
 			m.deliveryBlocked = false
-			m.deliveryHealth.State = "healthy"
+			m.deliveryHealth.State = deliveryHealthyState
 		}
 		return
 	case "cancellation_failed":
@@ -267,13 +270,13 @@ func (m *Manager) applyDeliveryCapacityLocked(capacity journal.Capacity) {
 	}
 	if capacity.Recovered && !m.deliveryHealth.CancellationPending {
 		m.deliveryBlocked = false
-		m.deliveryHealth.State = "healthy"
+		m.deliveryHealth.State = deliveryHealthyState
 		return
 	}
 	if capacity.Guarded {
 		m.deliveryBlocked = true
 		switch m.deliveryHealth.State {
-		case "", "healthy", "pressure":
+		case "", deliveryHealthyState, "pressure":
 			m.deliveryHealth.State = "guarded"
 		}
 		return

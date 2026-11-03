@@ -25,13 +25,7 @@ func preIntakeDeliverySettlementEligible(
 	generation int64,
 	block *models.SessionRecoveryBlock,
 ) bool {
-	if evidence == nil || block == nil || block.ConsumerReference != agentDeliveryConsumer {
-		return false
-	}
-	if block.DeliverySubmissionID == "" || block.DeliveryStreamID != "" || block.Reason != unknownPromptOutcome {
-		return false
-	}
-	if block.SessionID != session.ID || block.IncarnationID != incarnationID || block.ExpectedGeneration != generation {
+	if evidence == nil || session == nil || !preIntakeBlockBindingMatches(block, session, incarnationID, generation) {
 		return false
 	}
 	if !evidence.SubmissionAbsent {
@@ -46,6 +40,18 @@ func preIntakeDeliverySettlementEligible(
 		return false
 	}
 	return descriptor.SubmissionCount == 0 && len(descriptor.Submissions) == 0
+}
+
+func preIntakeBlockBindingMatches(
+	block *models.SessionRecoveryBlock,
+	session *models.TaskSession,
+	incarnationID string,
+	generation int64,
+) bool {
+	return block != nil && block.ConsumerReference == agentDeliveryConsumer &&
+		block.DeliverySubmissionID != "" && block.DeliveryStreamID == "" &&
+		block.Reason == unknownPromptOutcome && block.SessionID == session.ID &&
+		block.IncarnationID == incarnationID && block.ExpectedGeneration == generation
 }
 
 func (s *Service) commitPreIntakeDeliverySettlement(
