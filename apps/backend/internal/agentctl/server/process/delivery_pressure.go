@@ -113,6 +113,30 @@ func (m *Manager) recordDeliveryStorageFailure(err error) {
 	m.logger.Error("durable delivery storage failed; process liveness unchanged", zap.Error(err))
 }
 
+func (m *Manager) setDeliveryPumpStopped(stopped bool) {
+	m.deliveryActiveMu.Lock()
+	m.deliveryPumpStopped = stopped
+	m.deliveryActiveMu.Unlock()
+}
+
+// logRejectedDeliveryEvent records one event that cannot be retained. The
+// update pump skips it instead of poisoning admission for the process.
+func (m *Manager) logRejectedDeliveryEvent(err error) {
+	m.logger.Error("skipping durable delivery event that exceeds retained limits", zap.Error(err))
+	journal.RecordEventRejected(deliveryEventRejectionReason(err))
+}
+
+func deliveryEventRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, journal.ErrEventTooLarge) && errors.Is(err, journal.ErrJournalFull):
+		return "queue_too_large"
+	case errors.Is(err, journal.ErrEventTooLarge):
+		return "event_too_large"
+	default:
+		return "unknown"
+	}
+}
+
 func (m *Manager) appendDeliveryWithRecovery(ctx context.Context, j *journal.Journal, events []journal.Event) ([]journal.Event, error) {
 	paused := false
 	defer func() {
@@ -230,7 +254,15 @@ func (m *Manager) applyDeliveryCapacityLocked(capacity journal.Capacity) {
 		return
 	}
 	switch m.deliveryHealth.State {
-	case deliveryStorageError, "cancellation_failed":
+	case deliveryStorageError:
+		// A transient persist failure must not block admission forever. Only a
+		// recovered store with a live update pump clears the storage error.
+		if capacity.Recovered && !m.deliveryPumpStopped && !m.deliveryHealth.CancellationPending {
+			m.deliveryBlocked = false
+			m.deliveryHealth.State = "healthy"
+		}
+		return
+	case "cancellation_failed":
 		return
 	}
 	if capacity.Recovered && !m.deliveryHealth.CancellationPending {

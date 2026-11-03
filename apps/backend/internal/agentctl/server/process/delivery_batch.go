@@ -74,7 +74,7 @@ func (w *deliveryEventWriter) persist(ctx context.Context, update adapter.AgentE
 		return update, err
 	}
 	if size > deliveryWriterQueueBytes {
-		return update, fmt.Errorf("%w: delivery queue item is %d bytes", journal.ErrJournalFull, size)
+		return update, fmt.Errorf("%w: %w: delivery queue item is %d bytes", journal.ErrJournalFull, journal.ErrEventTooLarge, size)
 	}
 	request := deliveryWriteRequest{update: update, size: size, result: make(chan deliveryWriteResult, 1)}
 	if err := w.reserve(ctx, size); err != nil {

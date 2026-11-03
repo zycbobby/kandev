@@ -233,6 +233,100 @@ func TestDeliveryPressureCancelsOnlyMatchingOwnerAndKeepsFailedCancelBlocked(t *
 	}
 }
 
+func TestDeliveryCapabilityReportsAdmissionBlocked(t *testing.T) {
+	m, _ := pressureTestManager(t)
+	m.recordDeliveryStorageFailure(errors.New("injected storage failure"))
+	capability := m.DeliveryCapability()
+	if !capability.Durable {
+		t.Fatal("a blocked but readable journal must remain durable")
+	}
+	if !capability.AdmissionBlocked {
+		t.Fatal("capability did not report blocked admission")
+	}
+	if capability.Reason != "delivery_admission_blocked" {
+		t.Fatalf("capability reason = %q", capability.Reason)
+	}
+}
+
+func TestDeliveryCapabilityClearsAfterCapacityRecovery(t *testing.T) {
+	m, _ := pressureTestManager(t)
+	m.recordDeliveryStorageFailure(errors.New("injected storage failure"))
+	m.deliveryActiveMu.Lock()
+	m.applyDeliveryCapacityLocked(journal.Capacity{Recovered: true})
+	m.deliveryActiveMu.Unlock()
+	capability := m.DeliveryCapability()
+	if capability.AdmissionBlocked {
+		t.Fatal("recovered capacity and a live pump must clear blocked admission")
+	}
+	if !capability.Durable {
+		t.Fatal("recovered capability lost durable delivery")
+	}
+}
+
+func TestForwardUpdatesSkipsOversizedEventWithoutBlockingAdmission(t *testing.T) {
+	ctx := context.Background()
+	m, j := pressureTestManager(t)
+	stub := newStubAdapter()
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	m.wg.Add(1)
+	go m.forwardUpdates(stub, stopCh)
+
+	stub.updatesCh <- adapter.AgentEvent{Type: adapter.EventTypeMessageChunk, Text: strings.Repeat("x", 4096)}
+	time.Sleep(50 * time.Millisecond)
+	stub.updatesCh <- adapter.AgentEvent{Type: adapter.EventTypeMessageChunk, Text: "retained output"}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		events, _, err := j.Replay(ctx, "session", 0, 10)
+		if err == nil && len(events) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("normal event was not retained after the oversized skip: events=%d err=%v", len(events), err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if m.deliveryPumpStopped {
+		t.Fatal("oversized event stopped the update pump")
+	}
+	if m.DeliveryCapability().AdmissionBlocked {
+		t.Fatal("oversized event blocked admission")
+	}
+}
+
+func TestForwardUpdatesMarksPumpStoppedOnStorageFailure(t *testing.T) {
+	m, j := pressureTestManager(t)
+	m.deliveryJournalMu.Lock()
+	m.deliveryJournal = nil
+	m.deliveryJournalErr = journal.ErrJournalClosed
+	m.deliveryJournalMu.Unlock()
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stub := newStubAdapter()
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	m.wg.Add(1)
+	go func() {
+		m.forwardUpdates(stub, stopCh)
+		close(done)
+	}()
+	stub.updatesCh <- adapter.AgentEvent{Type: adapter.EventTypeMessageChunk, Text: "cannot persist"}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("storage failure did not stop the update pump")
+	}
+	close(stopCh)
+	if !m.deliveryPumpStopped {
+		t.Fatal("storage failure did not mark the pump stopped")
+	}
+	if !m.deliveryBlocked {
+		t.Fatal("storage failure did not block admission")
+	}
+}
+
 func TestOversizedOutputFailsWithoutPoisoningJournal(t *testing.T) {
 	m, j := pressureTestManager(t)
 	_, err := m.persistDeliveryEvent(adapter.AgentEvent{Type: adapter.EventTypeMessageChunk, Text: strings.Repeat("x", 4096)})

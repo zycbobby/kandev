@@ -35,6 +35,7 @@ var (
 	ErrJournalNewerVersion  = errors.New("agent delivery journal uses a newer version")
 	ErrJournalFull          = errors.New("agent delivery journal is full")
 	ErrStreamFull           = errors.New("agent delivery stream is full")
+	ErrEventTooLarge        = errors.New("agent delivery event exceeds the retained size limit")
 	ErrStreamNotFound       = errors.New("agent delivery stream not found")
 	ErrCursorExpired        = errors.New("agent delivery cursor expired")
 	ErrSequenceConflict     = errors.New("agent delivery sequence conflict")
@@ -576,7 +577,7 @@ func prepareAppendEvents(events []Event, maxEventBytes int64) error {
 			return fmt.Errorf("event stream, session, and type are required")
 		}
 		if len(event.Payload) > int(maxEventBytes) {
-			return fmt.Errorf("%w: %d bytes", ErrStreamFull, len(event.Payload))
+			return fmt.Errorf("%w: %w: %d bytes", ErrStreamFull, ErrEventTooLarge, len(event.Payload))
 		}
 		if event.CreatedAt.IsZero() {
 			event.CreatedAt = time.Now().UTC()

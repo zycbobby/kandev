@@ -62,10 +62,11 @@ type InitializeResponse struct {
 // DurableDeliveryInfo is separate from ACP capabilities. It describes the
 // authenticated agentctl-to-backend delivery journal only.
 type DurableDeliveryInfo struct {
-	Version    uint32 `json:"version"`
-	Durable    bool   `json:"durable"`
-	Unresolved bool   `json:"unresolved,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Version          uint32 `json:"version"`
+	Durable          bool   `json:"durable"`
+	Unresolved       bool   `json:"unresolved,omitempty"`
+	AdmissionBlocked bool   `json:"admission_blocked,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 }
 
 // NewSessionRequest is a request to create a new ACP session
@@ -844,16 +845,21 @@ func (s *Server) handleWSInitialize(ctx context.Context, msg *ws.Message) *ws.Me
 	}
 
 	resp, _ := ws.NewResponse(msg.ID, msg.Action, InitializeResponse{
-		Success:   true,
-		AgentInfo: agentInfoResp,
-		DurableDelivery: &DurableDeliveryInfo{
-			Version:    deliveryCapability.Version,
-			Durable:    deliveryCapability.Durable,
-			Unresolved: deliveryCapability.Unresolved,
-			Reason:     deliveryCapability.Reason,
-		},
+		Success:         true,
+		AgentInfo:       agentInfoResp,
+		DurableDelivery: durableDeliveryInfoFromCapability(deliveryCapability),
 	})
 	return resp
+}
+
+func durableDeliveryInfoFromCapability(capability journal.StorageCapability) *DurableDeliveryInfo {
+	return &DurableDeliveryInfo{
+		Version:          capability.Version,
+		Durable:          capability.Durable,
+		Unresolved:       capability.Unresolved,
+		AdmissionBlocked: capability.AdmissionBlocked,
+		Reason:           capability.Reason,
+	}
 }
 
 // injectKandevMcpServers prepends the local kandev MCP server to the list of MCP servers.

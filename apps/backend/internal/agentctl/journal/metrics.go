@@ -13,6 +13,8 @@ var (
 	deliverySequenceErrorsTotal       = expvar.NewMap("agent_delivery_sequence_errors_total")
 	deliveryUncertainSubmissionsTotal = expvar.NewMap("agent_delivery_uncertain_submissions_total")
 	deliveryJournalErrorsTotal        = expvar.NewMap("agent_delivery_journal_errors_total")
+	deliveryAdmissionRejectedTotal    = expvar.NewMap("agent_delivery_admission_rejected_total")
+	deliveryEventRejectedTotal        = expvar.NewMap("agent_delivery_event_rejected_total")
 	deliveryJournalBytes              = expvar.NewInt("agent_delivery_journal_bytes")
 	deliveryUnacknowledgedBytes       = expvar.NewInt("agent_delivery_unacknowledged_bytes")
 )
@@ -36,6 +38,10 @@ var boundedDeliveryLabels = map[string]struct{}{
 	"journal_full":          {},
 	"stream_full":           {},
 	"storage_unavailable":   {},
+	"storage_pressure":      {},
+	"storage_error":         {},
+	"event_too_large":       {},
+	"queue_too_large":       {},
 	"unknown":               {},
 }
 
@@ -63,6 +69,16 @@ func RecordUncertainSubmission(cause string) {
 
 func RecordJournalError(reason string) {
 	deliveryJournalErrorsTotal.Add(boundedDeliveryLabel(reason), 1)
+}
+
+// RecordAdmissionRejected counts prompts refused before journal intake.
+func RecordAdmissionRejected(reason string) {
+	deliveryAdmissionRejectedTotal.Add(boundedDeliveryLabel(reason), 1)
+}
+
+// RecordEventRejected counts durable events intentionally skipped by the pump.
+func RecordEventRejected(reason string) {
+	deliveryEventRejectedTotal.Add(boundedDeliveryLabel(reason), 1)
 }
 
 func SetJournalGauges(bytes, unacknowledgedBytes int64) {

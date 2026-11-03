@@ -48,10 +48,11 @@ func IsDeliverySubmissionNotFound(err error) bool {
 // agentctl. A missing value means the peer predates the durable-delivery
 // response field and must be treated as a legacy peer.
 type DurableDeliveryInfo struct {
-	Version    uint32 `json:"version"`
-	Durable    bool   `json:"durable"`
-	Unresolved bool   `json:"unresolved,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Version          uint32 `json:"version"`
+	Durable          bool   `json:"durable"`
+	Unresolved       bool   `json:"unresolved,omitempty"`
+	AdmissionBlocked bool   `json:"admission_blocked,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 }
 
 func (c *Client) setDurableDelivery(info *DurableDeliveryInfo) {
@@ -94,10 +95,11 @@ func (c *Client) DurableDeliveryCapability() (journal.StorageCapability, bool) {
 		return c.deliveryStatus.StorageCapability, true
 	}
 	return journal.StorageCapability{
-		Version:    c.durableDelivery.Version,
-		Durable:    c.durableDelivery.Durable,
-		Unresolved: c.durableDelivery.Unresolved,
-		Reason:     c.durableDelivery.Reason,
+		Version:          c.durableDelivery.Version,
+		Durable:          c.durableDelivery.Durable,
+		Unresolved:       c.durableDelivery.Unresolved,
+		AdmissionBlocked: c.durableDelivery.AdmissionBlocked,
+		Reason:           c.durableDelivery.Reason,
 	}, true
 }
 

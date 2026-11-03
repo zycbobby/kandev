@@ -135,6 +135,13 @@ func (s *Service) deliveryRecoveryError(
 	return recoveryErr
 }
 
+const deliveryAdmissionBlockedReason = "delivery_admission_blocked"
+
+// errDeliveryAdmissionBlocked is a transient prompt refusal: the peer's
+// journal is readable but cannot admit new work. It must not create a durable
+// submission or a recovery block.
+var errDeliveryAdmissionBlocked = errors.New("durable delivery admission is blocked")
+
 func (s *Service) deliveryCapabilityForExecution(
 	ctx context.Context,
 	executionID string,
@@ -152,6 +159,12 @@ func (s *Service) deliveryCapabilityForExecution(
 			Mode:   agentruntime.DurableDeliveryLegacy,
 			Reason: "legacy_peer",
 		}, false
+	}
+	if capability.AdmissionBlocked {
+		return agentruntime.DurableDeliveryDecision{
+			Mode:   agentruntime.DurableDeliveryBlocked,
+			Reason: deliveryAdmissionBlockedReason,
+		}, true
 	}
 	peerVersion := capability.Version
 	if journal.SupportsDeliveryVersion(peerVersion) && !capability.Durable && capability.Reason == durableDeliveryStorageNotDurable {
@@ -283,6 +296,9 @@ func (s *Service) resolvePendingDeliveryProtocol(
 		}
 		return messagequeue.DeliveryProtocolV1, nil
 	default:
+		if decision.Reason == deliveryAdmissionBlockedReason {
+			return "", fmt.Errorf("%w: %s", errDeliveryAdmissionBlocked, decision.Reason)
+		}
 		return "", s.deliveryRecoveryError(ctx, sessionID, decision.Reason)
 	}
 }
@@ -296,6 +312,9 @@ func (s *Service) validateV1DeliveryProtocol(
 		reason := decision.Reason
 		if reason == "" {
 			reason = "incompatible_delivery_version"
+		}
+		if reason == deliveryAdmissionBlockedReason {
+			return "", fmt.Errorf("%w: %s", errDeliveryAdmissionBlocked, reason)
 		}
 		return "", s.deliveryRecoveryError(ctx, sessionID, reason)
 	}

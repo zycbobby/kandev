@@ -134,6 +134,7 @@ type Manager struct {
 	deliveryHealth              DeliveryHealth
 	deliveryPausedWriters       int
 	deliveryBlocked             bool
+	deliveryPumpStopped         bool
 	deliveryPressureCancelledID string
 	deliveryPressureTerminalID  string
 	deliveryCancellationFailed  bool
@@ -553,6 +554,15 @@ func (m *Manager) DeliveryCapability() journal.StorageCapability {
 	if err != nil {
 		return journal.StorageCapability{Version: journal.CurrentProtocolVersion, Reason: "storage_unavailable"}
 	}
+	m.deliveryActiveMu.RLock()
+	admissionBlocked := m.deliveryBlocked || m.deliveryPumpStopped
+	m.deliveryActiveMu.RUnlock()
+	if admissionBlocked {
+		return journal.StorageCapability{
+			Version: journal.CurrentProtocolVersion, Durable: true, Unresolved: unresolved,
+			AdmissionBlocked: true, Reason: "delivery_admission_blocked",
+		}
+	}
 	return journal.StorageCapability{Version: journal.CurrentProtocolVersion, Durable: true, Unresolved: unresolved}
 }
 
@@ -676,21 +686,28 @@ func (m *Manager) DeliveryHarnessGeneration() uint64 {
 func (m *Manager) AdmitDeliverySubmission(ctx context.Context, submission journal.Submission) (journal.Submission, error) {
 	deliveryJournal, err := m.DeliveryJournal()
 	if err != nil {
+		journal.RecordAdmissionRejected("storage_error")
 		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, err)
 	}
 	if err := m.refreshDeliveryPressure(ctx, deliveryJournal, ""); err != nil {
+		journal.RecordAdmissionRejected("storage_error")
 		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, err)
 	}
 	m.deliveryActiveMu.RLock()
 	blocked := m.deliveryBlocked
 	m.deliveryActiveMu.RUnlock()
 	if blocked {
+		journal.RecordAdmissionRejected("storage_pressure")
 		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, errDeliveryPressure)
 	}
 	if submission.StreamID == "" {
 		submission.StreamID = m.DeliveryStreamID()
 	}
-	return (&SubmissionDelivery{Journal: deliveryJournal}).Admit(ctx, submission)
+	admitted, err := (&SubmissionDelivery{Journal: deliveryJournal}).Admit(ctx, submission)
+	if err != nil && errors.Is(err, ErrDeliveryAdmissionRejected) {
+		journal.RecordAdmissionRejected(DeliveryAdmissionRejectionReason(err))
+	}
+	return admitted, err
 }
 
 // DispatchDeliverySubmission reconciles the immutable submission before it
@@ -2495,6 +2512,7 @@ func (m *Manager) createAdapter() error {
 func (m *Manager) forwardUpdates(agentAdapter adapter.AgentAdapter, stopCh <-chan struct{}) {
 	defer m.wg.Done()
 	defer m.closeDeliveryEventWriter()
+	m.setDeliveryPumpStopped(false)
 
 	updatesCh := agentAdapter.Updates()
 	for {
@@ -2506,6 +2524,11 @@ func (m *Manager) forwardUpdates(agentAdapter adapter.AgentAdapter, stopCh <-cha
 			update.DeliverySubmissionID = m.deliverySubmissionIDForEvent(update)
 			persisted, err := m.persistDeliveryEvent(update)
 			if err != nil {
+				if errors.Is(err, journal.ErrEventTooLarge) {
+					m.logRejectedDeliveryEvent(err)
+					continue
+				}
+				m.setDeliveryPumpStopped(true)
 				m.logger.Error("failed to commit durable delivery event", zap.Error(err))
 				// A configured journal is the commit-before-publish boundary. Stop
 				// forwarding when it cannot commit so the backend never observes an
@@ -2545,6 +2568,11 @@ func (m *Manager) drainDeliveryUpdates(updates <-chan adapter.AgentEvent) {
 			update.DeliverySubmissionID = m.deliverySubmissionIDForEvent(update)
 			persisted, err := m.persistDeliveryEvent(update)
 			if err != nil {
+				if errors.Is(err, journal.ErrEventTooLarge) {
+					m.logRejectedDeliveryEvent(err)
+					continue
+				}
+				m.setDeliveryPumpStopped(true)
 				m.recordDeliveryStorageFailure(err)
 				return
 			}

@@ -18,11 +18,12 @@ const (
 // storage. A missing or invalid root is not silently downgraded to legacy
 // delivery when the caller requested durable delivery.
 type StorageCapability struct {
-	Version    uint32 `json:"version"`
-	Durable    bool   `json:"durable"`
-	Unresolved bool   `json:"unresolved,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Version          uint32 `json:"version"`
+	Durable          bool   `json:"durable"`
+	Unresolved       bool   `json:"unresolved,omitempty"`
+	AdmissionBlocked bool   `json:"admission_blocked,omitempty"`
+	Path             string `json:"path,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 }
 
 // Location identifies the stable owner-scoped journal path. The path is

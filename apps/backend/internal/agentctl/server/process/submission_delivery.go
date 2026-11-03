@@ -35,6 +35,8 @@ func DeliveryAdmissionRejectionReason(err error) string {
 	switch {
 	case errors.Is(err, errDeliveryPressure):
 		return "storage_pressure"
+	case errors.Is(err, journal.ErrEventTooLarge):
+		return "event_too_large"
 	case errors.Is(err, journal.ErrJournalFull), errors.Is(err, journal.ErrStreamFull):
 		return "journal_full"
 	case errors.Is(err, journal.ErrJournalCorrupt):

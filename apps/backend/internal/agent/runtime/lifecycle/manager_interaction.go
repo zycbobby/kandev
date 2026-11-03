@@ -1899,7 +1899,8 @@ func (m *Manager) DurableDeliveryCapabilityForExecution(
 		capability := status.StorageCapability
 		return DurableDeliveryCapability{
 			Version: capability.Version, Durable: capability.Durable,
-			Unresolved: capability.Unresolved, Reason: capability.Reason,
+			Unresolved: capability.Unresolved, AdmissionBlocked: capability.AdmissionBlocked,
+			Reason: capability.Reason,
 		}, true
 	}
 	capability, advertised := client.DurableDeliveryCapability()
@@ -1914,7 +1915,8 @@ func (m *Manager) DurableDeliveryCapabilityForExecution(
 	}
 	return DurableDeliveryCapability{
 		Version: capability.Version, Durable: capability.Durable,
-		Unresolved: capability.Unresolved, Reason: capability.Reason,
+		Unresolved: capability.Unresolved, AdmissionBlocked: capability.AdmissionBlocked,
+		Reason: capability.Reason,
 	}, true
 }
 

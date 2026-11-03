@@ -19,10 +19,11 @@ type DurableDeliveryDecision struct {
 // DurableDeliveryCapability is the negotiated transport capability exposed
 // to admission owners that must choose a queue protocol before dispatch.
 type DurableDeliveryCapability struct {
-	Version    uint32
-	Durable    bool
-	Unresolved bool
-	Reason     string
+	Version          uint32
+	Durable          bool
+	Unresolved       bool
+	AdmissionBlocked bool
+	Reason           string
 }
 
 // NegotiateDurableDelivery activates v1 only when both sides advertise the

@@ -157,6 +157,28 @@ func TestDeliveryClientAcceptsSubmissionAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestDeliveryClientCapabilityPropagatesAdmissionBlocked(t *testing.T) {
+	c := NewClient("127.0.0.1", 1, newTestLogger())
+	c.setDurableDelivery(&DurableDeliveryInfo{
+		Version: journal.CurrentVersion, Durable: true, AdmissionBlocked: true,
+		Reason: "delivery_admission_blocked",
+	})
+	capability, advertised := c.DurableDeliveryCapability()
+	if !advertised || !capability.Durable || !capability.AdmissionBlocked {
+		t.Fatalf("capability = %#v, advertised = %t", capability, advertised)
+	}
+	c.setDurableDelivery(nil)
+	c.setDeliveryStatus(&DeliveryStatus{
+		StorageCapability: journal.StorageCapability{
+			Version: journal.CurrentVersion, Durable: true, AdmissionBlocked: true,
+		},
+	})
+	capability, advertised = c.DurableDeliveryCapability()
+	if !advertised || !capability.AdmissionBlocked {
+		t.Fatalf("status capability = %#v, advertised = %t", capability, advertised)
+	}
+}
+
 func TestIsDeliverySubmissionNotFound(t *testing.T) {
 	notFound := &DeliveryHTTPError{StatusCode: http.StatusNotFound, Body: `{"code":"SUBMISSION_NOT_FOUND"}`}
 	if !IsDeliverySubmissionNotFound(notFound) {
