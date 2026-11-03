@@ -703,6 +703,48 @@ func TestPrompt_Success(t *testing.T) {
 	}
 }
 
+func TestPromptClientMapsRejectedKind(t *testing.T) {
+	c, ts := newTestClientWithStream(t, func(msg ws.Message) *ws.Message {
+		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, "prompt submission was not admitted", map[string]interface{}{
+			"kind": "durable_delivery_admission_rejected", "reason": "journal_full",
+		})
+		return resp
+	})
+	defer ts.Close()
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := c.Prompt(ctx, "hello agent", nil, 1)
+	if !errors.Is(err, ErrDurableDeliveryAdmissionRejected) {
+		t.Fatalf("prompt error = %v, want ErrDurableDeliveryAdmissionRejected", err)
+	}
+	if !strings.Contains(err.Error(), "journal_full") {
+		t.Fatalf("prompt error lost the bounded reason: %v", err)
+	}
+}
+
+func TestPromptClientKeepsUncertainKind(t *testing.T) {
+	c, ts := newTestClientWithStream(t, func(msg ws.Message) *ws.Message {
+		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, "prompt outcome is uncertain", map[string]interface{}{
+			"kind": "durable_delivery_admission_uncertain",
+		})
+		return resp
+	})
+	defer ts.Close()
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := c.Prompt(ctx, "hello agent", nil, 1)
+	if err == nil {
+		t.Fatal("uncertain prompt admitted no error")
+	}
+	if errors.Is(err, ErrDurableDeliveryAdmissionRejected) {
+		t.Fatalf("uncertain prompt was classified as a pre-write rejection: %v", err)
+	}
+}
+
 func TestPrompt_NoActiveSession(t *testing.T) {
 	c, ts := newTestClientWithStream(t, func(msg ws.Message) *ws.Message {
 		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeBadRequest, "no active session - call new_session first", nil)

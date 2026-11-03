@@ -7574,7 +7574,15 @@ func (s *Service) finishPromptExecutorDispatch(
 	}
 	if execErr != nil {
 		execErr = s.persistRuntimeReplacementRecoveryBlock(ctx, sessionID, delivery, execErr)
-		if delivery != nil {
+		settled := false
+		if delivery != nil && !dispatchAccepted && errors.Is(execErr, agentruntime.ErrDurableDeliveryAdmissionRejected) {
+			var settleErr error
+			settled, settleErr = s.settleRejectedPreIntakeDelivery(
+				context.WithoutCancel(ctx), taskID, sessionID, delivery,
+			)
+			execErr = errors.Join(execErr, settleErr)
+		}
+		if delivery != nil && !settled {
 			unknownErr := delivery.markInterrupted(
 				context.WithoutCancel(ctx), "prompt_dispatch_failed",
 			)

@@ -162,3 +162,33 @@ func (s *Service) settlePreIntakeDelivery(
 	}
 	return result, nil
 }
+
+// settleRejectedPreIntakeDelivery settles a submission that agentctl
+// definitively refused before journal intake. A repository failure falls back
+// to the existing uncertain recovery path, which records why.
+func (s *Service) settleRejectedPreIntakeDelivery(
+	ctx context.Context,
+	taskID, sessionID string,
+	delivery *agentDeliverySubmissionRuntime,
+) (bool, error) {
+	if delivery == nil || delivery.id == "" {
+		return false, nil
+	}
+	session, err := s.loadDeliveryRetrySession(ctx, taskID, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if _, err = s.settlePreIntakeDelivery(ctx, session, delivery.id,
+		models.DeliverySubmissionDispatching, "dispatching", "", false); err != nil {
+		if errors.Is(err, repository.ErrAgentDeliveryPreIntakeSettlementConflict) ||
+			errors.Is(err, repository.ErrAgentDeliveryPreIntakeSettlementStale) ||
+			errors.Is(err, repository.ErrAgentDeliverySubmissionNotFound) ||
+			errors.Is(err, errPreIntakeSettlementUnavailable) {
+			return false, nil
+		}
+		return false, err
+	}
+	delivery.completed = true
+	s.publishAgentDeliveryRecoveryState(ctx, sessionID)
+	return true, nil
+}

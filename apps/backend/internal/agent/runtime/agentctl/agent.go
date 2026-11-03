@@ -20,6 +20,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrDurableDeliveryAdmissionRejected means agentctl refused the prompt before
+// writing its durable submission, so the backend may settle the SQL row.
+var ErrDurableDeliveryAdmissionRejected = errors.New("durable delivery admission was rejected before journal intake")
+
 // Re-export stream types for convenience.
 type (
 	AgentEvent                = streams.AgentEvent
@@ -503,6 +507,10 @@ func (c *Client) prompt(
 		var errPayload ws.ErrorPayload
 		if err := resp.ParsePayload(&errPayload); err != nil {
 			return fmt.Errorf("prompt failed: unable to parse error")
+		}
+		if kind, _ := errPayload.Details["kind"].(string); kind == "durable_delivery_admission_rejected" {
+			reason, _ := errPayload.Details["reason"].(string)
+			return fmt.Errorf("%w: %s", ErrDurableDeliveryAdmissionRejected, reason)
 		}
 		return fmt.Errorf("prompt failed: %s", errPayload.Message)
 	}

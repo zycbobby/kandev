@@ -676,16 +676,16 @@ func (m *Manager) DeliveryHarnessGeneration() uint64 {
 func (m *Manager) AdmitDeliverySubmission(ctx context.Context, submission journal.Submission) (journal.Submission, error) {
 	deliveryJournal, err := m.DeliveryJournal()
 	if err != nil {
-		return journal.Submission{}, err
+		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, err)
 	}
 	if err := m.refreshDeliveryPressure(ctx, deliveryJournal, ""); err != nil {
-		return journal.Submission{}, err
+		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, err)
 	}
 	m.deliveryActiveMu.RLock()
 	blocked := m.deliveryBlocked
 	m.deliveryActiveMu.RUnlock()
 	if blocked {
-		return journal.Submission{}, errDeliveryPressure
+		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, errDeliveryPressure)
 	}
 	if submission.StreamID == "" {
 		submission.StreamID = m.DeliveryStreamID()

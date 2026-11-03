@@ -1251,8 +1251,7 @@ func (s *Server) admitDurablePrompt(
 		Payload:           payload,
 	})
 	if err != nil {
-		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, "prompt submission could not be admitted", nil)
-		return "", resp
+		return "", durableAdmissionErrorResponse(msg, submissionID, err)
 	}
 	s.procMgr.TrackDeliverySubmission(submission.ID, req.PromptGeneration)
 	if resp := durableSubmissionResponse(msg, submission); resp != nil {
@@ -1261,10 +1260,27 @@ func (s *Server) admitDurablePrompt(
 	return submission.ID, nil
 }
 
+func durableAdmissionErrorResponse(msg *ws.Message, submissionID string, err error) *ws.Message {
+	details := map[string]interface{}{"reason": process.DeliveryAdmissionRejectionReason(err)}
+	switch {
+	case errors.Is(err, process.ErrDeliveryAdmissionUncertain):
+		details["kind"] = "durable_delivery_admission_uncertain"
+		details["submission_id"] = submissionID
+	case errors.Is(err, process.ErrDeliveryAdmissionRejected):
+		details["kind"] = "durable_delivery_admission_rejected"
+	default:
+		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, "prompt submission could not be admitted", nil)
+		return resp
+	}
+	resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, "prompt submission was not admitted", details)
+	return resp
+}
+
 func durableSubmissionResponse(msg *ws.Message, submission journal.Submission) *ws.Message {
 	switch submission.State {
 	case journal.SubmissionDispatching, journal.SubmissionInterruptedUnknown:
 		resp, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeConflict, "prompt outcome is uncertain; reconcile before retrying", map[string]interface{}{
+			"kind":          "durable_delivery_admission_uncertain",
 			"submission_id": submission.ID,
 			"state":         submission.State,
 		})

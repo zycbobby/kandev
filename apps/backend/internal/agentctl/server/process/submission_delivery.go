@@ -11,7 +11,40 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/journal"
 )
 
-var ErrSubmissionUncertain = errors.New("agent delivery submission outcome is uncertain")
+var (
+	ErrSubmissionUncertain = errors.New("agent delivery submission outcome is uncertain")
+	// ErrDeliveryAdmissionRejected means the submission was definitively not
+	// written to the journal, so the backend may settle it without recovery.
+	ErrDeliveryAdmissionRejected = errors.New("durable delivery admission was rejected before journal intake")
+	// ErrDeliveryAdmissionUncertain means the submission may already be in the
+	// journal. The backend must keep the existing recovery path.
+	ErrDeliveryAdmissionUncertain = errors.New("durable delivery admission outcome is uncertain after journal intake")
+)
+
+// submissionJournal is the narrow durable store used by admission. Keeping it
+// small lets tests force pre-write and post-write failures deterministically.
+type submissionJournal interface {
+	PutSubmission(context.Context, journal.Submission) (journal.Submission, error)
+	TransitionSubmission(context.Context, string, journal.SubmissionState, time.Time) (journal.Submission, error)
+	GetSubmission(context.Context, string) (journal.Submission, error)
+}
+
+// DeliveryAdmissionRejectionReason maps a rejected admission to the bounded
+// diagnostic reason set. It never carries storage paths or payload data.
+func DeliveryAdmissionRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, errDeliveryPressure):
+		return "storage_pressure"
+	case errors.Is(err, journal.ErrJournalFull), errors.Is(err, journal.ErrStreamFull):
+		return "journal_full"
+	case errors.Is(err, journal.ErrJournalCorrupt):
+		return "journal_corrupt"
+	case errors.Is(err, journal.ErrOwnerMismatch):
+		return "owner_mismatch"
+	default:
+		return "unknown"
+	}
+}
 
 type deterministicPromptFailure interface {
 	DeterministicPromptFailure() bool
@@ -34,7 +67,7 @@ func isDeterministicProviderFailure(err error) bool {
 // record. It is deliberately independent of the ACP prompt call so a caller
 // can reconcile durable state before deciding whether a harness call is safe.
 type SubmissionDelivery struct {
-	Journal  *journal.Journal
+	Journal  submissionJournal
 	Now      func() time.Time
 	Stopping *atomic.Bool
 }
@@ -48,12 +81,12 @@ func (d *SubmissionDelivery) Admit(ctx context.Context, submission journal.Submi
 	}
 	stored, err := d.Journal.PutSubmission(ctx, submission)
 	if err != nil {
-		return journal.Submission{}, err
+		return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionRejected, err)
 	}
 	if stored.State == journal.SubmissionPrepared {
 		stored, err = d.Journal.TransitionSubmission(ctx, stored.ID, journal.SubmissionAccepted, d.now())
 		if err != nil {
-			return journal.Submission{}, err
+			return journal.Submission{}, fmt.Errorf("%w: %w", ErrDeliveryAdmissionUncertain, err)
 		}
 	}
 	journal.RecordSubmission(string(stored.State))
