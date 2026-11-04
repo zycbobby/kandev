@@ -241,6 +241,11 @@ func (s *Service) retryKnownSessionDelivery(ctx context.Context, session *models
 		return sessionDeliveryRecoveryResponse(session.TaskID, session.ID, SessionDeliveryRecoveryBlocked,
 			"delivery_recovery_block_missing", recovery.Revision, nil), nil
 	}
+	if !terminalDeliverySubmission(submission.State) {
+		if response, handled, err := s.retryAbandonedJournalDelivery(ctx, session, block, recovery, submission); handled || err != nil {
+			return response, err
+		}
+	}
 	return s.retryVerifiedSessionDelivery(ctx, session, recovery, submission)
 }
 

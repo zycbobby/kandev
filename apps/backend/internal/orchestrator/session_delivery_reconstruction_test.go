@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -19,6 +20,8 @@ type retainedJournalRecoveryManager struct {
 	inspectCalls         int
 	selectedPayloadReads int
 	recoveryCalls        int
+	retirementCalls      int
+	retirementErr        error
 	controlIdentity      *lifecycle.AgentDeliveryRecoveryIdentity
 	terminated           bool
 }
@@ -36,7 +39,79 @@ func (m *retainedJournalRecoveryManager) InspectDeliveryRecordEvidence(
 	if err != nil {
 		return nil, err
 	}
-	return &lifecycle.DeliveryRecordEvidence{Descriptor: retained.Descriptor, ControlIdentity: m.controlIdentity, RetiredSubmission: retained.RetiredSubmission, StoredSubmission: retained.StoredSubmission, SubmissionAbsent: retained.SubmissionAbsent}, nil
+	evidence := &lifecycle.DeliveryRecordEvidence{Descriptor: retained.Descriptor, ControlIdentity: m.controlIdentity, RetiredSubmission: retained.RetiredSubmission, StoredSubmission: retained.StoredSubmission, SubmissionAbsent: retained.SubmissionAbsent}
+	if request.OriginalRuntime != nil {
+		terminated := m.terminated
+		evidence.ProcessTerminated = &terminated
+	}
+	if retained.Descriptor.SubmissionsTruncated {
+		return evidence, errors.Join(lifecycle.ErrDeliveryRecordEvidenceTruncated, lifecycle.ErrDeliveryRecoveryBlocked)
+	}
+	return evidence, nil
+}
+
+func (m *retainedJournalRecoveryManager) RetireDeliveryRecordSubmissions(
+	ctx context.Context,
+	request lifecycle.DeliveryRecordRetirementRequest,
+) (*lifecycle.DeliveryRecordRetirementResult, error) {
+	m.retirementCalls++
+	if m.retirementErr != nil {
+		return nil, m.retirementErr
+	}
+	if !m.terminated || request.OriginalRuntime.Validate() != nil {
+		return nil, errors.Join(lifecycle.ErrDeliveryOwnerMismatch, lifecycle.ErrDeliveryRecoveryBlocked)
+	}
+	store, err := journal.Open(journal.Config{Path: journal.CheckStorage(m.root, request.SessionID).Path})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+	descriptor, err := store.RecoveryDescriptor(ctx, request.SessionID, request.IncarnationID, request.HarnessGeneration, "")
+	if err != nil {
+		return nil, err
+	}
+	if descriptor.SubmissionsTruncated {
+		return nil, errors.Join(lifecycle.ErrDeliveryRecordEvidenceTruncated, lifecycle.ErrDeliveryRecoveryBlocked)
+	}
+	inventory := make(map[string]journal.SubmissionSummary, len(descriptor.Submissions))
+	for _, summary := range descriptor.Submissions {
+		inventory[summary.ID] = summary
+	}
+	if len(inventory) != len(request.Submissions) {
+		return nil, errors.Join(lifecycle.ErrDeliveryRecordEvidenceConflict, lifecycle.ErrDeliveryRecoveryBlocked)
+	}
+	for _, target := range request.Submissions {
+		summary, found := inventory[target.ID]
+		if !found || summary.StreamID != target.StreamID || summary.Hash != target.Hash ||
+			summary.HarnessGeneration != target.HarnessGeneration || summary.State != target.State ||
+			summary.State != journal.SubmissionInterruptedUnknown ||
+			summary.TerminalEventRetained || summary.TerminalSequence != 0 {
+			return nil, errors.Join(lifecycle.ErrDeliveryRecordEvidenceConflict, lifecycle.ErrDeliveryRecoveryBlocked)
+		}
+		delete(inventory, target.ID)
+	}
+	if len(inventory) != 0 {
+		return nil, errors.Join(lifecycle.ErrDeliveryRecordEvidenceConflict, lifecycle.ErrDeliveryRecoveryBlocked)
+	}
+	retired := make([]journal.Submission, 0, len(request.Submissions))
+	for _, target := range request.Submissions {
+		submission, retireErr := store.RetireSubmission(ctx, target.ID, request.HarnessGeneration)
+		if retireErr != nil {
+			return nil, retireErr
+		}
+		submission.Payload = nil
+		retired = append(retired, submission)
+	}
+	after, err := store.RecoveryDescriptor(ctx, request.SessionID, request.IncarnationID, request.HarnessGeneration, "")
+	if err != nil {
+		return nil, err
+	}
+	if after.Unresolved || after.SubmissionCount != 0 || len(after.Submissions) != 0 {
+		return nil, errors.Join(lifecycle.ErrDeliveryRecordEvidenceConflict, lifecycle.ErrDeliveryRecoveryBlocked)
+	}
+	return &lifecycle.DeliveryRecordRetirementResult{
+		Descriptor: after, Retired: retired, ProcessTerminated: true,
+	}, nil
 }
 
 func (m *retainedJournalRecoveryManager) ReadDeliveryRecordSubmission(
