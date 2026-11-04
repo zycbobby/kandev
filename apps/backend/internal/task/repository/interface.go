@@ -772,6 +772,17 @@ type AgentDeliveryAbandonedSettlementRepository interface {
 	) (*models.AgentDeliveryAbandonedSettlementResult, error)
 }
 
+// AgentDeliveryNeverStartedSettlementRepository settles a submission whose
+// prompt generation produced zero turn events with the historical owner proven
+// terminated. The settlement writes the failed state, its effect, and the
+// blocks bound to that exact submission in one transaction.
+type AgentDeliveryNeverStartedSettlementRepository interface {
+	SettleNeverStartedAgentDeliverySubmission(
+		ctx context.Context,
+		request *models.AgentDeliveryNeverStartedSettlementRequest,
+	) (*models.AgentDeliveryNeverStartedSettlementResult, error)
+}
+
 // AgentDeliveryRepository owns the backend side of the durable agentctl
 // protocol. Inbox receipt and projection watermarks are deliberately separate.
 type AgentDeliveryRepository interface {

@@ -25,4 +25,7 @@ var (
 
 	ErrAgentDeliveryAbandonedSettlementConflict = errors.New("agent delivery abandoned settlement conflicts with current state")
 	ErrAgentDeliveryAbandonedSettlementStale    = errors.New("agent delivery abandoned settlement owner changed")
+
+	ErrAgentDeliveryNeverStartedSettlementConflict = errors.New("agent delivery never-started settlement conflicts with current state")
+	ErrAgentDeliveryNeverStartedSettlementStale    = errors.New("agent delivery never-started settlement owner changed")
 )

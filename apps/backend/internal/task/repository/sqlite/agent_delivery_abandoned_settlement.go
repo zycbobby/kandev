@@ -289,14 +289,25 @@ func (r *Repository) abandonedSettlementEffectPresentTx(
 	if err != nil {
 		return false, err
 	}
-	if effect.EffectType != models.DeliveryAbandonedEffectType || effect.StreamID != "" ||
-		effect.Sequence != 0 || effect.State != models.DeliveryEffectCompleted ||
-		effect.SessionID != request.SessionID || effect.IncarnationID != request.IncarnationID ||
-		effect.HarnessGeneration != request.HarnessGeneration || effect.SubmissionID != request.SubmissionID ||
-		effect.Outcome != string(models.DeliverySubmissionFailed) {
+	if !abandonedSettlementEffectMatchesRequest(&effect, request) {
 		return false, repoerrors.ErrAgentDeliveryAbandonedSettlementConflict
 	}
 	return true, nil
+}
+
+// abandonedSettlementEffectMatchesRequest verifies a replayed settlement effect
+// binds the exact submission identity with no stream or sequence claim.
+func abandonedSettlementEffectMatchesRequest(
+	effect *models.AgentDeliveryEffect,
+	request *models.AgentDeliveryAbandonedSettlementRequest,
+) bool {
+	if effect.EffectType != models.DeliveryAbandonedEffectType || effect.StreamID != "" ||
+		effect.Sequence != 0 || effect.State != models.DeliveryEffectCompleted {
+		return false
+	}
+	return effect.SessionID == request.SessionID && effect.IncarnationID == request.IncarnationID &&
+		effect.HarnessGeneration == request.HarnessGeneration && effect.SubmissionID == request.SubmissionID &&
+		effect.Outcome == string(models.DeliverySubmissionFailed)
 }
 
 func (r *Repository) resolveAbandonedDeliveryBlocksTx(
