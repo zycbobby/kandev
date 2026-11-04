@@ -44,6 +44,19 @@ func (c *ControlClient) ReadRetainedReconstructionSubmission(
 	return &result, nil
 }
 
+// RetireRetainedDelivery retires the complete unresolved inventory of an
+// owner journal that has no live runtime instance.
+func (c *ControlClient) RetireRetainedDelivery(
+	ctx context.Context,
+	input journal.RetainedRetirementRequest,
+) (*journal.RetainedRetirementResponse, error) {
+	var result journal.RetainedRetirementResponse
+	if err := c.postRetainedDelivery(ctx, "/api/v1/delivery/retained/retire", input, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (c *ControlClient) postRetainedDelivery(ctx context.Context, path string, input, output any) error {
 	payload, err := json.Marshal(input)
 	if err != nil {

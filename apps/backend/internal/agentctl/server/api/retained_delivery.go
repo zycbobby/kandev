@@ -32,6 +32,41 @@ func (m *ControlServer) handleRetainedDelivery(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// handleRetainedRetirement retires abandoned submissions in an owner journal
+// that has no live runtime instance. Ownership and process death are proven by
+// the journal primitive before any record changes.
+func (m *ControlServer) handleRetainedRetirement(c *gin.Context) {
+	var request journal.RetainedRetirementRequest
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
+	if err := c.ShouldBindJSON(&request); err != nil || !validRetainedRetirementBody(request) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_RECOVERY_IDENTITY"})
+		return
+	}
+	if !m.retainedSessionIsUnowned(c, request.SessionID) {
+		return
+	}
+	result, err := journal.RetireRetainedRecovery(c.Request.Context(), request)
+	if err != nil {
+		writeDeliveryError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func validRetainedRetirementBody(request journal.RetainedRetirementRequest) bool {
+	if request.SessionID == "" || request.ExecutionID == "" || request.IncarnationID == "" ||
+		request.HarnessGeneration == 0 || len(request.Submissions) == 0 {
+		return false
+	}
+	for _, target := range request.Submissions {
+		if target.ID == "" || target.StreamID == "" || target.Hash == "" ||
+			target.HarnessGeneration == 0 || target.State == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *ControlServer) handleRetainedReconstructionEvidence(c *gin.Context) {
 	var request journal.RetainedReconstructionEvidenceRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)

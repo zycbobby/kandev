@@ -136,6 +136,7 @@ func (m *ControlServer) setupRoutes() {
 	api.POST("/instances", m.handleCreateInstance)
 	api.GET("/instances", m.handleListInstances)
 	api.POST("/delivery/retained", m.handleRetainedDelivery)
+	api.POST("/delivery/retained/retire", m.handleRetainedRetirement)
 	api.POST("/delivery/retained/evidence", m.handleRetainedReconstructionEvidence)
 	api.POST("/delivery/retained/submission", m.handleRetainedReconstructionSubmission)
 	api.GET("/instances/:id", m.handleGetInstance)
