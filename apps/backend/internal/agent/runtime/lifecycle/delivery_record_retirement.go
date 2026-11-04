@@ -83,9 +83,7 @@ func validDeliveryRecordRetirementRequest(request DeliveryRecordRetirementReques
 	}
 	seen := make(map[string]struct{}, len(request.Submissions))
 	for _, target := range request.Submissions {
-		if target.ID == "" || target.StreamID == "" || target.Hash == "" ||
-			target.HarnessGeneration == 0 || target.HarnessGeneration > request.HarnessGeneration ||
-			target.State != journal.SubmissionInterruptedUnknown {
+		if !validDeliveryRecordRetirementTarget(target, request.HarnessGeneration) {
 			return false
 		}
 		if _, duplicate := seen[target.ID]; duplicate {
@@ -94,6 +92,12 @@ func validDeliveryRecordRetirementRequest(request DeliveryRecordRetirementReques
 		seen[target.ID] = struct{}{}
 	}
 	return true
+}
+
+func validDeliveryRecordRetirementTarget(target DeliveryRecordRetirementTarget, requestGeneration uint64) bool {
+	return target.ID != "" && target.StreamID != "" && target.Hash != "" &&
+		target.HarnessGeneration > 0 && target.HarnessGeneration <= requestGeneration &&
+		target.State == journal.SubmissionInterruptedUnknown
 }
 
 func deliveryRecordRetirementEvidenceRequest(request DeliveryRecordRetirementRequest) DeliveryRecordEvidenceRequest {

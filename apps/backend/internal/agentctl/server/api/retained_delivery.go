@@ -7,11 +7,13 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/journal"
 )
 
+const invalidRecoveryIdentityCode = "INVALID_RECOVERY_IDENTITY"
+
 func (m *ControlServer) handleRetainedDelivery(c *gin.Context) {
 	var request journal.RetainedRecoveryRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || request.SessionID == "" || request.ExecutionID == "" || request.SubmissionID == "" || request.StreamID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 || request.Limit < 1 || request.Limit > 4 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_RECOVERY_IDENTITY"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
 		return
 	}
 	if m.instMgr == nil {
@@ -39,7 +41,7 @@ func (m *ControlServer) handleRetainedRetirement(c *gin.Context) {
 	var request journal.RetainedRetirementRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || !validRetainedRetirementBody(request) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_RECOVERY_IDENTITY"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
 		return
 	}
 	if !m.retainedSessionIsUnowned(c, request.SessionID) {
@@ -59,19 +61,23 @@ func validRetainedRetirementBody(request journal.RetainedRetirementRequest) bool
 		return false
 	}
 	for _, target := range request.Submissions {
-		if target.ID == "" || target.StreamID == "" || target.Hash == "" ||
-			target.HarnessGeneration == 0 || target.State == "" {
+		if !validRetainedRetirementTargetBody(target) {
 			return false
 		}
 	}
 	return true
 }
 
+func validRetainedRetirementTargetBody(target journal.RetainedRetirementTarget) bool {
+	return target.ID != "" && target.StreamID != "" && target.Hash != "" &&
+		target.HarnessGeneration != 0 && target.State != ""
+}
+
 func (m *ControlServer) handleRetainedReconstructionEvidence(c *gin.Context) {
 	var request journal.RetainedReconstructionEvidenceRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || request.SessionID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_RECOVERY_IDENTITY"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
 		return
 	}
 	if !m.retainedSessionIsUnowned(c, request.SessionID) {
@@ -89,7 +95,7 @@ func (m *ControlServer) handleRetainedReconstructionSubmission(c *gin.Context) {
 	var request journal.RetainedReconstructionSubmissionRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || request.SessionID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 || request.Candidate.ID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_RECOVERY_IDENTITY"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
 		return
 	}
 	if !m.retainedSessionIsUnowned(c, request.SessionID) {

@@ -105,31 +105,15 @@ func validateRetainedRetirement(
 		descriptor.IncarnationID != request.IncarnationID || descriptor.HarnessGeneration != request.HarnessGeneration {
 		return nil, ErrSubmissionConflict
 	}
-	inventory := make(map[string]SubmissionSummary, len(descriptor.Submissions))
-	for _, summary := range descriptor.Submissions {
-		if _, duplicate := inventory[summary.ID]; duplicate {
-			return nil, ErrSubmissionConflict
-		}
-		inventory[summary.ID] = summary
+	inventory, err := retainedRetirementInventory(descriptor)
+	if err != nil {
+		return nil, err
 	}
 	seen := make(map[string]struct{}, len(request.Submissions))
 	pending := make([]Submission, 0, len(request.Submissions))
 	for _, target := range request.Submissions {
-		if !validRetainedRetirementTarget(target, request.HarnessGeneration) {
-			return nil, ErrSubmissionState
-		}
-		if _, duplicate := seen[target.ID]; duplicate {
-			return nil, ErrSubmissionConflict
-		}
-		seen[target.ID] = struct{}{}
-		submission, err := retained.GetSubmission(ctx, target.ID)
+		submission, err := readRetainedRetirementTarget(ctx, retained, request, target, seen)
 		if err != nil {
-			if errors.Is(err, ErrSubmissionNotFound) {
-				return nil, ErrSubmissionConflict
-			}
-			return nil, err
-		}
-		if err := validateRetainedRetirementSubmission(submission, target, request.SessionID); err != nil {
 			return nil, err
 		}
 		if !submission.Retired {
@@ -145,6 +129,44 @@ func validateRetainedRetirement(
 		return nil, ErrSubmissionConflict
 	}
 	return pending, nil
+}
+
+func retainedRetirementInventory(descriptor RecoveryDescriptor) (map[string]SubmissionSummary, error) {
+	inventory := make(map[string]SubmissionSummary, len(descriptor.Submissions))
+	for _, summary := range descriptor.Submissions {
+		if _, duplicate := inventory[summary.ID]; duplicate {
+			return nil, ErrSubmissionConflict
+		}
+		inventory[summary.ID] = summary
+	}
+	return inventory, nil
+}
+
+func readRetainedRetirementTarget(
+	ctx context.Context,
+	retained *Journal,
+	request RetainedRetirementRequest,
+	target RetainedRetirementTarget,
+	seen map[string]struct{},
+) (Submission, error) {
+	if !validRetainedRetirementTarget(target, request.HarnessGeneration) {
+		return Submission{}, ErrSubmissionState
+	}
+	if _, duplicate := seen[target.ID]; duplicate {
+		return Submission{}, ErrSubmissionConflict
+	}
+	seen[target.ID] = struct{}{}
+	submission, err := retained.GetSubmission(ctx, target.ID)
+	if err != nil {
+		if errors.Is(err, ErrSubmissionNotFound) {
+			return Submission{}, ErrSubmissionConflict
+		}
+		return Submission{}, err
+	}
+	if err := validateRetainedRetirementSubmission(submission, target, request.SessionID); err != nil {
+		return Submission{}, err
+	}
+	return submission, nil
 }
 
 func validRetainedRetirementTarget(target RetainedRetirementTarget, requestGeneration uint64) bool {
