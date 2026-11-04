@@ -81,6 +81,43 @@ if ! printf '%s\n' "$dry_out" | grep -Fq -- '--system'; then
 else
 	fail "deploy does not pass --system"
 fi
+if ! printf '%s\n' "$dry_out" | grep -Fq -- '--force'; then
+	pass "deploy without DEPLOY_FORCE omits --force"
+else
+	fail "deploy without DEPLOY_FORCE omits --force"
+fi
+
+force_out=""
+if ! force_out="$(
+	make -C "$ROOT_DIR" --no-print-directory -n deploy \
+		MAKE=':' \
+		DEPLOY_FORCE=1 \
+		2>/dev/null
+)"; then
+	fail "make -n deploy DEPLOY_FORCE=1 is available"
+	force_out=""
+fi
+if printf '%s\n' "$force_out" | grep -Fq -- '--force'; then
+	pass "deploy forwards DEPLOY_FORCE as --force"
+else
+	fail "deploy forwards DEPLOY_FORCE as --force: $force_out"
+fi
+
+install_out=""
+if ! install_out="$(
+	make -C "$ROOT_DIR" --no-print-directory -n service-install \
+		MAKE=':' \
+		DEPLOY_FORCE=1 \
+		2>/dev/null
+)"; then
+	fail "make -n service-install DEPLOY_FORCE=1 is available"
+else
+	if ! printf '%s\n' "$install_out" | grep -Fq -- '--force'; then
+		pass "service-install ignores DEPLOY_FORCE"
+	else
+		fail "service-install ignores DEPLOY_FORCE: $install_out"
+	fi
+fi
 if ! printf '%s\n' "$dry_out" | grep -Fq 'playwright'; then
 	pass "deploy does not install Playwright"
 else

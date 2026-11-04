@@ -65,6 +65,8 @@ PORT_FLAG := $(if $(PORT),--port $(PORT),)
 SERVICE_HOME_DIR_FLAG := $(if $(HOME_DIR),--home-dir "$(HOME_DIR)",)
 SERVICE_NO_BOOT_START_FLAG := $(if $(filter 1 true yes,$(NO_BOOT_START)),--no-boot-start,)
 SERVICE_INSTALL_FLAGS := $(PORT_FLAG) $(SERVICE_HOME_DIR_FLAG) $(SERVICE_NO_BOOT_START_FLAG)
+DEPLOY_FORCE ?= 0
+DEPLOY_FORCE_FLAG := $(if $(filter 1 true yes,$(DEPLOY_FORCE)),--force,)
 DEV_WEB_PORT_FLAG := $(if $(WEB_PORT),--web-internal-port $(WEB_PORT),)
 DEV_FLAGS := $(PORT_FLAG) $(DEV_WEB_PORT_FLAG) $(DEV_ARGS)
 # $(if …) does not strip its condition, so an all-whitespace DEV_FLAGS reads as
@@ -115,6 +117,7 @@ help:
 	@echo "Service Commands:"
 	@echo "  deploy                   Build current checkout and update the live user-domain daemon"
 	@echo "  deploy PORT=3000 HOME_DIR=/path  Optional deploy overrides (same as service-install)"
+	@echo "  deploy DEPLOY_FORCE=1        Deploy even when active work is detected (skip the idle gate)"
 	@echo "  service-install          Install deps, build current checkout, install user service"
 	@echo "  service-install-system   Install deps, build current checkout, install system service"
 	@echo "  service-status           Show current user service status"
@@ -420,7 +423,7 @@ deploy:
 	@scripts/deploy-user-service.sh \
 		--bundle-dir "$(SERVICE_BUNDLE_DIR)" \
 		--checkout "$(CURDIR)" \
-		$(SERVICE_INSTALL_FLAGS)
+		$(SERVICE_INSTALL_FLAGS) $(DEPLOY_FORCE_FLAG)
 	$(call success,User-domain service deployed)
 
 .PHONY: sync-workflow
