@@ -7586,13 +7586,19 @@ func (s *Service) finishPromptExecutorDispatch(
 			unknownErr := delivery.markInterrupted(
 				context.WithoutCancel(ctx), "prompt_dispatch_failed",
 			)
-			recoveryErr := s.deliveryRecoveryError(
-				context.WithoutCancel(ctx), sessionID, "unknown_prompt_outcome", delivery,
-			)
 			if unknownErr != nil {
 				execErr = errors.Join(execErr, unknownErr)
 			}
-			execErr = errors.Join(execErr, recoveryErr)
+			// A terminal row means the never-started stall settlement (or
+			// another terminal writer) already owns this submission's outcome;
+			// an unknown_prompt_outcome block here would re-fence a recovered
+			// session.
+			if !s.deliverySubmissionTerminal(context.WithoutCancel(ctx), delivery.id) {
+				recoveryErr := s.deliveryRecoveryError(
+					context.WithoutCancel(ctx), sessionID, "unknown_prompt_outcome", delivery,
+				)
+				execErr = errors.Join(execErr, recoveryErr)
+			}
 		}
 		// Missing-execution recovery reacquires the cancel guard while it resets
 		// the session. Release dispatch admission before entering that path.
@@ -7608,7 +7614,8 @@ func (s *Service) finishPromptExecutorDispatch(
 			return nil, resumeErr
 		}
 		return s.finishPromptDispatchFailure(
-			ctx, taskID, sessionID, prompt, planMode, resumedForPrompt, attachments,
+			withPromptDeliverySubmissionID(ctx, deliverySubmissionRuntimeID(delivery)),
+			taskID, sessionID, prompt, planMode, resumedForPrompt, attachments,
 			rollback, options, execErr, foregroundDispatch, dispatchAccepted, publicationErr,
 		)
 	}
@@ -9824,6 +9831,13 @@ func (s *Service) handlePromptError(ctx context.Context, taskID, sessionID strin
 			zap.String("session_id", sessionID),
 			zap.Error(err))
 	}
+	// A settled never-started stall owns the session and turn writes for its
+	// prompt generation: the settlement marked the delivery submission
+	// terminal and recovered the session, so this late error must neither
+	// revert the state nor re-complete turns.
+	if s.promptErrorDefersToSettledDelivery(ctx) {
+		return err
+	}
 	// Revert session state so it doesn't stay stuck in RUNNING. Route through the
 	// wrapper so WS subscribers are notified — the UI relies on the
 	// session.state_changed broadcast to flip the composer/pause button out of
@@ -9853,6 +9867,19 @@ func (s *Service) handlePromptError(ctx context.Context, taskID, sessionID strin
 		s.completeTurnForSession(ctx, sessionID)
 	}
 	return err
+}
+
+// promptErrorDefersToSettledDelivery reports whether the prompt error path
+// must leave the session and turn writes to a delivery settlement that
+// already made this prompt's submission terminal. The submission ID reaches
+// this guard through the failure context; without one the legacy behavior
+// applies.
+func (s *Service) promptErrorDefersToSettledDelivery(ctx context.Context) bool {
+	submissionID := promptDeliverySubmissionIDFromContext(ctx)
+	if submissionID == "" {
+		return false
+	}
+	return s.deliverySubmissionTerminal(ctx, submissionID)
 }
 
 // trySwitchModel handles model switching for a prompt. Returns (result, true, nil) if a switch was

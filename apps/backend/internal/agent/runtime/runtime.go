@@ -33,6 +33,7 @@ type OwnerAdmission = lifecycle.OwnerAdmission
 type LaunchRequest = lifecycle.LaunchRequest
 type RouteOverride = lifecycle.RouteOverride
 type AgentStreamEventPayload = lifecycle.AgentStreamEventPayload
+type AgentStalledPayload = lifecycle.AgentStalledPayload
 type AgentExecution = lifecycle.AgentExecution
 type CachedModeState = lifecycle.CachedModeState
 type IdleSuspensionIdentity = lifecycle.IdleSuspensionIdentity

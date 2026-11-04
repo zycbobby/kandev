@@ -84,23 +84,38 @@ func stepSignalDeliveryDetails(notice *streams.SignalDeliveryFailure) string {
 	)
 }
 
+// sessionErrorEventKeys names the task.session.error_changed payload fields
+// built on this path. The same key set is built by the older publishers in
+// event_handlers_agent.go and task_operations.go; these constants keep the
+// new-code string-occurrence lint quiet without touching those sites.
+const (
+	sessionErrorKeyScope    = "scope"
+	sessionErrorKeyMessage  = "message"
+	sessionErrorKeyActive   = "active"
+	sessionErrorKeyStamp    = "stamp"
+	sessionErrorKeyOccurred = "occurred_at"
+	sessionErrorKeyDetails  = "details"
+	sessionErrorKeyCode     = "code"
+	sessionErrorKeyExecID   = "execution_id"
+)
+
 func (s *Service) publishStepSignalDeliveryErrorChanged(ctx context.Context, taskID, sessionID string, lastErr models.LastAgentError) {
 	if s.eventBus == nil {
 		return
 	}
 	eventData := map[string]interface{}{
-		"task_id":     taskID,
-		"session_id":  sessionID,
-		"active":      true,
-		"scope":       models.ErrorScopeSession,
-		"message":     lastErr.Message,
-		"occurred_at": lastErr.OccurredAt.Format(time.RFC3339Nano),
-		"stamp":       lastErr.Stamp(),
-		"code":        lastErr.Code,
-		"details":     lastErr.Details,
+		metaKeyTaskID:           taskID,
+		metaKeySessionID:        sessionID,
+		sessionErrorKeyActive:   true,
+		sessionErrorKeyScope:    models.ErrorScopeSession,
+		sessionErrorKeyMessage:  lastErr.Message,
+		sessionErrorKeyOccurred: lastErr.OccurredAt.Format(time.RFC3339Nano),
+		sessionErrorKeyStamp:    lastErr.Stamp(),
+		sessionErrorKeyCode:     lastErr.Code,
+		sessionErrorKeyDetails:  lastErr.Details,
 	}
 	if lastErr.ExecutionID != "" {
-		eventData["execution_id"] = lastErr.ExecutionID
+		eventData[sessionErrorKeyExecID] = lastErr.ExecutionID
 	}
 	if err := s.eventBus.Publish(ctx, events.TaskSessionErrorChanged, bus.NewEvent(
 		events.TaskSessionErrorChanged, "orchestrator", eventData,
@@ -141,10 +156,10 @@ func (s *Service) clearStepSignalDeliveryNotice(ctx context.Context, sessionID s
 		return
 	}
 	eventData := map[string]interface{}{
-		"task_id":    session.TaskID,
-		"session_id": sessionID,
-		"active":     false,
-		"stamp":      lastErr.Stamp(),
+		metaKeyTaskID:         session.TaskID,
+		metaKeySessionID:      sessionID,
+		sessionErrorKeyActive: false,
+		sessionErrorKeyStamp:  lastErr.Stamp(),
 	}
 	if err := s.eventBus.Publish(writeCtx, events.TaskSessionErrorChanged, bus.NewEvent(
 		events.TaskSessionErrorChanged, "orchestrator", eventData,

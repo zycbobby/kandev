@@ -20,6 +20,11 @@ type DeliveryRecordRetirementTarget = lifecycle.DeliveryRecordRetirementTarget
 type DeliveryRecordRetirementRequest = lifecycle.DeliveryRecordRetirementRequest
 type DeliveryRecordRetirementResult = lifecycle.DeliveryRecordRetirementResult
 
+// NeverStartedDeliveryRetirementRequest and NeverStartedDeliveryRetirementResult
+// expose the zero-event retirement contract through the same seam.
+type NeverStartedDeliveryRetirementRequest = lifecycle.NeverStartedDeliveryRetirementRequest
+type NeverStartedDeliveryRetirementResult = lifecycle.NeverStartedDeliveryRetirementResult
+
 // DurableDeliveryCapabilityReader exposes the negotiated peer protocol to
 // admission callers that need to persist the matching canonical submission.
 type DurableDeliveryCapabilityReader interface {

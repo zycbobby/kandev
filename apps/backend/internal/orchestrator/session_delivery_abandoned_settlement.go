@@ -65,34 +65,79 @@ func (s *Service) retryAbandonedJournalDelivery(
 	}
 	retryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	evidence, err := client.InspectDeliveryRecordEvidence(retryCtx, abandonedEvidenceRequest(session, recovery))
+	target, evidence, blocked, err := s.abandonedJournalTarget(retryCtx, client, session, block, recovery, submission)
+	if err != nil {
+		return nil, true, err
+	}
+	if blocked != nil {
+		return blocked, true, nil
+	}
+	if target == nil {
+		return nil, false, nil
+	}
+	if response, handled, retireErr := s.retireAbandonedJournalTargets(
+		retryCtx, retirer, session, recovery, evidence.Descriptor, target,
+	); handled {
+		return response, true, retireErr
+	}
+	return s.commitAbandonedSettlement(retryCtx, ctx, store, session, recovery, block, submission)
+}
+
+// abandonedJournalTarget inspects and validates the retained evidence for one
+// abandoned settlement attempt. A nil target with a nil response means the
+// evidence belongs to an existing recovery path; a non-nil response is a
+// blocked outcome the caller must surface.
+func (s *Service) abandonedJournalTarget(
+	ctx context.Context,
+	client deliveryRecordEvidenceClient,
+	session *models.TaskSession,
+	block *models.SessionRecoveryBlock,
+	recovery models.AgentDeliveryRecovery,
+	submission *models.AgentDeliverySubmission,
+) (*journal.Submission, *agentruntime.DeliveryRecordEvidence, *SessionDeliveryRecoveryResponse, error) {
+	evidence, err := client.InspectDeliveryRecordEvidence(ctx, abandonedEvidenceRequest(session, recovery))
 	if err != nil {
 		if evidence == nil {
-			return nil, false, nil
+			return nil, nil, nil, nil
 		}
-		return abandonedBlocked(session, recovery, retainedEvidenceAmbiguousReason), true, nil
+		return nil, nil, abandonedBlocked(session, recovery, retainedEvidenceAmbiguousReason), nil
 	}
 	target := evidence.StoredSubmission
 	if evidence.SubmissionAbsent || target == nil {
-		return nil, false, nil
+		return nil, nil, nil, nil
 	}
 	if !abandonedTargetIdentityMatches(target, session, recovery, submission, block) {
-		return abandonedBlocked(session, recovery, deliveryIdentityMismatchReason), true, nil
+		return nil, nil, abandonedBlocked(session, recovery, deliveryIdentityMismatchReason), nil
 	}
 	if !abandonedTargetStateEligible(target) || submission.State != models.DeliverySubmissionInterruptedUnknown {
-		return nil, false, nil
+		return nil, nil, nil, nil
 	}
-	evidence, reason, err := s.abandonedConvergedEvidence(retryCtx, client, session, recovery, target, evidence)
+	evidence, reason, err := s.abandonedConvergedEvidence(ctx, client, session, recovery, target, evidence)
 	if err != nil {
-		return abandonedBlocked(session, recovery, deliveryRecordEvidenceReason(err)), true, nil
+		return nil, nil, abandonedBlocked(session, recovery, deliveryRecordEvidenceReason(err)), nil
 	}
 	if reason != "" {
-		return abandonedBlocked(session, recovery, reason), true, nil
+		return nil, nil, abandonedBlocked(session, recovery, reason), nil
 	}
 	if evidence.ProcessTerminated == nil || !*evidence.ProcessTerminated {
-		return abandonedBlocked(session, recovery, deliveryIdentityMismatchReason), true, nil
+		return nil, nil, abandonedBlocked(session, recovery, deliveryIdentityMismatchReason), nil
 	}
-	targets, reason, err := s.abandonedRetirementTargets(retryCtx, evidence.Descriptor, target, recovery)
+	return target, evidence, nil, nil
+}
+
+// retireAbandonedJournalTargets validates the complete unresolved inventory
+// and retires the records that still need retirement. handled=true carries a
+// blocked response or an error; handled=false means the inventory is retired
+// and the caller may commit the settlement.
+func (s *Service) retireAbandonedJournalTargets(
+	ctx context.Context,
+	retirer deliveryRecordRetirementClient,
+	session *models.TaskSession,
+	recovery models.AgentDeliveryRecovery,
+	descriptor journal.RecoveryDescriptor,
+	target *journal.Submission,
+) (*SessionDeliveryRecoveryResponse, bool, error) {
+	targets, reason, err := s.abandonedRetirementTargets(ctx, descriptor, target, recovery)
 	if err != nil {
 		return nil, true, err
 	}
@@ -100,11 +145,11 @@ func (s *Service) retryAbandonedJournalDelivery(
 		return abandonedBlocked(session, recovery, reason), true, nil
 	}
 	if len(targets) != 0 {
-		if response, handled := s.retireAbandonedTargets(retryCtx, retirer, session, recovery, targets); handled {
+		if response, handled := s.retireAbandonedTargets(ctx, retirer, session, recovery, targets); handled {
 			return response, true, nil
 		}
 	}
-	return s.commitAbandonedSettlement(retryCtx, ctx, store, session, recovery, block, submission)
+	return nil, false, nil
 }
 
 func abandonedEvidenceRequest(session *models.TaskSession, recovery models.AgentDeliveryRecovery) agentruntime.DeliveryRecordEvidenceRequest {

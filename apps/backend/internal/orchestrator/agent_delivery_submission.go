@@ -116,6 +116,54 @@ func normalizeDeliverySubmissionID(id string) string {
 	return "prompt:" + id
 }
 
+// promptDeliverySubmissionContextKey carries the durable delivery submission
+// ID of the in-flight prompt through the prompt failure path
+// (finishPromptDispatchFailure → handlePromptDispatchFailure →
+// handlePromptError) so the late prompt-error guard can identify the exact
+// submission that prompt owned.
+type promptDeliverySubmissionContextKey struct{}
+
+func withPromptDeliverySubmissionID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, promptDeliverySubmissionContextKey{}, id)
+}
+
+func promptDeliverySubmissionIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(promptDeliverySubmissionContextKey{}).(string)
+	return id
+}
+
+// deliverySubmissionTerminal reports whether the SQL delivery submission row
+// has reached a terminal state. The database is the source of truth: an
+// unreadable, missing, or empty row reports false so callers keep their
+// conservative uncertain-delivery behavior.
+func (s *Service) deliverySubmissionTerminal(ctx context.Context, submissionID string) bool {
+	if submissionID == "" {
+		return false
+	}
+	rows, ok := s.repo.(repository.AgentDeliveryRepository)
+	if !ok {
+		return false
+	}
+	submission, err := rows.GetAgentDeliverySubmission(ctx, submissionID)
+	if err != nil || submission == nil {
+		return false
+	}
+	return terminalDeliverySubmission(submission.State)
+}
+
+// deliverySubmissionRuntimeID returns the normalized SQL submission ID behind
+// a prompt's delivery runtime, or "" when the prompt carried no durable
+// submission.
+func deliverySubmissionRuntimeID(delivery *agentDeliverySubmissionRuntime) string {
+	if delivery == nil {
+		return ""
+	}
+	return delivery.id
+}
+
 func (s *Service) deliveryRecoveryError(
 	ctx context.Context,
 	sessionID string,
