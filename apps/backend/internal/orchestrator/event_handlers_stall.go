@@ -127,16 +127,17 @@ func (s *Service) handleAgentStalled(ctx context.Context, payload lifecycle.Agen
 
 // handleNeverStartedStall routes a never-started stall. Sessions in the
 // settlement scope run the detached teardown + settlement, which settles the
-// durable submission and recovers the session; everything else keeps the
-// legacy synchronous terminal handling.
+// durable submission and recovers the session; a settlement that cannot even
+// capture its durable identity on the turn, and everything outside the scope,
+// keeps the legacy synchronous terminal handling.
 func (s *Service) handleNeverStartedStall(
 	ctx context.Context,
 	payload lifecycle.AgentStalledPayload,
 	session *models.TaskSession,
 	turnID string,
 ) {
-	if s.neverStartedStallSettlementEligible(ctx, payload, session) {
-		s.startNeverStartedStallSettlement(ctx, payload, turnID)
+	if s.neverStartedStallSettlementEligible(ctx, payload, session) &&
+		s.startNeverStartedStallSettlement(ctx, payload, turnID) {
 		return
 	}
 	s.recordLegacyNeverStartedStall(ctx, payload, session, turnID)

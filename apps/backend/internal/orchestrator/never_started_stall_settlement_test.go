@@ -500,14 +500,14 @@ func TestHandleAgentStalled_DuplicateStallEventSettlesOnce(t *testing.T) {
 }
 
 // TestHandleAgentStalled_NeverStartedUserInterventionKeepsSettlement covers
-// the guarded final write: when a user action takes the session over during
-// the settlement, the delivery settlement result is still recorded, but the
-// state write, notice, and auto-resume are skipped.
+// the guarded final write: when a user action terminally takes the session
+// over during the settlement, the delivery settlement result is still
+// recorded, but the state write, notice, and auto-resume are skipped.
 func TestHandleAgentStalled_NeverStartedUserInterventionKeepsSettlement(t *testing.T) {
 	f := newNeverStartedStallFixture(t, "intervened", false)
 	f.manager.onRetire = func(*lifecycle.NeverStartedDeliveryRetirementRequest) {
 		require.NoError(t, f.repo.UpdateTaskSessionState(f.ctx, f.sessionID,
-			models.TaskSessionStateWaitingForInput, ""))
+			models.TaskSessionStateCancelled, ""))
 	}
 
 	f.svc.handleAgentStalled(f.ctx, f.payload)
@@ -519,8 +519,232 @@ func TestHandleAgentStalled_NeverStartedUserInterventionKeepsSettlement(t *testi
 	require.Equal(t, models.RecoveryBlockResolved, f.requireBlockState(t))
 
 	session := f.requireSession(t)
-	require.Equal(t, models.TaskSessionStateWaitingForInput, session.State)
-	require.Empty(t, session.ErrorMessage, "the settlement must not overwrite the user's state")
+	require.Equal(t, models.TaskSessionStateCancelled, session.State,
+		"the settlement must not overwrite the user's terminal state")
 	require.Empty(t, f.messages.sessionMessages, "the notice belongs to the recovered outcome")
 	f.requireNoLaunch(t)
+}
+
+// removeGenerationOwnerOnStop makes the mock reproduce production teardown:
+// a successful StopAgentWithReason removes the execution from the runtime's
+// store, so the live OwnsPromptGeneration check fails from that point on.
+func (f *neverStartedStallFixture) removeGenerationOwnerOnStop() {
+	f.manager.stopAgentWithReasonFunc = func(context.Context, string, string, bool) error {
+		f.manager.mu.Lock()
+		f.manager.currentPromptExecutionID = ""
+		f.manager.mu.Unlock()
+		return nil
+	}
+}
+
+// TestHandleAgentStalled_NeverStartedRecoversAfterStopRemovesGenerationOwner
+// covers the production teardown ordering: the forced stop removes the
+// execution (and with it the live prompt-generation owner) before the
+// settlement applies the recovered outcome, so ownership must be decided from
+// durable rows, not the runtime's store.
+func TestHandleAgentStalled_NeverStartedRecoversAfterStopRemovesGenerationOwner(t *testing.T) {
+	f := newNeverStartedStallFixture(t, "post-stop-owner", true)
+	f.removeGenerationOwnerOnStop()
+
+	f.svc.handleAgentStalled(f.ctx, f.payload)
+	f.awaitSettlementDrained(t)
+
+	submission := f.requireSubmission(t)
+	require.Equal(t, models.DeliverySubmissionFailed, submission.State)
+	require.Equal(t, models.RecoveryBlockResolved, f.requireBlockState(t))
+	require.NoError(t, f.svc.checkSessionRecoveryBlock(f.ctx, f.sessionID))
+
+	session := f.requireSession(t)
+	require.Equal(t, models.TaskSessionStateWaitingForInput, session.State)
+	require.Zero(t, openTurnCount(t, f.repo, f.sessionID), "the captured turn must be completed")
+
+	f.taskRepo.mu.Lock()
+	taskState := f.taskRepo.updatedStates[f.taskID]
+	f.taskRepo.mu.Unlock()
+	require.Equal(t, v1.TaskStateReview, taskState)
+	require.Len(t, f.messages.sessionMessages, 1)
+	require.Contains(t, f.messages.sessionMessages[0].content, "not delivered")
+	f.requireOneLaunch(t)
+}
+
+// TestHandleAgentStalled_NeverStartedPromptErrorBeforeSettlementStillRecovers
+// covers the prompt-error-first ordering: the force-stopped prompt's late
+// uncertain-delivery error reverts the session to WAITING_FOR_INPUT and flips
+// the submission to interrupted_unknown while the settlement is still
+// blocked in retirement. The durable ownership check must accept the reverted
+// session, the conflict retry must settle the flipped submission, and the
+// full recovered outcome must still land.
+func TestHandleAgentStalled_NeverStartedPromptErrorBeforeSettlementStillRecovers(t *testing.T) {
+	f := newNeverStartedStallFixture(t, "prompt-error-first", false)
+	retireEntered := make(chan struct{})
+	releaseRetirement := make(chan struct{})
+	var retireEnteredOnce sync.Once
+	f.manager.onRetire = func(*lifecycle.NeverStartedDeliveryRetirementRequest) {
+		retireEnteredOnce.Do(func() { close(retireEntered) })
+		<-releaseRetirement
+	}
+
+	f.svc.handleAgentStalled(f.ctx, f.payload)
+	select {
+	case <-retireEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the settlement to reach retirement")
+	}
+
+	// The force-stopped prompt's error handler runs while the settlement is
+	// still in flight: it marks the submission interrupted_unknown, creates
+	// the uncertain recovery block, and reverts the session.
+	delivery := &agentDeliverySubmissionRuntime{store: f.repo, id: f.submissionID, sessionID: f.sessionID}
+	_, err := f.svc.finishPromptExecutorDispatch(
+		f.ctx, f.taskID, f.sessionID, "stalled prompt", false, false, nil,
+		promptClaimRollback{previousSessionState: models.TaskSessionStateWaitingForInput, turnID: f.turnID},
+		promptTaskOptions{}, nil, nil, nil,
+		lifecycle.ErrUncertainPromptDelivery, nil, nil, delivery,
+	)
+	require.ErrorIs(t, err, lifecycle.ErrUncertainPromptDelivery)
+	reverted := f.requireSession(t)
+	require.Equal(t, models.TaskSessionStateWaitingForInput, reverted.State)
+
+	close(releaseRetirement)
+	f.awaitSettlementDrained(t)
+
+	submission := f.requireSubmission(t)
+	require.Equal(t, models.DeliverySubmissionFailed, submission.State,
+		"the conflict retry must settle the prompt-error path's interrupted submission")
+	require.NoError(t, f.svc.checkSessionRecoveryBlock(f.ctx, f.sessionID),
+		"the prompt error's recovery block must be resolved by the settlement")
+
+	session := f.requireSession(t)
+	require.Equal(t, models.TaskSessionStateWaitingForInput, session.State)
+	require.Contains(t, session.ErrorMessage, "provider stalled",
+		"the recovered outcome must persist the stall error on the already-waiting session")
+	require.Contains(t, session.ErrorMessage, "not delivered")
+	require.Zero(t, openTurnCount(t, f.repo, f.sessionID), "the captured turn must be completed")
+
+	f.taskRepo.mu.Lock()
+	taskState := f.taskRepo.updatedStates[f.taskID]
+	f.taskRepo.mu.Unlock()
+	require.Equal(t, v1.TaskStateReview, taskState)
+	require.Len(t, f.messages.sessionMessages, 1)
+	require.Contains(t, f.messages.sessionMessages[0].content, "not delivered")
+}
+
+// TestHandleAgentStalled_NeverStartedBlockedAfterStopStillFails covers the
+// blocked path under the production teardown ordering: the removed generation
+// owner must not stop the fallback from recording the session and task
+// FAILED with the stall error and the fallback notice.
+func TestHandleAgentStalled_NeverStartedBlockedAfterStopStillFails(t *testing.T) {
+	f := newNeverStartedStallFixture(t, "blocked-post-stop", false)
+	f.removeGenerationOwnerOnStop()
+	f.manager.retireErr = errors.Join(
+		lifecycle.ErrDeliveryRecoveryBlocked, lifecycle.ErrDeliveryOwnerMismatch)
+
+	f.svc.handleAgentStalled(f.ctx, f.payload)
+	f.awaitSettlementDrained(t)
+
+	session := f.requireSession(t)
+	require.Equal(t, models.TaskSessionStateFailed, session.State)
+	require.Contains(t, session.ErrorMessage, "provider stalled")
+	require.Contains(t, session.ErrorMessage, "not delivered")
+
+	f.taskRepo.mu.Lock()
+	taskState := f.taskRepo.updatedStates[f.taskID]
+	f.taskRepo.mu.Unlock()
+	require.Equal(t, v1.TaskStateFailed, taskState)
+
+	submission := f.requireSubmission(t)
+	require.Equal(t, models.DeliverySubmissionDispatching, submission.State,
+		"the blocked path must leave the uncertain submission untouched")
+	require.Len(t, f.messages.sessionMessages, 1)
+	require.Contains(t, f.messages.sessionMessages[0].content, "not delivered")
+	f.requireNoLaunch(t)
+}
+
+// TestHandleAgentStalled_NeverStartedSupersededSkipsWrites covers the
+// durable ownership rejections: a successor execution, a turn whose captured
+// prompt generation no longer matches, and an in-flight user cancellation all
+// skip every state write while the delivery settlement result still commits.
+func TestHandleAgentStalled_NeverStartedSupersededSkipsWrites(t *testing.T) {
+	supersede := func(t *testing.T, f *neverStartedStallFixture, stage func()) {
+		t.Helper()
+		retireEntered := make(chan struct{})
+		releaseRetirement := make(chan struct{})
+		var retireEnteredOnce sync.Once
+		f.manager.onRetire = func(*lifecycle.NeverStartedDeliveryRetirementRequest) {
+			retireEnteredOnce.Do(func() { close(retireEntered) })
+			<-releaseRetirement
+		}
+		f.svc.handleAgentStalled(f.ctx, f.payload)
+		select {
+		case <-retireEntered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the settlement to reach retirement")
+		}
+		stage()
+		close(releaseRetirement)
+		f.awaitSettlementDrained(t)
+	}
+
+	t.Run("successor execution skips writes", func(t *testing.T) {
+		f := newNeverStartedStallFixture(t, "superseded-exec", true)
+		supersede(t, f, func() {
+			seedExecutorRunning(t, f.repo, f.sessionID, f.taskID, "ns-stall-successor-exec")
+		})
+		require.Equal(t, models.DeliverySubmissionFailed, f.requireSubmission(t).State,
+			"the delivery settlement result must still commit")
+		require.Equal(t, models.TaskSessionStateRunning, f.requireSession(t).State,
+			"a successor execution owns the session; the settlement must not write")
+		require.Empty(t, f.messages.sessionMessages)
+		f.requireNoLaunch(t)
+	})
+
+	t.Run("different turn generation skips writes", func(t *testing.T) {
+		f := newNeverStartedStallFixture(t, "superseded-generation", true)
+		supersede(t, f, func() {
+			require.NoError(t, f.svc.turnService.PatchTurnMetadata(f.ctx, f.sessionID, f.turnID,
+				map[string]interface{}{neverStartedMetaPromptGen: "99"}))
+		})
+		require.Equal(t, models.DeliverySubmissionFailed, f.requireSubmission(t).State,
+			"the delivery settlement result must still commit")
+		require.Equal(t, models.TaskSessionStateRunning, f.requireSession(t).State,
+			"a different prompt generation owns the turn; the settlement must not write")
+		require.Empty(t, f.messages.sessionMessages)
+		f.requireNoLaunch(t)
+	})
+
+	t.Run("cancel in flight skips writes", func(t *testing.T) {
+		f := newNeverStartedStallFixture(t, "superseded-cancel", true)
+		cancelEntered := make(chan struct{}, 1)
+		cancelRelease := make(chan struct{})
+		f.manager.cancelAgentEntered = cancelEntered
+		f.manager.cancelAgentBlock = cancelRelease
+		cancelDone := make(chan struct{})
+		supersede(t, f, func() {
+			go func() {
+				defer close(cancelDone)
+				if cancelErr := f.svc.CancelTurn(f.ctx, f.sessionID, f.turnID); cancelErr != nil {
+					t.Logf("staged cancellation returned: %v", cancelErr)
+				}
+			}()
+			select {
+			case <-cancelEntered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for the user cancellation to start")
+			}
+		})
+		require.True(t, f.svc.isCancelInFlight(f.sessionID),
+			"the test must stage a genuinely in-flight cancellation")
+		require.Equal(t, models.DeliverySubmissionFailed, f.requireSubmission(t).State,
+			"the delivery settlement result must still commit")
+		require.Empty(t, f.messages.sessionMessages,
+			"a user cancellation owns the session; the settlement must not write")
+		f.requireNoLaunch(t)
+
+		close(cancelRelease)
+		select {
+		case <-cancelDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the staged cancellation never finished")
+		}
+	})
 }

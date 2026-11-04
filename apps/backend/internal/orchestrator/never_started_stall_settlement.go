@@ -94,21 +94,28 @@ func (s *Service) neverStartedStallSettlementEligible(
 }
 
 // startNeverStartedStallSettlement launches the detached settlement for one
-// never-started stall. The in-memory dedupe runs first so a duplicate stall
-// event neither claims teardown ownership nor spawns a second settlement.
-// Teardown ownership is still claimed synchronously here, while
-// handleAgentStalled holds the per-session cancel-in-flight guard, so the
-// agent.stopped event the forced stop publishes is recognized as
-// already-owned (see stopNeverStartedExecution's comment).
+// never-started stall and reports whether it started. The in-memory dedupe
+// runs first so a duplicate stall event neither claims teardown ownership nor
+// spawns a second settlement; a duplicate reports true because the running
+// settlement owns the outcome. The stalled prompt generation is stamped onto
+// the captured turn while handleAgentStalled still holds the guard and the
+// live generation check has passed, so the settlement's later write guard can
+// re-decide ownership from durable rows after the force-stop removes the
+// execution from the runtime's store. Teardown ownership is still claimed
+// synchronously here, so the agent.stopped event the forced stop publishes is
+// recognized as already-owned (see stopNeverStartedExecution's comment).
 func (s *Service) startNeverStartedStallSettlement(
 	ctx context.Context,
 	payload agentruntime.AgentStalledPayload,
 	turnID string,
-) {
-	if _, duplicate := neverStartedStallSettlements.LoadOrStore(
-		neverStartedStallSettlementKey(payload), struct{}{},
-	); duplicate {
-		return
+) bool {
+	key := neverStartedStallSettlementKey(payload)
+	if _, duplicate := neverStartedStallSettlements.LoadOrStore(key, struct{}{}); duplicate {
+		return true
+	}
+	if !s.stampNeverStartedStallTurnGeneration(ctx, payload, turnID) {
+		neverStartedStallSettlements.Delete(key)
+		return false
 	}
 	s.claimExecutionTeardown(payload.SessionID, payload.AgentExecutionID, executionTeardownIntentForce)
 	settleCtx, cancel := context.WithTimeout(
@@ -116,9 +123,35 @@ func (s *Service) startNeverStartedStallSettlement(
 	)
 	go func() {
 		defer cancel()
-		defer neverStartedStallSettlements.Delete(neverStartedStallSettlementKey(payload))
+		defer neverStartedStallSettlements.Delete(key)
 		s.runNeverStartedStallSettlement(settleCtx, payload, turnID)
 	}()
+	return true
+}
+
+// stampNeverStartedStallTurnGeneration durably records the stalled prompt
+// generation on the captured turn. The settlement's write guard re-reads this
+// binding after the teardown: a turn whose recorded generation no longer
+// matches means a successor prompt took over the session.
+func (s *Service) stampNeverStartedStallTurnGeneration(
+	ctx context.Context,
+	payload agentruntime.AgentStalledPayload,
+	turnID string,
+) bool {
+	if s.turnService == nil || turnID == "" {
+		return false
+	}
+	if err := s.turnService.PatchTurnMetadata(ctx, payload.SessionID, turnID, map[string]interface{}{
+		neverStartedMetaPromptGen: strconv.FormatUint(payload.PromptGeneration, 10),
+	}); err != nil {
+		s.logger.Warn("failed to capture the stalled prompt generation on the turn; using the legacy stall outcome",
+			zap.String("task_id", payload.TaskID),
+			zap.String("session_id", payload.SessionID),
+			zap.String("turn_id", turnID),
+			zap.Error(err))
+		return false
+	}
+	return true
 }
 
 // runNeverStartedStallSettlement owns the whole detached flow for one
@@ -266,12 +299,14 @@ func (s *Service) settleNeverStartedSQLSubmission(
 }
 
 // applySettledNeverStartedStall applies the recovered outcome under the
-// per-session cancel-in-flight guard. The guard revalidates that the session
-// still belongs to the stalled generation: handleAgentStalled released the
-// guard before the detached settlement started, so a user action may have
-// taken ownership during the bounded stop+settle window. When it did, the
-// delivery settlement result stays authoritative but no session, turn, notice,
-// or task write is made. Returns whether the recovery was applied.
+// per-session cancel-in-flight guard. The guard revalidates, from durable
+// rows, that the session still belongs to the stalled generation:
+// handleAgentStalled released the guard before the detached settlement
+// started, and the force-stopped prompt's error path may already have
+// reverted the session to WAITING_FOR_INPUT, which stays eligible. When a
+// successor owns the session, the delivery settlement result stays
+// authoritative but no session, turn, notice, or task write is made. Returns
+// whether the recovery was applied.
 func (s *Service) applySettledNeverStartedStall(
 	ctx context.Context,
 	payload agentruntime.AgentStalledPayload,
@@ -282,7 +317,7 @@ func (s *Service) applySettledNeverStartedStall(
 	lock.Lock()
 	defer lock.Unlock()
 	session, err := s.repo.GetTaskSession(ctx, payload.SessionID)
-	if err != nil || !s.neverStartedStallSessionOwned(payload, session) {
+	if err != nil || !s.neverStartedStallSessionOwned(ctx, payload, turnID, session) {
 		s.logger.Info("skipping never-started stall recovery writes; the session changed during settlement",
 			zap.String("task_id", payload.TaskID),
 			zap.String("session_id", payload.SessionID))
@@ -306,6 +341,27 @@ func (s *Service) applySettledNeverStartedStall(
 			zap.String("turn_id", turnID),
 			zap.Error(turnErr))
 	}
+	if !s.persistRecoveredNeverStartedSession(ctx, payload, session) {
+		return false
+	}
+	s.persistNeverStartedStallNoticeChecked(ctx, payload, turnID, true)
+	s.writeTaskReviewState(ctx, payload.TaskID, payload.SessionID)
+	return true
+}
+
+// persistRecoveredNeverStartedSession moves the session to WAITING_FOR_INPUT
+// with the stall error. A session the prompt error path already reverted to
+// WAITING_FOR_INPUT keeps that state: updateTaskSessionStateWithHook treats a
+// same-state write as a no-op, so the error message is persisted and published
+// through the existing same-state CAS and publish paths instead.
+func (s *Service) persistRecoveredNeverStartedSession(
+	ctx context.Context,
+	payload agentruntime.AgentStalledPayload,
+	session *models.TaskSession,
+) bool {
+	if session.State == models.TaskSessionStateWaitingForInput {
+		return s.persistSettledNeverStartedStallError(ctx, payload, session)
+	}
 	if _, changed := s.updateTaskSessionStateWithHook(
 		ctx, payload.TaskID, payload.SessionID, models.TaskSessionStateWaitingForInput,
 		errAgentNeverStartedStall.Error(), false, nil, session,
@@ -315,8 +371,43 @@ func (s *Service) applySettledNeverStartedStall(
 			zap.String("session_id", payload.SessionID))
 		return false
 	}
-	s.persistNeverStartedStallNoticeChecked(ctx, payload, turnID, true)
-	s.writeTaskReviewState(ctx, payload.TaskID, payload.SessionID)
+	return true
+}
+
+// persistSettledNeverStartedStallError writes the stall error onto an
+// already-waiting session and republishes the unchanged state with the new
+// error message, mirroring the same-state publish the delivery-recovery
+// surface uses.
+func (s *Service) persistSettledNeverStartedStallError(
+	ctx context.Context,
+	payload agentruntime.AgentStalledPayload,
+	session *models.TaskSession,
+) bool {
+	updater, ok := s.repo.(conditionalTaskSessionStateUpdater)
+	if !ok {
+		s.logger.Warn("never-started stall error message could not persist; the repository cannot update session state",
+			zap.String("task_id", payload.TaskID),
+			zap.String("session_id", payload.SessionID))
+		return false
+	}
+	changed, updatedAt, err := updater.UpdateTaskSessionStateIfCurrent(
+		ctx, payload.SessionID,
+		models.TaskSessionStateWaitingForInput, models.TaskSessionStateWaitingForInput,
+		errAgentNeverStartedStall.Error(),
+	)
+	if err != nil || !changed {
+		s.logger.Warn("never-started stall error message did not persist",
+			zap.String("task_id", payload.TaskID),
+			zap.String("session_id", payload.SessionID),
+			zap.Error(err))
+		return false
+	}
+	publishedAt := updatedAt.UTC()
+	s.publishTaskSessionStateChanged(
+		ctx, payload.TaskID, payload.SessionID,
+		models.TaskSessionStateWaitingForInput, models.TaskSessionStateWaitingForInput,
+		errAgentNeverStartedStall.Error(), &publishedAt, session,
+	)
 	return true
 }
 
@@ -338,20 +429,14 @@ func (s *Service) persistNeverStartedStallNoticeChecked(
 
 // markNeverStartedStallTurnFailed patches the captured turn as
 // error-terminated, mirroring markRetainedFailureTurn for the settled
-// provider-turn-failure path.
+// provider-turn-failure path. The durable ownership check has already
+// verified the captured turn is still the session's active turn.
 func (s *Service) markNeverStartedStallTurnFailed(
 	ctx context.Context,
 	payload agentruntime.AgentStalledPayload,
 	turnID string,
 ) {
 	if turnID == "" || s.turnService == nil {
-		return
-	}
-	if err := s.verifyExpectedTurnOwnership(ctx, payload.SessionID, turnID); err != nil {
-		s.logger.Warn("skipping never-started stall turn patch; the captured turn was superseded",
-			zap.String("session_id", payload.SessionID),
-			zap.String("turn_id", turnID),
-			zap.Error(err))
 		return
 	}
 	if err := s.turnService.PatchTurnMetadata(ctx, payload.SessionID, turnID, map[string]interface{}{
@@ -364,14 +449,29 @@ func (s *Service) markNeverStartedStallTurnFailed(
 	}
 }
 
-// neverStartedStallSessionOwned reports whether the loaded session still
-// belongs to the stalled prompt generation. The caller must already hold the
-// per-session cancel-in-flight guard.
+// neverStartedStallSessionOwned reports whether the loaded session and its
+// captured turn still belong to the stalled prompt generation, decided from
+// durable rows. The live OwnsPromptGeneration check is wrong here: the
+// successful force-stop that precedes the writes removes the execution from
+// the runtime's store, so the live owner is always gone by this point. The
+// prompt error path may also have reverted the session to WAITING_FOR_INPUT
+// while the settlement was still tearing the runtime down, so WAITING and
+// IDLE remain eligible. A successor execution, a turn whose captured prompt
+// generation no longer matches, a terminal session, or an in-flight user
+// cancellation ends ownership. The caller must already hold the per-session
+// cancel-in-flight guard.
 func (s *Service) neverStartedStallSessionOwned(
+	ctx context.Context,
 	payload agentruntime.AgentStalledPayload,
+	turnID string,
 	session *models.TaskSession,
 ) bool {
-	if session == nil || session.State != models.TaskSessionStateRunning {
+	if session == nil {
+		return false
+	}
+	switch session.State {
+	case models.TaskSessionStateRunning, models.TaskSessionStateWaitingForInput, models.TaskSessionStateIdle:
+	default:
 		return false
 	}
 	if session.AgentExecutionID != "" && session.AgentExecutionID != payload.AgentExecutionID {
@@ -380,19 +480,40 @@ func (s *Service) neverStartedStallSessionOwned(
 	if s.isCancelInFlight(payload.SessionID) {
 		return false
 	}
-	owner, ok := s.agentManager.(interface {
-		OwnsPromptGeneration(sessionID, executionID string, generation uint64) bool
-	})
-	return ok && payload.PromptGeneration != 0 && owner.OwnsPromptGeneration(
-		payload.SessionID, payload.AgentExecutionID, payload.PromptGeneration,
-	)
+	return s.neverStartedStallTurnOwned(ctx, payload, turnID)
+}
+
+// neverStartedStallTurnOwned requires the captured turn to still be the
+// session's open, active turn carrying the prompt generation stamped at stall
+// time. A successor prompt (a different active turn), a re-dispatched
+// generation, or a completed turn (a user cancel, a settled replay, or an
+// abandoned resume) ends the stall's ownership of the session.
+func (s *Service) neverStartedStallTurnOwned(
+	ctx context.Context,
+	payload agentruntime.AgentStalledPayload,
+	turnID string,
+) bool {
+	if s.turnService == nil || turnID == "" {
+		return false
+	}
+	turn, err := s.turnService.GetTurn(ctx, turnID)
+	if err != nil || turn == nil || turn.CompletedAt != nil || turn.TaskSessionID != payload.SessionID {
+		return false
+	}
+	stamped, _ := turn.Metadata[neverStartedMetaPromptGen].(string)
+	if stamped != strconv.FormatUint(payload.PromptGeneration, 10) {
+		return false
+	}
+	active, err := s.turnService.GetActiveTurn(ctx, payload.SessionID)
+	return err == nil && active != nil && active.ID == turnID
 }
 
 // fallBackNeverStartedStall applies the fail-closed outcome: the session and
 // task transition to FAILED with the stall error, and the fallback notice is
 // posted. The uncertain SQL submission and its open block stay untouched. The
-// write runs under the same guarded revalidation as the recovered outcome, so
-// a session a user already reclaimed during settlement is not overwritten.
+// write runs under the same durable revalidation as the recovered outcome —
+// a session the prompt error path reverted to WAITING_FOR_INPUT can still be
+// recorded FAILED, while a successor or terminal session is not overwritten.
 func (s *Service) fallBackNeverStartedStall(
 	ctx context.Context,
 	payload agentruntime.AgentStalledPayload,
@@ -403,7 +524,7 @@ func (s *Service) fallBackNeverStartedStall(
 	lock.Lock()
 	defer lock.Unlock()
 	session, err := s.repo.GetTaskSession(ctx, payload.SessionID)
-	if err != nil || !s.neverStartedStallSessionOwned(payload, session) {
+	if err != nil || !s.neverStartedStallSessionOwned(ctx, payload, turnID, session) {
 		s.logger.Info("skipping never-started stall fallback writes; the session changed during settlement",
 			zap.String("task_id", payload.TaskID),
 			zap.String("session_id", payload.SessionID))
