@@ -24,6 +24,11 @@ func nativeResumeSQLRows(ctx context.Context, execution *AgentExecution, status 
 		if seen[submission.ID] || submission.State != journal.SubmissionInterruptedUnknown {
 			continue
 		}
+		// A retired record without retained terminal evidence belongs to a
+		// settled abandoned delivery; it carries no proof this path can use.
+		if submission.Retired && (!submission.TerminalEventRetained || submission.TerminalSequence == 0) {
+			continue
+		}
 		row, err := nativeResumeSubmissionMetadata(ctx, repository, submission.ID)
 		if err != nil {
 			return nil, err
