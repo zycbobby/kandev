@@ -607,15 +607,23 @@ func (c *Client) StreamUpdatesFrom(ctx context.Context, handler func(AgentEvent)
 		return writeErr
 	}
 
+	// The stream owns a child lifetime so the keepalive pump stops when this
+	// connection ends, not only when the runtime-bound context is cancelled.
+	streamLifetime, stopStream := context.WithCancel(streamCtx)
+	abortStream := func() {
+		_ = conn.Close()
+		stopStream()
+	}
 	pingDone := make(chan struct{})
 	go func() {
 		defer close(pingDone)
-		agentstream.RunPingPump(streamCtx, conn, health, cancel, pingInterval, pongTimeout, writeDeadline)
+		agentstream.RunPingPump(streamLifetime, conn, health, abortStream, pingInterval, pongTimeout, writeDeadline)
 	}()
 	go func() {
-		c.readUpdatesStream(streamCtx, conn, handler, mcpHandler, onDisconnect, writeMessage, health, readDeadline)
-		cancel()
+		c.readUpdatesStream(streamLifetime, conn, handler, mcpHandler, onDisconnect, writeMessage, health, readDeadline)
+		stopStream()
 		<-pingDone
+		cancel()
 	}()
 
 	return nil
