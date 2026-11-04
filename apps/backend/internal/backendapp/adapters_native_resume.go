@@ -11,6 +11,13 @@ func (a *lifecycleAdapter) AcknowledgeNativeResumeDelivery(ctx context.Context, 
 	return a.mgr.AcknowledgeNativeResumeDelivery(ctx, sessionID)
 }
 
+func (a *lifecycleAdapter) RetireDeliveryRecordSubmissions(
+	ctx context.Context,
+	request runtimeapi.DeliveryRecordRetirementRequest,
+) (*runtimeapi.DeliveryRecordRetirementResult, error) {
+	return a.mgr.RetireDeliveryRecordSubmissions(ctx, request)
+}
+
 func (a *lifecycleAdapter) ReconcileAlreadyResumedDelivery(ctx context.Context, identity runtimeapi.AgentDeliveryRecoveryIdentity, nativeID string) (bool, error) {
 	return a.mgr.ReconcileAlreadyResumedDelivery(ctx, identity, nativeID)
 }

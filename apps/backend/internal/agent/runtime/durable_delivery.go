@@ -13,6 +13,13 @@ type DurableDeliveryMode = lifecycle.DurableDeliveryMode
 type DurableDeliveryDecision = lifecycle.DurableDeliveryDecision
 type DurableDeliveryCapability = lifecycle.DurableDeliveryCapability
 
+// DeliveryRecordRetirementTarget, DeliveryRecordRetirementRequest, and
+// DeliveryRecordRetirementResult expose the backend-owned retirement effect
+// through the runtime seam used by orchestration.
+type DeliveryRecordRetirementTarget = lifecycle.DeliveryRecordRetirementTarget
+type DeliveryRecordRetirementRequest = lifecycle.DeliveryRecordRetirementRequest
+type DeliveryRecordRetirementResult = lifecycle.DeliveryRecordRetirementResult
+
 // DurableDeliveryCapabilityReader exposes the negotiated peer protocol to
 // admission callers that need to persist the matching canonical submission.
 type DurableDeliveryCapabilityReader interface {
