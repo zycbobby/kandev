@@ -47,12 +47,13 @@ var (
 )
 
 var (
-	bucketMeta        = []byte("meta")
-	bucketEvents      = []byte("events")
-	bucketStreamMeta  = []byte("stream_meta")
-	bucketSubmissions = []byte("submissions")
-	keyVersion        = []byte("version")
-	keyJournalBytes   = []byte("journal_bytes")
+	bucketMeta           = []byte("meta")
+	bucketEvents         = []byte("events")
+	bucketStreamMeta     = []byte("stream_meta")
+	bucketSubmissions    = []byte("submissions")
+	bucketPendingSignals = []byte("pending_signals")
+	keyVersion           = []byte("version")
+	keyJournalBytes      = []byte("journal_bytes")
 )
 
 type Config struct {
@@ -350,7 +351,7 @@ func calculateJournalAccounting(tx *bolt.Tx) (total, legacyEventOnly int64, err 
 }
 
 func createJournalBuckets(tx *bolt.Tx) error {
-	for _, name := range [][]byte{bucketEvents, bucketStreamMeta, bucketSubmissions} {
+	for _, name := range [][]byte{bucketEvents, bucketStreamMeta, bucketSubmissions, bucketPendingSignals} {
 		if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 			return err
 		}
