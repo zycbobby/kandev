@@ -43,6 +43,31 @@ func (r AgentStreamDisconnectReason) Valid() bool {
 	}
 }
 
+// Transport thresholds. They are shared so both ends detect a half-open
+// connection with the same timing:
+//
+//   - PingInterval (30s) keeps NAT and proxy bindings warm during long agent
+//     turns and must stay well below PongTimeout so one lost ping is not a
+//     disconnect.
+//   - PongTimeout (90s) is the maximum age of the last observed pong, i.e.
+//     three missed pings.
+//   - ReadDeadline (2 * PongTimeout) is a backstop behind the ping pump: a
+//     dead pump still surfaces the stream as dead. It is refreshed by pongs.
+//   - WriteDeadline (10s) bounds one websocket frame so a stalled peer
+//     surfaces as write_timeout instead of blocking the writer forever.
+//   - EventQueueMaxItems/EventQueueMaxBytes bound reader-side retention when
+//     the event handler stalls. A full queue closes the stream and the
+//     durable journal replays the events after reconnect.
+const (
+	PingInterval  = 30 * time.Second
+	PongTimeout   = 90 * time.Second
+	WriteDeadline = 10 * time.Second
+	ReadDeadline  = 2 * PongTimeout
+
+	EventQueueMaxItems = 4096
+	EventQueueMaxBytes = 4 << 20
+)
+
 // DisconnectError carries the typed reason a stream ended. It wraps the
 // underlying transport error so callers can still classify it with errors.Is.
 type DisconnectError struct {

@@ -39,13 +39,14 @@ const (
 	mcpPathHTTP         = "/mcp"
 )
 
-// Agent stream transport bounds. They are variables only so transport tests
-// can shorten them; production code captures them once per stream at start.
+// Agent stream transport bounds. They default to the shared agentstream
+// contract and are variables only so transport tests can shorten them;
+// production code captures them once per stream at start.
 var (
-	agentStreamPingInterval  = 30 * time.Second
-	agentStreamPongTimeout   = 90 * time.Second
-	agentStreamReadDeadline  = 180 * time.Second
-	agentStreamWriteDeadline = 10 * time.Second
+	agentStreamPingInterval  = agentstream.PingInterval
+	agentStreamPongTimeout   = agentstream.PongTimeout
+	agentStreamReadDeadline  = agentstream.ReadDeadline
+	agentStreamWriteDeadline = agentstream.WriteDeadline
 )
 
 // InitializeRequest is a request to initialize the agent session.

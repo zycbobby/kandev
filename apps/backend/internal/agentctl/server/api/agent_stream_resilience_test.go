@@ -24,6 +24,21 @@ import (
 	ws "github.com/kandev/kandev/pkg/websocket"
 )
 
+func TestAgentStreamTransportBoundsMatchSharedContract(t *testing.T) {
+	if agentStreamPingInterval != agentstream.PingInterval {
+		t.Fatalf("ping interval = %v, want shared %v", agentStreamPingInterval, agentstream.PingInterval)
+	}
+	if agentStreamPongTimeout != agentstream.PongTimeout {
+		t.Fatalf("pong timeout = %v, want shared %v", agentStreamPongTimeout, agentstream.PongTimeout)
+	}
+	if agentStreamReadDeadline != agentstream.ReadDeadline {
+		t.Fatalf("read deadline = %v, want shared %v", agentStreamReadDeadline, agentstream.ReadDeadline)
+	}
+	if agentStreamWriteDeadline != agentstream.WriteDeadline {
+		t.Fatalf("write deadline = %v, want shared %v", agentStreamWriteDeadline, agentstream.WriteDeadline)
+	}
+}
+
 // TestAgentStreamWriteDeadlineAppliesToEveryWrite drives the production write
 // closure against a peer that never reads. The connection's buffers are
 // shrunk so the first large frame blocks and the write deadline must surface

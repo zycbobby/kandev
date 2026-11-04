@@ -47,6 +47,30 @@ func TestAgentStreamReasonConstants(t *testing.T) {
 	}
 }
 
+func TestAgentStreamTransportBoundsAreCalibrated(t *testing.T) {
+	if PingInterval != 30*time.Second {
+		t.Fatalf("PingInterval = %v, want 30s", PingInterval)
+	}
+	if PongTimeout != 90*time.Second {
+		t.Fatalf("PongTimeout = %v, want 90s", PongTimeout)
+	}
+	if WriteDeadline != 10*time.Second {
+		t.Fatalf("WriteDeadline = %v, want 10s", WriteDeadline)
+	}
+	if ReadDeadline != 2*PongTimeout {
+		t.Fatalf("ReadDeadline = %v, want 2x PongTimeout", ReadDeadline)
+	}
+	if PingInterval >= PongTimeout {
+		t.Fatalf("PingInterval %v must stay below PongTimeout %v", PingInterval, PongTimeout)
+	}
+	if PongTimeout >= ReadDeadline {
+		t.Fatalf("PongTimeout %v must stay below ReadDeadline %v so the ping pump reports first", PongTimeout, ReadDeadline)
+	}
+	if EventQueueMaxItems <= 0 || EventQueueMaxBytes <= 0 {
+		t.Fatalf("event queue bounds = %d/%d, want positive", EventQueueMaxItems, EventQueueMaxBytes)
+	}
+}
+
 func TestAgentStreamHealthRecordsFirstReason(t *testing.T) {
 	health := NewHealth()
 	health.SetReason(AgentStreamReasonWriteTimeout)

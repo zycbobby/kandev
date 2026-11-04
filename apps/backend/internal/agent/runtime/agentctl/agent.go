@@ -841,16 +841,17 @@ type agentEventQueue struct {
 	closed    bool
 }
 
-// Agent stream transport bounds. They are variables only so transport tests
-// can shorten them; production captures the values once when a stream starts.
+// Agent stream transport bounds. They default to the shared agentstream
+// contract; tests shorten them through these variables. Production captures
+// the values once when a stream starts.
 var (
-	agentStreamPingInterval  = 30 * time.Second
-	agentStreamPongTimeout   = 90 * time.Second
-	agentStreamReadDeadline  = 180 * time.Second
-	agentStreamWriteDeadline = 10 * time.Second
+	agentStreamPingInterval  = agentstream.PingInterval
+	agentStreamPongTimeout   = agentstream.PongTimeout
+	agentStreamReadDeadline  = agentstream.ReadDeadline
+	agentStreamWriteDeadline = agentstream.WriteDeadline
 
-	maxAgentEventQueueItems = 4096
-	maxAgentEventQueueBytes = 4 << 20
+	maxAgentEventQueueItems = agentstream.EventQueueMaxItems
+	maxAgentEventQueueBytes = agentstream.EventQueueMaxBytes
 )
 
 // ErrAgentEventQueueFull indicates that the bounded reader-side event queue

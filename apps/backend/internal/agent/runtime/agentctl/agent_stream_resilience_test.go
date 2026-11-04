@@ -17,6 +17,27 @@ import (
 	ws "github.com/kandev/kandev/pkg/websocket"
 )
 
+func TestAgentStreamTransportBoundsMatchSharedContract(t *testing.T) {
+	if agentStreamPingInterval != agentstream.PingInterval {
+		t.Fatalf("ping interval = %v, want shared %v", agentStreamPingInterval, agentstream.PingInterval)
+	}
+	if agentStreamPongTimeout != agentstream.PongTimeout {
+		t.Fatalf("pong timeout = %v, want shared %v", agentStreamPongTimeout, agentstream.PongTimeout)
+	}
+	if agentStreamReadDeadline != agentstream.ReadDeadline {
+		t.Fatalf("read deadline = %v, want shared %v", agentStreamReadDeadline, agentstream.ReadDeadline)
+	}
+	if agentStreamWriteDeadline != agentstream.WriteDeadline {
+		t.Fatalf("write deadline = %v, want shared %v", agentStreamWriteDeadline, agentstream.WriteDeadline)
+	}
+	if maxAgentEventQueueItems != agentstream.EventQueueMaxItems {
+		t.Fatalf("event queue items = %d, want shared %d", maxAgentEventQueueItems, agentstream.EventQueueMaxItems)
+	}
+	if maxAgentEventQueueBytes != agentstream.EventQueueMaxBytes {
+		t.Fatalf("event queue bytes = %d, want shared %d", maxAgentEventQueueBytes, agentstream.EventQueueMaxBytes)
+	}
+}
+
 func TestAgentStreamEventQueueFullTypedDisconnect(t *testing.T) {
 	setAgentStreamEventQueueLimit(t, 1)
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
