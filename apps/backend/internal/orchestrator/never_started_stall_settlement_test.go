@@ -748,3 +748,58 @@ func TestHandleAgentStalled_NeverStartedSupersededSkipsWrites(t *testing.T) {
 		}
 	})
 }
+
+// TestHandleAgentStalled_NeverStartedFailedRowWithoutEffectSkipsRetirement
+// covers the pre-retirement validation of the observed SQL source state: a
+// terminal failed row that does not carry the never-started settlement effect
+// must block before the journal retirement commits, so the retained journal
+// record is left untouched and the fail-closed fallback applies.
+func TestHandleAgentStalled_NeverStartedFailedRowWithoutEffectSkipsRetirement(t *testing.T) {
+	f := newNeverStartedStallFixture(t, "failed-no-effect", false)
+	_, err := f.repo.DB().ExecContext(f.ctx,
+		`UPDATE agent_delivery_submissions SET state = ?, outcome = ? WHERE id = ?`,
+		models.DeliverySubmissionFailed, string(models.DeliverySubmissionFailed), f.submissionID)
+	require.NoError(t, err)
+
+	f.svc.handleAgentStalled(f.ctx, f.payload)
+	f.awaitSettlementDrained(t)
+
+	require.Zero(t, f.manager.retireRequestCount(),
+		"a failed row without the settlement effect must block before journal retirement")
+
+	submission := f.requireSubmission(t)
+	require.Equal(t, models.DeliverySubmissionFailed, submission.State)
+	require.Equal(t, string(models.DeliverySubmissionFailed), submission.Outcome)
+	require.Equal(t, models.RecoveryBlockOpen, f.requireBlockState(t),
+		"the fallback must leave the open block authoritative")
+
+	session := f.requireSession(t)
+	require.Equal(t, models.TaskSessionStateFailed, session.State)
+	require.Contains(t, session.ErrorMessage, "provider stalled")
+	f.requireNoLaunch(t)
+}
+
+// TestNeverStartedStallOutcomeWritesHaveOwnBudget covers the outcome writes'
+// own bounded budget: when the outer stop + settlement window is exhausted
+// mid-settlement (here: cancelled during retirement, after the SQL identity
+// read), the fallback session/notice writes must still land instead of being
+// starved by the dead outer context.
+func TestNeverStartedStallOutcomeWritesHaveOwnBudget(t *testing.T) {
+	f := newNeverStartedStallFixture(t, "outcome-budget", false)
+	require.True(t, f.svc.stampNeverStartedStallTurnGeneration(f.ctx, f.payload, f.turnID),
+		"the test must reproduce startNeverStartedStallSettlement's durable turn stamp")
+	outerCtx, cancelOuter := context.WithCancel(f.ctx)
+	f.manager.onRetire = func(*lifecycle.NeverStartedDeliveryRetirementRequest) {
+		cancelOuter()
+	}
+
+	f.svc.runNeverStartedStallSettlement(outerCtx, f.payload, f.turnID)
+
+	session := f.requireSession(t)
+	require.Equal(t, models.TaskSessionStateFailed, session.State,
+		"the fallback outcome write must keep its own budget after the outer window is exhausted")
+	require.Contains(t, session.ErrorMessage, "provider stalled")
+	require.Len(t, f.messages.sessionMessages, 1,
+		"the fallback notice must be persisted under the outcome write's own budget")
+	f.requireNoLaunch(t)
+}

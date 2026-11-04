@@ -7628,7 +7628,11 @@ func (s *Service) finishPromptExecutorDispatch(
 		return nil, resumeErr
 	}
 	if publicationErr != nil {
-		if delivery != nil {
+		// A terminal row means the never-started stall settlement (or another
+		// terminal writer) already owns this submission's outcome; an
+		// interrupted_unknown transition or an unknown_prompt_outcome block
+		// here would re-fence a recovered session.
+		if delivery != nil && !s.deliverySubmissionTerminal(context.WithoutCancel(ctx), delivery.id) {
 			unknownErr := delivery.markInterrupted(
 				context.WithoutCancel(ctx), "prompt_publication_failed",
 			)
@@ -9833,9 +9837,13 @@ func (s *Service) handlePromptError(ctx context.Context, taskID, sessionID strin
 	}
 	// A settled never-started stall owns the session and turn writes for its
 	// prompt generation: the settlement marked the delivery submission
-	// terminal and recovered the session, so this late error must neither
-	// revert the state nor re-complete turns.
-	if s.promptErrorDefersToSettledDelivery(ctx) {
+	// terminal and recovered the session, so this late uncertain-delivery
+	// error must neither revert the state nor re-complete turns. Only the
+	// uncertain-delivery error defers: a settled submission with any other
+	// prompt error (e.g. the pre-intake admission rejection, whose settlement
+	// marks the submission failed) still needs this path's revert and REVIEW
+	// reconcile.
+	if s.promptErrorDefersToSettledDelivery(ctx, err) {
 		return err
 	}
 	// Revert session state so it doesn't stay stuck in RUNNING. Route through the
@@ -9871,10 +9879,15 @@ func (s *Service) handlePromptError(ctx context.Context, taskID, sessionID strin
 
 // promptErrorDefersToSettledDelivery reports whether the prompt error path
 // must leave the session and turn writes to a delivery settlement that
-// already made this prompt's submission terminal. The submission ID reaches
-// this guard through the failure context; without one the legacy behavior
-// applies.
-func (s *Service) promptErrorDefersToSettledDelivery(ctx context.Context) bool {
+// already made this prompt's submission terminal. Only the
+// uncertain-delivery error defers: it is the error the force-stopped prompt
+// of a settled never-started stall surfaces, and that settlement owns the
+// session writes. The submission ID reaches this guard through the failure
+// context; without one the legacy behavior applies.
+func (s *Service) promptErrorDefersToSettledDelivery(ctx context.Context, err error) bool {
+	if !errors.Is(err, lifecycle.ErrUncertainPromptDelivery) {
+		return false
+	}
 	submissionID := promptDeliverySubmissionIDFromContext(ctx)
 	if submissionID == "" {
 		return false

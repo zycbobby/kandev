@@ -411,3 +411,56 @@ func parseProviderStallSettlementKey(key string) (outcome, reason string, ok boo
 	}
 	return outcome, reason, outcome != ""
 }
+
+// TestNeverStartedStallIdentityMissingBlockedMetric covers the eligibility
+// path's observability contract: a never-started payload whose delivery
+// identity or runtime proof is incomplete (common during a mixed-fleet rollout)
+// records blocked/identity_missing before routing to the legacy terminal
+// handling, while a scope rejection of a payload with a complete identity
+// (here: a passthrough session) must not increment any blocked counter.
+func TestNeverStartedStallIdentityMissingBlockedMetric(t *testing.T) {
+	t.Run("missing delivery identity records blocked identity_missing", func(t *testing.T) {
+		f := newNeverStartedStallFixture(t, "identity-metric-missing", false)
+		payload := f.payload
+		payload.DeliveryStreamID = ""
+		before := providerStallSettlementCount(providerStallOutcomeBlocked, providerStallBlockedIdentityMissing)
+
+		f.svc.handleAgentStalled(f.ctx, payload)
+
+		require.Equal(t, int64(1),
+			providerStallSettlementCount(providerStallOutcomeBlocked, providerStallBlockedIdentityMissing)-before,
+			"an incomplete delivery identity must record blocked/identity_missing")
+		require.Equal(t, models.TaskSessionStateFailed, f.requireSession(t).State,
+			"the payload still routes to the legacy terminal handling")
+		require.Zero(t, f.manager.retireRequestCount())
+	})
+
+	t.Run("passthrough session with complete identity does not increment", func(t *testing.T) {
+		f := newNeverStartedStallFixture(t, "identity-metric-passthrough", false)
+		session := f.requireSession(t)
+		session.IsPassthrough = true
+		require.NoError(t, f.repo.UpdateTaskSession(f.ctx, session))
+		beforeMissing := providerStallSettlementCount(providerStallOutcomeBlocked, providerStallBlockedIdentityMissing)
+		beforeBlocked := providerStallBlockedTotal()
+
+		f.svc.handleAgentStalled(f.ctx, f.payload)
+
+		require.Equal(t, int64(0),
+			providerStallSettlementCount(providerStallOutcomeBlocked, providerStallBlockedIdentityMissing)-beforeMissing,
+			"a scope rejection with a complete identity must not record identity_missing")
+		require.Equal(t, int64(0), providerStallBlockedTotal()-beforeBlocked,
+			"a scope rejection with a complete identity must not record any blocked outcome")
+		require.Equal(t, models.TaskSessionStateFailed, f.requireSession(t).State,
+			"the passthrough session still routes to the legacy terminal handling")
+	})
+}
+
+// providerStallBlockedTotal sums every blocked reason counter, so a test can
+// prove a path recorded no blocked outcome at all rather than only one reason.
+func providerStallBlockedTotal() int64 {
+	var total int64
+	for reason := range providerStallBlockedReasons {
+		total += providerStallSettlementCount(providerStallOutcomeBlocked, reason)
+	}
+	return total
+}

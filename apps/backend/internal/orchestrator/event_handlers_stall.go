@@ -130,16 +130,23 @@ func (s *Service) handleAgentStalled(ctx context.Context, payload lifecycle.Agen
 // settlement scope run the detached teardown + settlement, which settles the
 // durable submission and recovers the session; a settlement that cannot even
 // capture its durable identity on the turn, and everything outside the scope,
-// keeps the legacy synchronous terminal handling.
+// keeps the legacy synchronous terminal handling. A payload whose
+// delivery identity or runtime proof is incomplete (a mixed-fleet rollout)
+// records blocked/identity_missing before that legacy routing; scope and seam
+// rejections of payloads with a complete identity stay unrecorded, matching
+// the settlement error table.
 func (s *Service) handleNeverStartedStall(
 	ctx context.Context,
 	payload lifecycle.AgentStalledPayload,
 	session *models.TaskSession,
 	turnID string,
 ) {
-	if s.neverStartedStallSettlementEligible(ctx, payload, session) &&
-		s.startNeverStartedStallSettlement(ctx, payload, turnID) {
-		return
+	if s.neverStartedStallSettlementEligible(ctx, payload, session) {
+		if s.startNeverStartedStallSettlement(ctx, payload, turnID) {
+			return
+		}
+	} else if !neverStartedStallDeliveryIdentityComplete(payload) {
+		providerStallBlocked(providerStallBlockedIdentityMissing)
 	}
 	s.recordLegacyNeverStartedStall(ctx, payload, session, turnID)
 }

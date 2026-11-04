@@ -24,6 +24,12 @@ const (
 	// neverStartedSettlementTimeout bounds the journal retirement plus the
 	// SQL settlement attempt of one never-started stall.
 	neverStartedSettlementTimeout = 20 * time.Second
+	// neverStartedOutcomeWriteTimeout bounds the session, turn, notice, and
+	// task writes of the recovered and fallback outcomes. It is derived from
+	// the caller without cancellation: the stop and settlement windows may
+	// already be exhausted by a slow teardown, while the outcome writes must
+	// still land after the delivery settlement committed.
+	neverStartedOutcomeWriteTimeout = 10 * time.Second
 	// neverStartedStallAutoResumeBudget bounds the single auto-resume attempt
 	// so a wedged launch can never pin the detached settlement goroutine past
 	// the resume path's own readiness waits.
@@ -60,6 +66,16 @@ func neverStartedStallSettlementKey(payload agentruntime.AgentStalledPayload) st
 		strconv.FormatUint(payload.PromptGeneration, 10)
 }
 
+// neverStartedStallDeliveryIdentityComplete reports whether the stall payload
+// carries the full durable-delivery identity and original-runtime proof the
+// settlement path needs. A mixed-fleet rollout can publish never-started
+// stalls without it; those payloads route to the legacy terminal handling.
+func neverStartedStallDeliveryIdentityComplete(payload agentruntime.AgentStalledPayload) bool {
+	return payload.DeliverySubmissionID != "" && payload.DeliveryStreamID != "" &&
+		payload.DeliveryIncarnationID != "" && payload.DeliveryHarnessGeneration != 0 &&
+		payload.OriginalRuntime.Validate() == nil
+}
+
 // neverStartedStallSettlementEligible reports whether a never-started stall
 // may take the recoverable settlement path. The payload must carry the exact
 // durable-delivery identity and runtime proof, the session must be an
@@ -74,9 +90,7 @@ func (s *Service) neverStartedStallSettlementEligible(
 	if session == nil || session.IsPassthrough {
 		return false
 	}
-	if payload.DeliverySubmissionID == "" || payload.DeliveryStreamID == "" ||
-		payload.DeliveryIncarnationID == "" || payload.DeliveryHarnessGeneration == 0 ||
-		payload.OriginalRuntime.Validate() != nil {
+	if !neverStartedStallDeliveryIdentityComplete(payload) {
 		return false
 	}
 	if _, ok := s.agentManager.(neverStartedDeliveryRetirer); !ok {
@@ -168,12 +182,21 @@ func (s *Service) runNeverStartedStallSettlement(
 	cancelStop()
 	outcome := s.settleNeverStartedStall(ctx, payload, payload.OriginalRuntime, turnID)
 	if !outcome.settled {
-		s.fallBackNeverStartedStall(ctx, payload, turnID)
+		outcomeCtx, cancelOutcome := neverStartedOutcomeWriteContext(ctx)
+		defer cancelOutcome()
+		s.fallBackNeverStartedStall(outcomeCtx, payload, turnID)
 		return
 	}
 	if outcome.recovered {
 		s.attemptNeverStartedStallAutoResume(ctx, payload.TaskID, payload.SessionID)
 	}
+}
+
+// neverStartedOutcomeWriteContext derives the outcome writes' own bounded
+// budget, detached from the caller's possibly exhausted stop + settlement
+// window.
+func neverStartedOutcomeWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), neverStartedOutcomeWriteTimeout)
 }
 
 // neverStartedStallOutcome reports the terminal result of one settlement.
@@ -219,6 +242,16 @@ func (s *Service) settleNeverStartedStall(
 			zap.Error(err))
 		return neverStartedStallOutcome{}
 	}
+	if !neverStartedStallSourceSettleable(ctx, rows, observed) {
+		providerStallBlocked(providerStallBlockedSQLFailed)
+		s.logger.Warn("never-started stall settlement skipped; the SQL submission state cannot be settled",
+			zap.String("task_id", payload.TaskID),
+			zap.String("session_id", payload.SessionID),
+			zap.String("submission_id", payload.DeliverySubmissionID),
+			zap.String("state", string(observed.State)),
+			zap.String("outcome", observed.Outcome))
+		return neverStartedStallOutcome{}
+	}
 	settleCtx, cancel := context.WithTimeout(ctx, neverStartedSettlementTimeout)
 	defer cancel()
 	if _, err := retirer.RetireNeverStartedDeliverySubmission(settleCtx, agentruntime.NeverStartedDeliveryRetirementRequest{
@@ -251,7 +284,57 @@ func (s *Service) settleNeverStartedStall(
 		return neverStartedStallOutcome{}
 	}
 	providerStallSettled(result.AlreadySettled)
-	return neverStartedStallOutcome{settled: true, recovered: s.applySettledNeverStartedStall(ctx, payload, turnID)}
+	outcomeCtx, cancelOutcome := neverStartedOutcomeWriteContext(ctx)
+	defer cancelOutcome()
+	return neverStartedStallOutcome{
+		settled:   true,
+		recovered: s.applySettledNeverStartedStall(outcomeCtx, payload, turnID),
+	}
+}
+
+// neverStartedStallSourceSettleable validates the observed SQL source state
+// before any journal write commits. The settlement consumes only the
+// still-live dispatch label or the prompt error path's uncertain outcome —
+// both without a terminal claim — or a failed row that already carries the
+// never-started settlement effect (a replay). Any other state, including a
+// failed row without the effect or a cancelled row, would be rejected by the
+// SQL transaction, so it blocks here, before the journal retirement.
+func neverStartedStallSourceSettleable(
+	ctx context.Context,
+	rows repository.AgentDeliveryRepository,
+	observed *models.AgentDeliverySubmission,
+) bool {
+	if observed.State == models.DeliverySubmissionFailed &&
+		observed.Outcome == string(models.DeliverySubmissionFailed) {
+		return neverStartedSettlementEffectMatches(ctx, rows, observed)
+	}
+	if observed.TerminalSequence != 0 || observed.FullySettledAt != nil {
+		return false
+	}
+	return (observed.State == models.DeliverySubmissionDispatching && observed.Outcome == "dispatching") ||
+		(observed.State == models.DeliverySubmissionInterruptedUnknown && observed.Outcome == "prompt_dispatch_failed")
+}
+
+// neverStartedSettlementEffectMatches reports whether the never-started
+// settlement effect for the observed submission exists and binds the exact
+// submission identity, mirroring the transaction's own replay validation.
+func neverStartedSettlementEffectMatches(
+	ctx context.Context,
+	rows repository.AgentDeliveryRepository,
+	observed *models.AgentDeliverySubmission,
+) bool {
+	effect, err := rows.GetAgentDeliveryEffect(ctx, models.DeliveryNeverStartedEffectKey(observed.ID))
+	if err != nil || effect == nil {
+		return false
+	}
+	return effect.EffectType == models.DeliveryNeverStartedEffectType &&
+		effect.State == models.DeliveryEffectCompleted &&
+		effect.StreamID == "" && effect.Sequence == 0 &&
+		effect.SessionID == observed.SessionID &&
+		effect.IncarnationID == observed.IncarnationID &&
+		effect.HarnessGeneration == observed.HarnessGeneration &&
+		effect.SubmissionID == observed.ID &&
+		effect.Outcome == string(models.DeliverySubmissionFailed)
 }
 
 // neverStartedStallSubmissionMatchesPayload requires the observed SQL row to
