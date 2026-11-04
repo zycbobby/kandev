@@ -75,6 +75,24 @@ The deploy script (`scripts/deploy-user-service.sh`) publishes to the live home 
 from the service definition (systemd unit, else launchd plist) and refuses `.kandev-dev` or
 checkout paths, so it will not clobber a dev instance.
 
+Before it replaces `runtime/bin`, the same script runs a read-only idle gate against the live
+SQLite database. It refuses the deploy when a non-archived task has a `STARTING`/`RUNNING`
+session, an in-flight durable submission (`prepared`, `accepted`, `dispatching`,
+`interrupted_unknown`), or an open recovery block, and prints the affected task IDs, titles,
+and reasons. It also refuses when the user service is active but its database is missing or
+unreadable, because idleness cannot be proven; a missing database with an inactive service is
+treated as a fresh install. A refusal happens before publication, install, and restart, so the
+live runtime stays untouched.
+
+When the gate refuses:
+
+- Prefer waiting for the listed work to finish, or run `kandev service stop` first.
+- If you are deploying from inside a running Kandev session, that session is itself active
+  work. Override deliberately with `DEPLOY_FORCE=1 make deploy` (or `make deploy
+  DEPLOY_FORCE=1`); the script prints `deploy idle gate skipped (--force)`.
+- `DEPLOY_FORCE=1` skips only the idle gate. Bundle validation, home isolation, install, and
+  restart still run, and `service-install` never receives `--force`.
+
 Self-check after the log shows success:
 
 ```bash

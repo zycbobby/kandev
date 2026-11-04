@@ -147,6 +147,8 @@ This draft defines proposed behavior. It does not claim that the current impleme
 - [Delivery record recovery design](../system-design/durable-agent-record-recovery.md).
 - [Missing delivery record fix package](../../../plans/durable-agent-record-recovery/plan.md).
 - [Pre-intake settlement and admission health design](../system-design/durable-agent-delivery-settlement.md).
+- [Abandoned delivery settlement requirements](durable-delivery-abandoned-settlement.md).
+- [Abandoned delivery settlement decision](../../decisions/2026-11-04-abandoned-delivery-settlement.md).
 
 ## Out of scope
 

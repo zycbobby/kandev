@@ -60,3 +60,8 @@ owner is safely recoverable, even when recovery bookkeeping is inconsistent.
 
 - [Convergence design](../system-design/session-recovery-convergence.md).
 - [Convergence implementation](../../../plans/session-recovery-convergence/plan.md).
+- [Abandoned delivery settlement](../system-design/durable-agent-delivery-settlement.md)
+  defines the explicit retry acknowledgement path for 002.2 and 002.3. It
+  retires exact unproven journal history only after complete authenticated
+  inventory and owner death proof, and it never invents completion,
+  cancellation, or a redispatch.
