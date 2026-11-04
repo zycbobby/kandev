@@ -434,6 +434,9 @@ func (s *Server) runAgentStreamWriterWithJournalReplay(ctx context.Context, conn
 			s.logger.Debug("failed to close agent stream websocket", zap.Error(err))
 		}
 	}()
+	if !s.replayPendingSignals(streamID, writeMessage) {
+		return
+	}
 	if s.procMgr != nil {
 		if wakeups := s.procMgr.DeliveryWakeups(); wakeups != nil && deliveryStreamID != "" {
 			writer := durableAgentStreamWriter{
@@ -478,6 +481,9 @@ func (s *Server) runAgentStreamWriterWithReplay(ctx context.Context, conn *webso
 			s.logger.Debug("failed to close agent stream websocket", zap.Error(err))
 		}
 	}()
+	if !s.replayPendingSignals(streamID, writeMessage) {
+		return
+	}
 	relay := agentStreamMCPRelay{requests: mcpRequestCh, streamID: streamID}
 	for _, notification := range replay {
 		if !relay.service(s, writeMessage) {
@@ -745,6 +751,31 @@ func (s *Server) writeAgentStreamNotification(notification adapter.AgentEvent, w
 	if err := writeMessage(data); err != nil {
 		s.logger.Debug("failed to write agent notification", zap.Bool("replay", replay), zap.Error(err))
 		return false
+	}
+	return true
+}
+
+// replayPendingSignals writes one bounded page of captured idempotent signals
+// before live traffic. Replay uses the same write path (and therefore the same
+// bounded write deadline and request/stream binding) as a live MCP request.
+// A store failure is non-fatal: the records stay captured for the next
+// connection. A write failure ends the stream writer.
+func (s *Server) replayPendingSignals(streamID string, writeMessage func([]byte) error) bool {
+	if s.mcpBackendClient == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), agentStreamWriteDeadline)
+	defer cancel()
+	requests, err := s.mcpBackendClient.PendingSignalReplayBatch(ctx)
+	if err != nil {
+		s.logger.Warn("failed to load captured signals for replay", zap.Error(err))
+		return true
+	}
+	for _, request := range requests {
+		if !s.writeAgentStreamMCPRequest(request, streamID, writeMessage) {
+			agentstream.RecordSignalReplay("write_failed")
+			return false
+		}
 	}
 	return true
 }

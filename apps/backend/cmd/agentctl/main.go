@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kandev/kandev/internal/agentctl/journal"
 	"github.com/kandev/kandev/internal/agentctl/server/adapter/transport/shared"
 	"github.com/kandev/kandev/internal/agentctl/server/api"
 	"github.com/kandev/kandev/internal/agentctl/server/config"
@@ -218,6 +219,12 @@ func run(cfg *config.Config, log *logger.Logger) {
 		// Create MCP backend client for bidirectional communication through agent stream
 		// MCP requests from agents are sent through the agent stream WebSocket to the backend
 		mcpBackendClient := mcpserver.NewChannelBackendClient(instLog)
+		// Idempotent workflow signals are captured in the agentctl journal
+		// before they are published, so a dropped response is replayable
+		// without depending on backend SQLite writer state.
+		mcpBackendClient.SetPendingSignalStore(func() (journal.PendingSignalStore, error) {
+			return procMgr.DeliveryJournal()
+		})
 
 		// Create MCP server using the channel-based backend client
 		var mcpSrv *mcpserver.Server

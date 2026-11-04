@@ -66,6 +66,13 @@ const (
 
 	EventQueueMaxItems = 4096
 	EventQueueMaxBytes = 4 << 20
+
+	// SignalDeliveryWindow bounds how long a captured idempotent workflow
+	// signal may stay unconfirmed before agentctl emits one durable
+	// completion-pending notice. It is deliberately several times the MCP
+	// request send budget so a slow backend write is still reported as a
+	// delivery delay rather than inferred from the agent's tool result.
+	SignalDeliveryWindow = 60 * time.Second
 )
 
 // DisconnectError carries the typed reason a stream ended. It wraps the

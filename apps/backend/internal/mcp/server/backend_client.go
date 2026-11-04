@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kandev/kandev/internal/agentctl/journal"
 	"github.com/kandev/kandev/internal/common/agentstream"
 	"github.com/kandev/kandev/internal/common/logger"
 	mcporigin "github.com/kandev/kandev/internal/mcp/origin"
@@ -59,6 +60,12 @@ type ChannelBackendClient struct {
 	closed    bool
 	publishWG sync.WaitGroup
 	logger    *logger.Logger
+
+	// signalStoreMu guards the durable capture provider and notice scheduler.
+	// Store I/O never runs under this lock.
+	signalStoreMu   sync.RWMutex
+	signalStore     func() (journal.PendingSignalStore, error)
+	signalScheduler SignalDeliveryScheduler
 }
 
 // NewChannelBackendClient creates a new channel-based backend client.
@@ -93,6 +100,11 @@ func (c *ChannelBackendClient) SetSessionID(sessionID string) {
 // This should be called by the agent stream handler when it receives a response.
 func (c *ChannelBackendClient) HandleResponse(msg *ws.Message) {
 	if c.completeRequest(msg.ID, backendResponse{message: msg}) {
+		return
+	}
+	// A replayed signal has no waiting producer. The response still confirms
+	// delivery, so mark it before treating the response as unmatched.
+	if c.confirmSignalDelivered(msg.ID) {
 		return
 	}
 	c.logger.Debug("dropping MCP response with no pending request",
@@ -162,7 +174,15 @@ func (c *ChannelBackendClient) completeRequest(requestID string, response backen
 // RequestPayload sends a request to the backend and unmarshals the response.
 // The request will be cancelled if the context is cancelled or if Reset() is called.
 func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string, payload, result interface{}) error {
+	captured := isIdempotentSignalAction(action)
 	if !c.beginPublish() {
+		if captured {
+			return &SignalDeliveryError{
+				Code:      SignalCaptureUnavailableCode,
+				Message:   fmt.Sprintf("%s was not sent because the MCP backend client is closed", action),
+				Retryable: true,
+			}
+		}
 		return fmt.Errorf("MCP backend client is closed")
 	}
 	publishing := true
@@ -183,10 +203,21 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 		mcporigin.AttachTrustedInternalCall(msg)
 	}
 
+	c.pendingMu.Lock()
+	sessionID := c.sessionID
+	c.pendingMu.Unlock()
+
+	// Capture before publication: the record must exist before the request can
+	// be lost, so a missing response is always replayable.
+	if captured {
+		if err := c.captureSignal(ctx, id, action, sessionID, msg.Payload); err != nil {
+			return err
+		}
+	}
+
 	// Create response channel
 	respChan := make(chan backendResponse, 1)
 	c.pendingMu.Lock()
-	sessionID := c.sessionID
 	c.pending[id] = &pendingRequest{result: respChan, sessionID: sessionID}
 	c.pendingMu.Unlock()
 
@@ -208,7 +239,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 	case c.requestCh <- msg:
 		// Request sent
 	case <-c.done:
-		return fmt.Errorf("MCP backend client is closed")
+		return signalDeliveryFailure(captured, action, fmt.Errorf("MCP backend client is closed"))
 	case <-ctx.Done():
 		c.logger.Debug("MCP request cancelled before send",
 			zap.String("request_id", id),
@@ -216,7 +247,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 			zap.String("session_id", sessionID),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(ctx.Err()))
-		return ctx.Err()
+		return signalDeliveryFailure(captured, action, ctx.Err())
 	case <-time.After(5 * time.Second):
 		c.logger.Warn("timed out sending MCP request to agent stream",
 			zap.String("request_id", id),
@@ -227,7 +258,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 		// was blocked (typically on a stalled frame write) for the whole
 		// budget. Count it as a typed transport failure.
 		agentstream.RecordMCPRequestFailure(agentstream.AgentStreamReasonWriteTimeout)
-		return fmt.Errorf("timeout sending request to agent stream")
+		return signalDeliveryFailure(captured, action, fmt.Errorf("timeout sending request to agent stream"))
 	}
 	publishing = false
 	c.publishWG.Done()
@@ -242,9 +273,14 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 				zap.String("session_id", response.sessionID),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(response.err))
-			return response.err
+			return signalDeliveryFailure(captured, action, response.err)
 		}
 		resp := response.message
+		if captured {
+			// A backend response, including a typed terminal error, settles the
+			// captured record even when the originating call already returned.
+			c.confirmSignalDelivered(id)
+		}
 		c.logger.Debug("received MCP response from backend",
 			zap.String("request_id", id),
 			zap.String("action", action),
@@ -278,9 +314,9 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 			zap.String("action", action),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(ctx.Err()))
-		return ctx.Err()
+		return signalDeliveryFailure(captured, action, ctx.Err())
 	case <-c.done:
-		return fmt.Errorf("MCP backend client is closed")
+		return signalDeliveryFailure(captured, action, fmt.Errorf("MCP backend client is closed"))
 	}
 }
 
