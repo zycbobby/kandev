@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kandev/kandev/internal/common/agentstream"
 	"github.com/kandev/kandev/internal/common/logger"
 	mcporigin "github.com/kandev/kandev/internal/mcp/origin"
 	ws "github.com/kandev/kandev/pkg/websocket"
@@ -111,7 +112,9 @@ func (c *ChannelBackendClient) BindRequestToStream(requestID, streamID string) {
 
 // FailRequest releases one pending request after a transport failure.
 func (c *ChannelBackendClient) FailRequest(requestID string, err error) {
-	c.completeRequest(requestID, backendResponse{err: err})
+	if c.completeRequest(requestID, backendResponse{err: err}) {
+		recordMCPRequestFailure(err)
+	}
 }
 
 // FailStreamRequests releases requests delivered by one disconnected stream.
@@ -127,7 +130,16 @@ func (c *ChannelBackendClient) FailStreamRequests(streamID string, err error) {
 	c.pendingMu.Unlock()
 
 	for _, pending := range failed {
+		recordMCPRequestFailure(err)
 		pending.result <- backendResponse{err: err, sessionID: pending.sessionID}
+	}
+}
+
+// recordMCPRequestFailure counts one request lost to a transport failure. Only
+// typed reasons from the closed agent-stream set are labelled.
+func recordMCPRequestFailure(err error) {
+	if reason, ok := agentstream.ReasonOf(err); ok {
+		agentstream.RecordMCPRequestFailure(reason)
 	}
 }
 
@@ -211,6 +223,10 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 			zap.String("action", action),
 			zap.String("session_id", sessionID),
 			zap.Duration("duration", time.Since(start)))
+		// The producer's bounded send expired, which means the stream writer
+		// was blocked (typically on a stalled frame write) for the whole
+		// budget. Count it as a typed transport failure.
+		agentstream.RecordMCPRequestFailure(agentstream.AgentStreamReasonWriteTimeout)
 		return fmt.Errorf("timeout sending request to agent stream")
 	}
 	publishing = false

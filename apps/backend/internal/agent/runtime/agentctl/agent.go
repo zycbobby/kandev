@@ -14,6 +14,7 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/tracing"
 	"github.com/kandev/kandev/internal/agentctl/types"
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
+	"github.com/kandev/kandev/internal/common/agentstream"
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 	protocol "github.com/kandev/kandev/pkg/codexappserver"
 	ws "github.com/kandev/kandev/pkg/websocket"
@@ -578,16 +579,43 @@ func (c *Client) StreamUpdatesFrom(ctx context.Context, handler func(AgentEvent)
 
 	c.logger.Info("connected to updates stream", zap.String("path", wsRoute))
 
-	// writeMessage uses the shared stream write mutex for thread-safe writes
+	health := agentstream.NewHealth()
+	pingInterval, pongTimeout := agentStreamPingInterval, agentStreamPongTimeout
+	readDeadline, writeDeadline := agentStreamReadDeadline, agentStreamWriteDeadline
+
+	// writeMessage uses the shared stream write mutex for thread-safe writes.
+	// Every frame carries the stream write deadline so a peer that stopped
+	// reading fails the write instead of blocking the caller forever.
 	writeMessage := func(data []byte) error {
 		c.streamWriteMu.Lock()
 		defer c.streamWriteMu.Unlock()
-		return conn.WriteMessage(websocket.TextMessage, data)
+		if err := conn.SetWriteDeadline(time.Now().Add(writeDeadline)); err != nil {
+			c.logger.Debug("failed to set updates stream write deadline", zap.Error(err))
+		}
+		writeErr := conn.WriteMessage(websocket.TextMessage, data)
+		if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+			c.logger.Debug("failed to clear updates stream write deadline", zap.Error(err))
+		}
+		if writeErr != nil {
+			health.RecordWriteFailure(writeErr)
+			// A failed write leaves the websocket unusable; close it so the
+			// read loop observes the loss and the normal reconnect path runs.
+			if err := conn.Close(); err != nil {
+				c.logger.Debug("failed to close updates websocket after write failure", zap.Error(err))
+			}
+		}
+		return writeErr
 	}
 
+	pingDone := make(chan struct{})
 	go func() {
-		defer cancel()
-		c.readUpdatesStream(streamCtx, conn, handler, mcpHandler, onDisconnect, writeMessage)
+		defer close(pingDone)
+		agentstream.RunPingPump(streamCtx, conn, health, cancel, pingInterval, pongTimeout, writeDeadline)
+	}()
+	go func() {
+		c.readUpdatesStream(streamCtx, conn, handler, mcpHandler, onDisconnect, writeMessage, health, readDeadline)
+		cancel()
+		<-pingDone
 	}()
 
 	return nil
@@ -631,7 +659,18 @@ func (c *Client) readUpdatesStream(
 	mcpHandler MCPHandler,
 	onDisconnect func(err error),
 	writeMessage func([]byte) error,
+	health *agentstream.Health,
+	readDeadline time.Duration,
 ) {
+	// Pongs refresh the read deadline, so the stream detects a half-open
+	// connection through the ping pump instead of waiting for a TCP timeout.
+	if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+		c.logger.Debug("failed to set updates stream read deadline", zap.Error(err))
+	}
+	conn.SetPongHandler(func(string) error {
+		health.MarkPong()
+		return conn.SetReadDeadline(time.Now().Add(readDeadline))
+	})
 	// Ordered, single-worker dispatch preserves per-stream event ordering while
 	// decoupling handler execution from response-frame delivery.
 	events := newAgentEventQueue()
@@ -640,6 +679,12 @@ func (c *Client) readUpdatesStream(
 
 	var lastErr error
 	defer func() {
+		// Record the typed reason before draining the worker: the metric must
+		// be visible even when an in-flight handler is still unwinding.
+		if reason, ok := health.Reason(); ok {
+			agentstream.RecordDisconnect(reason)
+			c.logger.Warn("updates stream disconnected", zap.String("reason", string(reason)))
+		}
 		// Clean up this connection's pending requests BEFORE draining the worker. On a
 		// connection drop mid-cancel, a worker handler
 		// (orchestrator.handleAgentReady) can block acquiring the per-session
@@ -692,7 +737,14 @@ func (c *Client) readUpdatesStream(
 				// Normal close — don't report as disconnect error
 			} else {
 				c.logger.Debug("updates stream error", zap.Error(err))
-				lastErr = err
+				if ctx.Err() == nil {
+					health.RecordReadFailure(err)
+				}
+				if reason, ok := health.Reason(); ok {
+					lastErr = agentstream.NewDisconnectError(reason, err)
+				} else {
+					lastErr = err
+				}
 			}
 			return
 		}
@@ -742,10 +794,21 @@ func (c *Client) readUpdatesStream(
 		// A full bounded queue closes the stream so retained events can be
 		// replayed instead of growing process memory without limit.
 		if !events.enqueue(event) {
-			lastErr = errAgentEventQueueFull
+			health.SetReason(agentstream.AgentStreamReasonEventQueueFull)
+			lastErr = agentstream.NewDisconnectError(agentstream.AgentStreamReasonEventQueueFull, errAgentEventQueueFull)
+			closeAgentStreamWithReason(conn, agentstream.AgentStreamReasonEventQueueFull)
 			return
 		}
 	}
+}
+
+// closeAgentStreamWithReason tells the peer why this side is abandoning the
+// stream. The close frame is best effort: the connection is already unhealthy
+// whenever this runs.
+func closeAgentStreamWithReason(conn *websocket.Conn, reason agentstream.AgentStreamDisconnectReason) {
+	deadline := time.Now().Add(agentStreamWriteDeadline)
+	_ = conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, string(reason)), deadline)
 }
 
 // dispatchAgentEvents runs the agent-event handler sequentially for every event
@@ -778,8 +841,17 @@ type agentEventQueue struct {
 	closed    bool
 }
 
-const maxAgentEventQueueItems = 4096
-const maxAgentEventQueueBytes = 4 << 20
+// Agent stream transport bounds. They are variables only so transport tests
+// can shorten them; production captures the values once when a stream starts.
+var (
+	agentStreamPingInterval  = 30 * time.Second
+	agentStreamPongTimeout   = 90 * time.Second
+	agentStreamReadDeadline  = 180 * time.Second
+	agentStreamWriteDeadline = 10 * time.Second
+
+	maxAgentEventQueueItems = 4096
+	maxAgentEventQueueBytes = 4 << 20
+)
 
 // ErrAgentEventQueueFull indicates that the bounded reader-side event queue
 // could not accept another event. Durable callers reconnect from their
@@ -816,7 +888,9 @@ func (q *agentEventQueue) enqueue(event AgentEvent) bool {
 	}
 	q.items = append(q.items, queuedAgentEvent{event: event, bytes: eventBytes})
 	q.bytes += eventBytes
+	depth := len(q.items)
 	q.mu.Unlock()
+	agentstream.SetEventQueueDepth(depth)
 	select {
 	case q.notify <- struct{}{}:
 	default:
@@ -851,7 +925,9 @@ func (q *agentEventQueue) dequeue() (AgentEvent, bool) {
 			q.items[0] = queuedAgentEvent{}
 			q.items = q.items[1:]
 			q.bytes -= queued.bytes
+			depth := len(q.items)
 			q.mu.Unlock()
+			agentstream.SetEventQueueDepth(depth)
 			return queued.event, true
 		}
 		if q.closed {

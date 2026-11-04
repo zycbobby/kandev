@@ -20,6 +20,7 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/server/process/probe"
 	"github.com/kandev/kandev/internal/agentctl/types"
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
+	"github.com/kandev/kandev/internal/common/agentstream"
 	"github.com/kandev/kandev/internal/common/constants"
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 	protocol "github.com/kandev/kandev/pkg/codexappserver"
@@ -36,6 +37,15 @@ const (
 	mcpTransportHTTP    = "http"
 	mcpPathSSE          = "/sse"
 	mcpPathHTTP         = "/mcp"
+)
+
+// Agent stream transport bounds. They are variables only so transport tests
+// can shorten them; production code captures them once per stream at start.
+var (
+	agentStreamPingInterval  = 30 * time.Second
+	agentStreamPongTimeout   = 90 * time.Second
+	agentStreamReadDeadline  = 180 * time.Second
+	agentStreamWriteDeadline = 10 * time.Second
 )
 
 // InitializeRequest is a request to initialize the agent session.
@@ -224,32 +234,48 @@ func (s *Server) handleAgentStreamWS(c *gin.Context) {
 	// AC-EXECUTORS-CONTROL-OWNERSHIP-002.2: terminate this stream if the
 	// control server's credential rotates while it is open, so a prior
 	// holder cannot keep consuming an instance's events past the moment its
-	// credential is superseded. The channel comes from instanceAuth's
-	// context value, captured atomically with the request's own accept
-	// check -- not a fresh Invalidated() call here, which would be a second,
-	// independent lock acquisition racing a concurrent rotation.
-	if invalidated := credentialInvalidatedFromContext(c); invalidated != nil {
-		go func() {
-			select {
-			case <-invalidated:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-	}
+	// credential is superseded.
+	health := agentstream.NewHealth()
+	watchAgentStreamOwnerChange(c, ctx, health, cancel)
 
-	// Use a mutex for writing to the WebSocket
+	// Every stream frame is written under one mutex and one write deadline, so
+	// a peer that stops reading surfaces as a typed write_timeout instead of
+	// pinning the writer (and the MCP requests queued behind it) forever.
 	var writeMu sync.Mutex
-	writeMessage := func(data []byte) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return conn.WriteMessage(websocket.TextMessage, data)
+	writeMessage := s.newAgentStreamWriteMessage(conn, &writeMu, health)
+
+	s.runAgentStreamTransports(ctx, conn, streamID, after, writeMessage, health, cancel)
+
+	disconnectErr := s.recordAgentStreamDisconnect(health)
+	if s.mcpBackendClient != nil {
+		s.mcpBackendClient.FailStreamRequests(streamID, disconnectErr)
 	}
+}
 
-	// Get the session updates channel
+// watchAgentStreamOwnerChange terminates the stream when the control server's
+// credential rotates while it is open. The channel comes from instanceAuth's
+// context value, captured atomically with the request's own accept check --
+// not a fresh Invalidated() call here, which would be a second, independent
+// lock acquisition racing a concurrent rotation.
+func watchAgentStreamOwnerChange(c *gin.Context, ctx context.Context, health *agentstream.Health, cancel context.CancelFunc) {
+	invalidated := credentialInvalidatedFromContext(c)
+	if invalidated == nil {
+		return
+	}
+	go func() {
+		select {
+		case <-invalidated:
+			health.SetReason(agentstream.AgentStreamReasonOwnerChanged)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// runAgentStreamTransports starts the reader, writer, and ping pump and
+// returns once all three have stopped.
+func (s *Server) runAgentStreamTransports(ctx context.Context, conn *websocket.Conn, streamID string, after uint64, writeMessage func([]byte) error, health *agentstream.Health, cancel context.CancelFunc) {
 	updatesCh := s.procMgr.GetUpdates()
-
-	// Get MCP request channel (if MCP is enabled)
 	var mcpRequestCh <-chan *ws.Message
 	if s.mcpBackendClient != nil {
 		mcpRequestCh = s.mcpBackendClient.GetRequestChannel()
@@ -257,17 +283,63 @@ func (s *Server) handleAgentStreamWS(c *gin.Context) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go s.runAgentStreamReader(ctx, conn, writeMessage, cancel, &wg)
+	go s.runAgentStreamReader(ctx, conn, writeMessage, cancel, &wg, health)
 	wg.Add(1)
 	go s.runAgentStreamWriterWithJournalReplay(ctx, conn, streamID, after, s.procMgr.DeliveryStreamID(), updatesCh, mcpRequestCh, writeMessage, &wg)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		agentstream.RunPingPump(ctx, conn, health, cancel,
+			agentStreamPingInterval, agentStreamPongTimeout, agentStreamWriteDeadline)
+	}()
 	wg.Wait()
-	if s.mcpBackendClient != nil {
-		s.mcpBackendClient.FailStreamRequests(streamID, errors.New("agent stream disconnected"))
+}
+
+// newAgentStreamWriteMessage builds the stream's only data-frame writer. The
+// deadline bounds each frame; a timeout records write_timeout on health so the
+// disconnect is reported with its root cause. Replay, live events, MCP
+// requests, and request responses all share this closure.
+func (s *Server) newAgentStreamWriteMessage(conn *websocket.Conn, writeMu *sync.Mutex, health *agentstream.Health) func([]byte) error {
+	writeDeadline := agentStreamWriteDeadline
+	return func(data []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if err := conn.SetWriteDeadline(time.Now().Add(writeDeadline)); err != nil {
+			s.logger.Debug("failed to set agent stream write deadline", zap.Error(err))
+		}
+		err := conn.WriteMessage(websocket.TextMessage, data)
+		if clearErr := conn.SetWriteDeadline(time.Time{}); clearErr != nil {
+			s.logger.Debug("failed to clear agent stream write deadline", zap.Error(clearErr))
+		}
+		health.RecordWriteFailure(err)
+		return err
 	}
 }
 
+// recordAgentStreamDisconnect logs and counts exactly one typed reason per
+// terminated stream. A clean peer close records nothing.
+func (s *Server) recordAgentStreamDisconnect(health *agentstream.Health) error {
+	disconnectErr := errors.New("agent stream disconnected")
+	reason, ok := health.Reason()
+	if !ok {
+		s.logger.Info("agent stream closed")
+		return disconnectErr
+	}
+	s.logger.Warn("agent stream disconnected", zap.String("reason", string(reason)))
+	agentstream.RecordDisconnect(reason)
+	return agentstream.NewDisconnectError(reason, disconnectErr)
+}
+
 // runAgentStreamReader reads MCP responses and agent operation requests from the backend connection.
-func (s *Server) runAgentStreamReader(ctx context.Context, conn *websocket.Conn, writeMessage func([]byte) error, cancel context.CancelFunc, wg *sync.WaitGroup) {
+func (s *Server) runAgentStreamReader(ctx context.Context, conn *websocket.Conn, writeMessage func([]byte) error, cancel context.CancelFunc, wg *sync.WaitGroup, health *agentstream.Health) {
+	readDeadline := agentStreamReadDeadline
+	if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+		s.logger.Debug("failed to set agent stream read deadline", zap.Error(err))
+	}
+	conn.SetPongHandler(func(string) error {
+		health.MarkPong()
+		return conn.SetReadDeadline(time.Now().Add(readDeadline))
+	})
 	var requestWG sync.WaitGroup
 	defer func() {
 		cancel()
@@ -277,10 +349,14 @@ func (s *Server) runAgentStreamReader(ctx context.Context, conn *websocket.Conn,
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				s.logger.Info("agent stream closed normally")
-			} else {
-				s.logger.Debug("agent stream read error", zap.Error(err))
+			// An intentional teardown closes the connection underneath the
+			// reader; that is not a transport failure. A reason recorded by
+			// the ping pump or writer still wins.
+			if ctx.Err() == nil {
+				health.RecordReadFailure(err)
+			}
+			if reason, ok := health.Reason(); ok {
+				s.logger.Debug("agent stream read ended", zap.String("reason", string(reason)))
 			}
 			return
 		}
@@ -319,6 +395,33 @@ func (s *Server) runAgentStreamWriter(ctx context.Context, conn *websocket.Conn,
 	s.runAgentStreamWriterWithReplay(ctx, conn, streamID, nil, 0, "", updatesCh, mcpRequestCh, writeMessage, wg)
 }
 
+// agentStreamMCPRelay owns the MCP request channel state for one stream.
+// service drains at most one request without blocking, so the writer can give
+// control traffic priority between event frames: MCP producers time out after
+// five seconds, while an event backlog may be thousands of entries deep.
+type agentStreamMCPRelay struct {
+	requests <-chan *ws.Message
+	streamID string
+}
+
+// service writes one queued MCP request if one is available and reports
+// whether the writer should continue.
+func (r *agentStreamMCPRelay) service(s *Server, writeMessage func([]byte) error) bool {
+	if r.requests == nil {
+		return true
+	}
+	select {
+	case request, ok := <-r.requests:
+		if !ok {
+			r.requests = nil
+			return true
+		}
+		return s.writeAgentStreamMCPRequest(request, r.streamID, writeMessage)
+	default:
+		return true
+	}
+}
+
 // runAgentStreamWriterWithJournalReplay sends every committed replay page
 // before selecting the live channel. The replay helper keeps only one journal
 // page in memory and performs a final high-water check so the live channel is
@@ -342,7 +445,11 @@ func (s *Server) runAgentStreamWriterWithJournalReplay(ctx context.Context, conn
 		}
 	}
 
+	relay := agentStreamMCPRelay{requests: mcpRequestCh, streamID: streamID}
 	after, err := s.replayAgentStream(ctx, after, func(notification adapter.AgentEvent) error {
+		if !relay.service(s, writeMessage) {
+			return errAgentStreamReplayStopped
+		}
 		if !s.writeAgentStreamNotification(notification, writeMessage, true) {
 			return errAgentStreamReplayStopped
 		}
@@ -357,7 +464,7 @@ func (s *Server) runAgentStreamWriterWithJournalReplay(ctx context.Context, conn
 		}
 		return
 	}
-	s.runAgentStreamWriterLoop(ctx, conn, streamID, after, deliveryStreamID, updatesCh, mcpRequestCh, writeMessage)
+	s.runAgentStreamWriterLoop(ctx, conn, streamID, after, deliveryStreamID, updatesCh, relay.requests, writeMessage)
 }
 
 // runAgentStreamWriterWithReplay sends committed replay events before it
@@ -370,7 +477,11 @@ func (s *Server) runAgentStreamWriterWithReplay(ctx context.Context, conn *webso
 			s.logger.Debug("failed to close agent stream websocket", zap.Error(err))
 		}
 	}()
+	relay := agentStreamMCPRelay{requests: mcpRequestCh, streamID: streamID}
 	for _, notification := range replay {
+		if !relay.service(s, writeMessage) {
+			return
+		}
 		if !s.writeAgentStreamNotification(notification, writeMessage, true) {
 			return
 		}
@@ -380,11 +491,17 @@ func (s *Server) runAgentStreamWriterWithReplay(ctx context.Context, conn *webso
 			after = notification.DeliverySequence
 		}
 	}
-	s.runAgentStreamWriterLoop(ctx, conn, streamID, after, deliveryStreamID, updatesCh, mcpRequestCh, writeMessage)
+	s.runAgentStreamWriterLoop(ctx, conn, streamID, after, deliveryStreamID, updatesCh, relay.requests, writeMessage)
 }
 
 func (s *Server) runAgentStreamWriterLoop(ctx context.Context, conn *websocket.Conn, streamID string, after uint64, deliveryStreamID string, updatesCh <-chan adapter.AgentEvent, mcpRequestCh <-chan *ws.Message, writeMessage func([]byte) error) {
+	relay := agentStreamMCPRelay{requests: mcpRequestCh, streamID: streamID}
 	for {
+		// Control traffic first: MCP requests carry a five-second producer
+		// budget and must not queue behind an agent-event backlog.
+		if !relay.service(s, writeMessage) {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -403,9 +520,9 @@ func (s *Server) runAgentStreamWriterLoop(ctx context.Context, conn *websocket.C
 			if !s.writeAgentStreamNotification(notification, writeMessage, false) {
 				return
 			}
-		case mcpReq, ok := <-mcpRequestCh:
+		case mcpReq, ok := <-relay.requests:
 			if !ok {
-				mcpRequestCh = nil
+				relay.requests = nil
 				continue
 			}
 			if !s.writeAgentStreamMCPRequest(mcpReq, streamID, writeMessage) {
@@ -456,6 +573,9 @@ func (w *durableAgentStreamWriter) run(ctx context.Context, after uint64, draini
 }
 
 func (w *durableAgentStreamWriter) waitForInput(ctx context.Context, draining *bool) bool {
+	if !w.serviceMCP() {
+		return false
+	}
 	select {
 	case <-ctx.Done():
 		return false
@@ -525,6 +645,11 @@ func (w *durableAgentStreamWriter) drainPage(
 	next, highWater, eventCount, err := w.server.replayAgentStreamPage(
 		ctx, deliveryJournal, w.deliveryStreamID, after,
 		func(notification adapter.AgentEvent) error {
+			// Service control traffic between replay frames: a journal page
+			// can hold many events and the producer only waits five seconds.
+			if !w.serviceMCP() {
+				return errAgentStreamReplayStopped
+			}
 			if !w.server.writeAgentStreamNotification(notification, w.writeMessage, true) {
 				return errAgentStreamReplayStopped
 			}
@@ -635,7 +760,10 @@ func (s *Server) writeAgentStreamMCPRequest(mcpReq *ws.Message, streamID string,
 			zap.String("action", mcpReq.Action),
 			zap.Error(err))
 		if s.mcpBackendClient != nil {
-			s.mcpBackendClient.FailRequest(mcpReq.ID, fmt.Errorf("failed to write MCP request to agent stream: %w", err))
+			s.mcpBackendClient.FailRequest(mcpReq.ID, agentstream.NewDisconnectError(
+				agentstream.ClassifyWriteError(err),
+				fmt.Errorf("failed to write MCP request to agent stream: %w", err),
+			))
 		}
 		return false
 	}
