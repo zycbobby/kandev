@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: $0 --bundle-dir DIR [--checkout DIR] [--home-dir DIR] [--port N] [--no-boot-start]" >&2
+	echo "usage: $0 --bundle-dir DIR [--checkout DIR] [--home-dir DIR] [--port N] [--no-boot-start] [--force]" >&2
 }
 
 BUNDLE=""
@@ -12,6 +12,7 @@ CHECKOUT=""
 HOME_DIR_FLAG=""
 PORT_FLAG=""
 NO_BOOT_START=0
+FORCE=0
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -33,6 +34,10 @@ while [ "$#" -gt 0 ]; do
 		;;
 	--no-boot-start)
 		NO_BOOT_START=1
+		shift
+		;;
+	--force)
+		FORCE=1
 		shift
 		;;
 	-h | --help)
@@ -188,6 +193,26 @@ resolve_live_port() {
 	printf '%s\n' "$recorded"
 }
 
+resolve_live_db_path() {
+	local live_home="$1"
+	local unit plist recorded=""
+	unit="$(user_unit_path)"
+	plist="$(user_plist_path)"
+	if managed_file "$unit"; then
+		recorded="$(read_systemd_env KANDEV_DATABASE_PATH "$unit")"
+	elif managed_file "$plist"; then
+		recorded="$(read_plist_string KANDEV_DATABASE_PATH "$plist")"
+	fi
+	if [ -n "$recorded" ]; then
+		case "$recorded" in
+		/*) printf '%s\n' "$recorded" ;;
+		*) printf '%s\n' "$live_home/$recorded" ;;
+		esac
+		return
+	fi
+	printf '%s\n' "$live_home/data/kandev.db"
+}
+
 refuse_isolated_home() {
 	local live_home="$1" checkout="$2"
 	if path_has_segment ".kandev-dev" "$live_home"; then
@@ -198,6 +223,92 @@ refuse_isolated_home() {
 		echo "refusing live home $live_home: path is the source checkout or inside it" >&2
 		exit 1
 	fi
+}
+
+service_is_active() {
+	if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ]; then
+		command -v launchctl >/dev/null 2>&1 || return 1
+		launchctl print "gui/$(id -u)/com.kdlbs.kandev" >/dev/null 2>&1
+		return
+	fi
+	command -v systemctl >/dev/null 2>&1 || return 1
+	systemctl --user is-active --quiet kandev.service >/dev/null 2>&1
+}
+
+check_deploy_idle() {
+	local db_path="$1"
+	if [ ! -e "$db_path" ]; then
+		if service_is_active; then
+			echo "refusing deploy: the user service is active but its database $db_path is missing" >&2
+			echo "Pass --force to deploy anyway." >&2
+			exit 1
+		fi
+		return
+	fi
+	local report="" rc=0
+	report="$(python3 - "$db_path" <<'PY'
+import os
+import sqlite3
+import sys
+import urllib.parse
+
+path = sys.argv[1]
+required = ("tasks", "task_sessions", "agent_delivery_submissions", "session_recovery_blocks")
+uri = "file:" + urllib.parse.quote(os.path.abspath(path), safe="/") + "?mode=ro"
+try:
+    conn = sqlite3.connect(uri, uri=True, timeout=5)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        present = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        missing = [name for name in required if name not in present]
+        if missing:
+            raise sqlite3.DatabaseError("missing tables: " + ", ".join(missing))
+        rows = conn.execute(
+            """
+            SELECT t.id, t.title, s.state, 'session'
+            FROM task_sessions s
+            JOIN tasks t ON t.id = s.task_id
+            WHERE s.state IN ('STARTING', 'RUNNING') AND t.archived_at IS NULL
+            UNION ALL
+            SELECT t.id, t.title, d.state, 'submission'
+            FROM agent_delivery_submissions d
+            JOIN task_sessions s ON s.id = d.session_id
+            JOIN tasks t ON t.id = s.task_id
+            WHERE d.state IN ('prepared', 'accepted', 'dispatching', 'interrupted_unknown')
+              AND t.archived_at IS NULL
+            UNION ALL
+            SELECT t.id, t.title, b.state, 'recovery block'
+            FROM session_recovery_blocks b
+            JOIN task_sessions s ON s.id = b.session_id
+            JOIN tasks t ON t.id = s.task_id
+            WHERE b.state = 'open' AND t.archived_at IS NULL
+            ORDER BY 1
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+except Exception as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(2)
+if rows:
+    for task_id, title, state, kind in rows:
+        print('task %s "%s": %s %s' % (task_id, title, state, kind))
+    raise SystemExit(3)
+PY
+)" || rc=$?
+	if [ "$rc" -eq 0 ] && [ -z "$report" ]; then
+		return
+	fi
+	if [ "$rc" -eq 3 ] && [ -n "$report" ]; then
+		{
+			printf 'refusing deploy: active work found in %s\n' "$db_path"
+			printf '%s\n' "$report"
+			printf 'Wait for it to finish, run `kandev service stop` first, or pass --force to deploy anyway.\n'
+		} >&2
+		exit 1
+	fi
+	echo "refusing deploy: cannot inspect $db_path; pass --force to deploy anyway" >&2
+	exit 1
 }
 
 publish_bundle() {
@@ -218,6 +329,12 @@ require_complete_bundle "$BUNDLE"
 LIVE_HOME="$(resolve_live_home)"
 LIVE_PORT="$(resolve_live_port)"
 refuse_isolated_home "$LIVE_HOME" "$CHECKOUT"
+
+if [ "$FORCE" -eq 1 ]; then
+	echo "deploy idle gate skipped (--force)"
+else
+	check_deploy_idle "$(resolve_live_db_path "$LIVE_HOME")"
+fi
 
 publish_bundle "$BUNDLE" "$LIVE_HOME"
 
