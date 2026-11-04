@@ -13,6 +13,7 @@ const (
 	SignalDeliveryFailureReasonWindowExceeded SignalDeliveryFailureReason = "delivery_window_exceeded"
 )
 
+// Valid reports whether the reason belongs to the closed set.
 func (r SignalDeliveryFailureReason) Valid() bool {
 	return r == SignalDeliveryFailureReasonWindowExceeded
 }

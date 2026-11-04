@@ -344,3 +344,41 @@ func TestStepCompleteSignalReplaySkipsDeliveredRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, requests)
 }
+
+// TestStepCompleteSignalCaptureIndependentOfBackendWriterLatency pins the
+// isolation Form C relies on: the capture is committed to the agentctl journal
+// before publication, so a delayed backend (SQLite writer contention, slow
+// handling) only delays delivery. It cannot prevent the capture from being
+// durable, and it does not turn the call into a capture failure.
+func TestStepCompleteSignalCaptureIndependentOfBackendWriterLatency(t *testing.T) {
+	store := newFakePendingSignalStore()
+	client := newSignalTestClient(t, store, nil)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.RequestPayload(context.Background(), ws.ActionMCPStepComplete, map[string]any{"summary": "done"}, nil)
+	}()
+	var request *ws.Message
+	select {
+	case request = <-client.GetRequestChannel():
+	case <-time.After(time.Second):
+		t.Fatal("step_complete was not published")
+	}
+	captured, ok := store.get(request.ID)
+	require.True(t, ok, "capture must complete before the backend sees the request")
+	require.Nil(t, captured.DeliveredAt)
+
+	// Simulate backend handling latency (writer wait). The request stays
+	// pending; the capture remains durable, and the call does not fail.
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-errCh:
+		t.Fatalf("request completed before the simulated writer delay ended: %v", err)
+	default:
+	}
+	response, err := ws.NewResponse(request.ID, request.Action, map[string]any{"accepted": true})
+	require.NoError(t, err)
+	client.HandleResponse(response)
+	require.NoError(t, <-errCh)
+	require.Equal(t, []string{request.ID}, store.deliveredIDs())
+}
