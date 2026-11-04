@@ -1,42 +1,19 @@
-# durable-delivery-abandoned-settlement
+# durable-delivery-abandoned-settlement Specification
 
-## 背景
-
-durable delivery 以 agentctl journal 作为保留证据。现有恢复路径覆盖两类状态：
-
-1. journal 有 terminal evidence：按 terminal settlement 结算；
-2. journal 认证证明 exact submission 从未写入：按 pre-intake settlement 结算为 failed。
-
-线上事故暴露了第三类：journal 已经接收 submission，但写 terminal event 失败，submission 停留在 `interrupted_unknown`，`terminal_event_retained=false`、`terminal_sequence=0`。SQL 侧该 submission 可能是 `interrupted_unknown`（active），也可能已被其它路径标为终态。无论哪种，journal 的 `Unresolved` 都会经 `DeliveryCapability` 变成 `unresolved_durable_work`，同时阻塞新 prompt 与 native resume。retry 的 retained 路径固定返回 `terminal_outcome_missing`；native resume 对 journal-only unknown peer 要求不存在的 terminal evidence，对 SQL 已终态 peer 又拒绝 retire。两个 store 相互要求对方先改变，形成跨存储死锁，只能离线修改 SQLite 与 journal。
-
-## 问题
-
-- `recoverRetainedJournal` / `recoverRetainedInstance` 在无 terminal evidence 时只返回 uncertain，没有推进路径。
-- `nativeResumeSQLRows` 要求 journal-only `interrupted_unknown` peer 具有 terminal evidence；`nativeResumeRetirementIDs` 又要求 SQL 行仍为 `interrupted_unknown` 才允许 retire。
-- pre-intake settlement 不能复用：它要求 block `delivery_stream_id=''` 且 descriptor 没有其它 unresolved candidate。
-- 不处理会让整段会话永久不可用，且没有可审计的运行时出口。
-
-## 方案与决策
-
-- 新增「abandoned journal settlement」：当认证 journal 证明 exact submission、历史 owner process 已终止、且没有其它 live/ambiguous 工作时，retire journal 记录（保留 payload、state 和未知标签），并把 SQL submission 结算为 `failed`。
-- 不伪造 terminal event/sequence；不写 `completed`/`cancelled`；`fully_settled_at` 保持 NULL，避免被当作完整 terminal proof。
-- 使用独立 effect type（建议 `agent_delivery.abandoned_journal_settlement:<submission_id>`），不复用 `agent_delivery.pre_intake_settlement`，以保留「从未写入 journal」与「写入后遗弃」的审计区分。
-- 绑定 recovery block 在同一 SQL 事务解析，`authorized_action` 使用独立值（建议 `durable_delivery_abandoned`），不伪装成 `durable_delivery_not_delivered`。
-- journal 侧只 retire、不删除；同代 retire 允许 `HasUnprovenOutcome` 记录，保留 payload/state，不 seal 当前 stream。
-- native resume 的 peer loop 忽略 `Retired` 的 journal peer；已 retired 记录不再计入 `Unresolved`。
-- settlement 成功后清理与 exact submission/incarnation/generation 绑定的 `agent_delivery_recovery` metadata；其它 recovery block 或其它 submission 的 metadata 保持不变。
-- 失败关闭：descriptor 不可认证或截断、存在其它 unresolved 形态、owner 未证明死亡、hash/stream/incarnation/generation 不匹配、block 绑定不匹配时一律 blocked。
-- archived task、Office/automation 所有者、remote executor journal 不在本期范围。
-
-## ADDED Requirements
-
+## Purpose
+Define the conservative settlement for journal-present submissions whose terminal evidence is lost and whose historical owner is proven dead, without fabricating a terminal outcome.
+## Requirements
 ### Requirement: Retry SHALL settle a journal-present unproven submission after proven owner death
 
-When an `interrupted_unknown` submission exists in the authenticated retained journal without `terminal_event_retained` or a terminal sequence, and the historical dispatch owner is proven terminated, `RetrySessionDelivery` SHALL retire the exact journal record and settle the SQL submission as `failed` together with its bound recovery block.
+When an `interrupted_unknown` submission exists in the authenticated retained journal without `terminal_event_retained` or a terminal sequence, the persisted recovery record is in the `uncertain` phase without a recorded history gap, and the historical dispatch owner is proven terminated, `RetrySessionDelivery` SHALL retire the exact journal record and settle the SQL submission as `failed` together with its bound recovery block.
 
 #### Scenario: 已证明死亡且无 terminal evidence
-- **WHEN** retry 命中一个 `interrupted_unknown` submission：journal 中该 submission 无 terminal event/sequence，SQL 行为非终态，绑定 block 精确匹配，且 recovery 记录中的 `OriginalRuntime` 经 `processidentity.OwnedSessionTerminated` 证明已终止
+- **WHEN** retry 命中一个 `interrupted_unknown` submission：journal 中该 submission 无 terminal event/sequence，SQL 行为非终态，绑定 block 精确匹配，recovery 记录处于 `uncertain` phase 且没有 `HistoryGap`，且 recovery 记录中的 `OriginalRuntime` 经 `processidentity.OwnedSessionTerminated` 证明已终止
 - **THEN** retry 返回 `settled`；journal 记录被 retire 且保留原 payload/state；SQL submission 变为 `failed`/`failed`；绑定 block 被解析；没有发送任何 prompt
+
+#### Scenario: recovery phase 不是 uncertain
+- **WHEN** recovery 记录不是 `uncertain` phase，或存在 `HistoryGap`
+- **THEN** 不执行 abandoned settlement；retry 走既有 reconciliation 路径，本路径不产生 journal 或 SQL 写入
 
 #### Scenario: terminal evidence 仍然优先
 - **WHEN** journal 中该 submission 已保留 terminal event 与 terminal sequence
@@ -76,7 +53,7 @@ The journal record MUST be marked retired rather than deleted, and the SQL settl
 
 #### Scenario: native resume 忽略 retired peer
 - **WHEN** 后续 native resume / `GetNativeResumeDeliveryEvidence` 读取同一 session
-- **THEN** 已 retired 的 journal peer 不再触发 terminal evidence 校验，也不再计入 `Unresolved`
+- **THEN** 已 retired 且没有 retained terminal evidence 的 journal peer 不再触发 terminal evidence 校验，也不再计入 `Unresolved`；带 terminal evidence 的 retired peer 仍作为 terminal proof 校验
 
 ### Requirement: Abandoned settlement MUST be idempotent and crash-convergent
 
@@ -115,6 +92,8 @@ The settlement MUST NOT dispatch the historical prompt, MUST NOT resolve unrelat
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | retry 永久返回 `terminal_outcome_missing` | journal 无 terminal evidence，运行时没有结算入口 | abandoned settlement + journal retirement |
-| native resume 报 `native resume terminal evidence disagrees` | journal-only `interrupted_unknown` peer 无 terminal evidence | retire exact peer，并让 peer loop 忽略 retired 记录 |
+| native resume 报 `native resume terminal evidence disagrees` | journal-only `interrupted_unknown` peer 无 terminal evidence | retire exact peer，并让 peer loop 忽略无 terminal evidence 的 retired 记录 |
 | SQL settled 后 admission 仍报 `unresolved_durable_work` | journal 记录未 retire | settlement 必须同时 retire journal，而不是只改 SQL |
 | 结算后 UI 显示 completed 或 terminal 结果 | 复用了 terminal effect / 伪造了 terminal proof | 使用独立 effect type，`fully_settled_at` 保持 NULL |
+| Office/automation session 被 abandoned settlement 结算 | retry 入口只校验归档与用户授权，新路径未检查所有者 | 在读取证据前排除 Office/automation-owned session |
+

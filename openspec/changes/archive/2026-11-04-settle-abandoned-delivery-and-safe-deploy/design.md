@@ -73,8 +73,8 @@ Plan 阶段没有执行新的 bounded research：proposal 的 `## Research Log` 
 
 ### D4：retry 在既有 reconciliation 之前显式尝试 abandoned settlement
 
-- **选择**：在 `retryKnownSessionDelivery` 中，submission 非终态且 block 绑定匹配时，先调用新的 `retryAbandonedJournalDelivery`；它用 `InspectDeliveryRecordEvidence(StoredSubmissionID=recovery.SubmissionID, OriginalRuntime=recovery.OriginalRuntime)` 读取证据，做完整 eligibility 检查，调用 runtime retire，再提交 repository settlement。证据不匹配（terminal retained、submission absent、其它状态）时回落到既有 `retryVerifiedSessionDelivery`；证据存在但不符合 abandoned 形状时返回具体 blocked reason。
-- **理由**：与 pre-intake 的「先证据、后事务」结构一致，便于测试 idempotency/崩溃窗口；不把 SQL 责任塞进 runtime，也不把 journal 写责任塞进 repository。
+- **选择**：在 `retryKnownSessionDelivery` 中，仅当 submission 非终态、block 绑定匹配、`recovery.Phase == uncertain` 且 `recovery.HistoryGap == nil` 时，先调用新的 `retryAbandonedJournalDelivery`；它用 `InspectDeliveryRecordEvidence(StoredSubmissionID=recovery.SubmissionID, OriginalRuntime=recovery.OriginalRuntime)` 读取证据，做完整 eligibility 检查，调用 runtime retire，再提交 repository settlement。Office/automation 所有的 session 在读取证据前直接回落到既有路径；archived task 在 retry 入口即被拒绝。证据不匹配（terminal retained、submission absent、其它状态）时回落到既有 `retryVerifiedSessionDelivery`；证据存在但不符合 abandoned 形状时返回具体 blocked reason。
+- **理由**：与 pre-intake 的「先证据、后事务」结构一致，便于测试 idempotency/崩溃窗口；不把 SQL 责任塞进 runtime，也不把 journal 写责任塞进 repository。只在 `uncertain` 且没有 `HistoryGap` 时启用：`reconnecting`/`recovered` 等状态已有自己的推进语义，pruned history 与 successor 证据的冲突不归本路径处理，其它状态保持在既有路径。
 - **已考虑 alternative**：把 settlement 折进 `recoverRetainedJournal`（runtime 没有 SQL 仓库，无法完成事务）；启动 sweep（超出范围）；让 native resume 直接 settle（违反 AC-006.9 的“preserve uncertainty”）。
 
 ### D5：Form B 去掉 execution ID 等值比较
@@ -85,8 +85,8 @@ Plan 阶段没有执行新的 bounded research：proposal 的 `## Research Log` 
 
 ### D6：native resume 忽略 retired peer
 
-- **选择**：`nativeResumeSQLRows` 的 peer loop 跳过 `submission.Retired`。`nativeResumeRetirementIDs` 已有的 `if submission.Retired { continue }` 保持不变。`validateNativeResumeSQLRows` 只遍历 active SQL rows，retired peer 不在其中。
-- **理由**：settlement 把 SQL 行置为 failed 后，目标不再出现在 active SQL rows；如果 peer loop 不跳过 retired 记录，它会重新进入 `peerMatchesTerminalHistory` 并报 “terminal evidence disagrees”，使结算后的 resume 再次失败。
+- **选择**：`nativeResumeSQLRows` 的 peer loop 跳过 `submission.Retired` 且没有 retained terminal evidence 的 peer；带 terminal evidence 的 retired peer 继续作为 terminal proof 进入 `peerMatchesTerminalHistory`。`nativeResumeRetirementIDs` 已有的 `if submission.Retired { continue }` 保持不变。`validateNativeResumeSQLRows` 只遍历 active SQL rows，retired peer 不在其中。
+- **理由**：settlement 把 SQL 行置为 failed 后，目标不再出现在 active SQL rows；如果 peer loop 不跳过无 terminal evidence 的 retired 记录，它会重新进入 `peerMatchesTerminalHistory` 并报 “terminal evidence disagrees”，使结算后的 resume 再次失败。保留带 terminal evidence 的 retired peer 可以让既有 projected-terminal 证据继续参与校验，只跳过无法提供 terminal proof 的记录。
 - **已考虑 alternative**：把 journal state 改成 failed（重写历史）；让 SQL 行保持 interrupted_unknown（用户要求 settlement，且 active 行会继续参与其它检查）。
 
 ### D7：deploy gate 放在 publish 之前，只读 SQLite，busy 拒绝
