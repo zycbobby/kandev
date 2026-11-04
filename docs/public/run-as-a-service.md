@@ -192,7 +192,7 @@ On Linux, installation writes the unit, runs `daemon-reload`, and normally runs 
 
 - executes the absolute native `kandev --headless` path;
 - records `KANDEV_HOME_DIR`, `KANDEV_LOG_LEVEL=info`, a service `PATH`, the release bundle, and package version;
-- uses `Restart=on-failure`, a five-second restart delay, `KillMode=process`, and a 30-second stop timeout;
+- uses `Restart=on-failure`, a five-second restart delay, `KillMode=process`, and a 60-second stop timeout;
 - orders startup after `network-online.target`.
 
 On macOS, installation writes the plist, removes an already loaded job, bootstraps the new plist, and enables it. Standard output and error go to `<KANDEV_HOME_DIR>/logs/service.out` and `service.err`. The plist always has `KeepAlive=true`; `--no-boot-start` changes only `RunAtLoad` and adds an immediate kick-start.

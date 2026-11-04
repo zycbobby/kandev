@@ -183,7 +183,7 @@ Environment=KANDEV_SERVICE_METADATA=/home/alice/.kandev/service/install.json
 Restart=on-failure
 RestartSec=5s
 KillMode=mixed
-TimeoutStopSec=30s
+TimeoutStopSec=60s
 
 [Install]
 WantedBy=default.target

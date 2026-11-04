@@ -616,7 +616,7 @@ func TestRenderSystemdUnitPreservesApplicationAgentLifetime(t *testing.T) {
 				"Environment=KANDEV_SERVICE_MODE=" + mode,
 				"Environment=KANDEV_SERVER_PORT=1234",
 				"Restart=on-failure", "RestartSec=5s",
-				"KillMode=process", "TimeoutStopSec=30s", "WantedBy=" + target,
+				"KillMode=process", "TimeoutStopSec=60s", "WantedBy=" + target,
 			} {
 				if !slices.Contains(strings.Split(unit, "\n"), line) {
 					t.Errorf("service missing exact line %q:\n%s", line, unit)
