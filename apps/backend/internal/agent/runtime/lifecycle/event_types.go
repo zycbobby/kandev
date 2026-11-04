@@ -99,6 +99,16 @@ type AgentStalledPayload struct {
 	// NeverStarted is true when the agent has not emitted a single event since
 	// this prompt was dispatched — a terminal failure, not a mid-work pause.
 	NeverStarted bool `json:"never_started"`
+	// Delivery identity below is the exact durable-delivery state of the stalled
+	// prompt. It stays zero on legacy executions and executions without an
+	// agentctl client.
+	DeliverySubmissionID      string `json:"delivery_submission_id,omitempty"`
+	DeliveryStreamID          string `json:"delivery_stream_id,omitempty"`
+	DeliveryIncarnationID     string `json:"delivery_incarnation_id,omitempty"`
+	DeliveryHarnessGeneration uint64 `json:"delivery_harness_generation,omitempty"`
+	// OriginalRuntime is the birth identity of the agentctl client that owns
+	// delivery at publication time.
+	OriginalRuntime processidentity.Identity `json:"original_runtime,omitempty"`
 }
 
 // AgentctlEventPayload is the payload for agentctl lifecycle events (starting, ready, error).

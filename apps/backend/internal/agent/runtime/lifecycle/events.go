@@ -116,14 +116,18 @@ func (p *EventPublisher) PublishAgentStalled(
 		return
 	}
 	payload := AgentStalledPayload{
-		AgentExecutionID: execution.ID,
-		TaskID:           execution.TaskID,
-		SessionID:        execution.SessionID,
-		PromptGeneration: promptGeneration,
-		ActivityEpoch:    activityEpoch,
-		LastActivityAt:   lastActivityAt,
-		StalledFor:       stalledFor,
-		NeverStarted:     neverStarted,
+		AgentExecutionID:          execution.ID,
+		TaskID:                    execution.TaskID,
+		SessionID:                 execution.SessionID,
+		PromptGeneration:          promptGeneration,
+		ActivityEpoch:             activityEpoch,
+		LastActivityAt:            lastActivityAt,
+		StalledFor:                stalledFor,
+		NeverStarted:              neverStarted,
+		DeliverySubmissionID:      execution.deliverySubmissionIDSnapshot(),
+		DeliveryStreamID:          execution.DeliveryStreamID,
+		DeliveryIncarnationID:     execution.DeliveryIncarnationID,
+		DeliveryHarnessGeneration: execution.DeliveryHarnessGeneration,
 	}
 	if tool := execution.activeToolSnapshot(); tool != nil {
 		payload.ToolCallID = tool.ToolCallID
@@ -131,6 +135,12 @@ func (p *EventPublisher) PublishAgentStalled(
 		payload.ToolTitle = tool.Title
 		payload.ToolStatus = tool.Status
 	}
+	// The client lease is bounded to the identity read so publication never
+	// holds the agentctl lifecycle lock. A missing client yields the zero
+	// identity.
+	client, releaseClient := execution.AcquireAgentCtlClient()
+	payload.OriginalRuntime = client.RuntimeProcessIdentity()
+	releaseClient()
 	event := bus.NewEvent(events.AgentStalled, "agent-manager", payload)
 	if err := p.eventBus.Publish(ctx, events.AgentStalled, event); err != nil {
 		p.logger.Error("failed to publish stalled agent event",

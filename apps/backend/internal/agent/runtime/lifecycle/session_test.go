@@ -22,6 +22,7 @@ import (
 	agentctl "github.com/kandev/kandev/internal/agent/runtime/agentctl"
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
 	"github.com/kandev/kandev/internal/common/logger"
+	"github.com/kandev/kandev/internal/common/processidentity"
 	"github.com/kandev/kandev/pkg/agent"
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 	ws "github.com/kandev/kandev/pkg/websocket"
@@ -3073,6 +3074,93 @@ func TestWaitForPromptDone_StallPayloadReportsRunningAfterAgentEvent(t *testing.
 			t.Fatalf("waitForPromptDone error = %v, want context canceled", err)
 		}
 	})
+}
+
+// TestPublishAgentStalledCarriesDeliveryIdentity verifies the agent.stalled
+// payload carries the exact durable-delivery identity of the stalled prompt
+// (submission, stream, incarnation, harness generation) plus the original
+// runtime identity of the agentctl client that owns delivery, so a settlement
+// consumer can act on exact identity. A legacy execution without delivery
+// identity or an agentctl client publishes zero values without panicking.
+func TestPublishAgentStalledCarriesDeliveryIdentity(t *testing.T) {
+	eventBus := &MockEventBusWithTracking{}
+	publisher := NewEventPublisher(eventBus, newSessionTestLogger())
+
+	originalRuntime := processidentity.Identity{
+		PID:        4242,
+		GroupID:    7,
+		SessionID:  11,
+		BirthToken: "birth-token",
+	}
+	owner := agentctl.NewRuntimeOwner(nil, newSessionTestLogger(), "stall-identity")
+	t.Cleanup(owner.Stop)
+	binding, err := owner.PrepareBinding()
+	if err != nil {
+		t.Fatalf("prepare binding: %v", err)
+	}
+	if err := binding.SetProcessIdentity(originalRuntime); err != nil {
+		t.Fatalf("set process identity: %v", err)
+	}
+	if err := binding.Configure("127.0.0.1", 1236, "secret", originalRuntime.PID, nil); err != nil {
+		t.Fatalf("configure binding: %v", err)
+	}
+	if err := binding.Commit(); err != nil {
+		t.Fatalf("commit binding: %v", err)
+	}
+	lease, err := owner.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	defer lease.Close()
+
+	execution := &AgentExecution{
+		ID:                        "test-exec",
+		TaskID:                    "test-task",
+		SessionID:                 "test-session",
+		DeliveryStreamID:          "stream-1",
+		DeliveryIncarnationID:     "incarnation-1",
+		DeliveryHarnessGeneration: 7,
+	}
+	execution.setDeliverySubmissionID("prompt:initial:session:1")
+	execution.agentctl = lease.NewBoundInstanceClient(1236, newSessionTestLogger())
+
+	publisher.PublishAgentStalled(
+		context.Background(), execution, 3, time.Now(), 5*time.Minute, 2, true)
+
+	payload := lastStalledPayload(t, eventBus)
+	if payload.DeliverySubmissionID != "prompt:initial:session:1" {
+		t.Fatalf("DeliverySubmissionID = %q, want %q", payload.DeliverySubmissionID, "prompt:initial:session:1")
+	}
+	if payload.DeliveryStreamID != "stream-1" {
+		t.Fatalf("DeliveryStreamID = %q, want %q", payload.DeliveryStreamID, "stream-1")
+	}
+	if payload.DeliveryIncarnationID != "incarnation-1" {
+		t.Fatalf("DeliveryIncarnationID = %q, want %q", payload.DeliveryIncarnationID, "incarnation-1")
+	}
+	if payload.DeliveryHarnessGeneration != 7 {
+		t.Fatalf("DeliveryHarnessGeneration = %d, want 7", payload.DeliveryHarnessGeneration)
+	}
+	if payload.OriginalRuntime != originalRuntime {
+		t.Fatalf("OriginalRuntime = %+v, want %+v", payload.OriginalRuntime, originalRuntime)
+	}
+
+	legacy := &AgentExecution{
+		ID:        "legacy-exec",
+		TaskID:    "test-task",
+		SessionID: "test-session",
+	}
+	publisher.PublishAgentStalled(
+		context.Background(), legacy, 1, time.Now(), 5*time.Minute, 0, false)
+
+	legacyPayload := lastStalledPayload(t, eventBus)
+	if legacyPayload.AgentExecutionID != "legacy-exec" {
+		t.Fatalf("legacy payload execution = %q, want %q", legacyPayload.AgentExecutionID, "legacy-exec")
+	}
+	if legacyPayload.DeliverySubmissionID != "" || legacyPayload.DeliveryStreamID != "" ||
+		legacyPayload.DeliveryIncarnationID != "" || legacyPayload.DeliveryHarnessGeneration != 0 ||
+		(legacyPayload.OriginalRuntime != processidentity.Identity{}) {
+		t.Fatalf("legacy stall payload delivery identity = %+v, want zero values", legacyPayload)
+	}
 }
 
 func lastStalledPayload(t *testing.T, eventBus *MockEventBusWithTracking) AgentStalledPayload {
