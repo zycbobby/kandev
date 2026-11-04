@@ -51,6 +51,8 @@ var ErrAgentDeliveryReconstructionConflict = repoerrors.ErrAgentDeliveryReconstr
 var ErrAgentDeliveryReconstructionStale = repoerrors.ErrAgentDeliveryReconstructionStale
 var ErrAgentDeliveryPreIntakeSettlementConflict = repoerrors.ErrAgentDeliveryPreIntakeSettlementConflict
 var ErrAgentDeliveryPreIntakeSettlementStale = repoerrors.ErrAgentDeliveryPreIntakeSettlementStale
+var ErrAgentDeliveryAbandonedSettlementConflict = repoerrors.ErrAgentDeliveryAbandonedSettlementConflict
+var ErrAgentDeliveryAbandonedSettlementStale = repoerrors.ErrAgentDeliveryAbandonedSettlementStale
 
 // WorkspaceRepository handles workspace CRUD.
 type WorkspaceRepository interface {
@@ -757,6 +759,17 @@ type AgentDeliveryPreIntakeSettlementRepository interface {
 		ctx context.Context,
 		request *models.AgentDeliveryPreIntakeSettlementRequest,
 	) (*models.AgentDeliveryPreIntakeSettlementResult, error)
+}
+
+// AgentDeliveryAbandonedSettlementRepository settles a submission whose
+// retained journal records were retired after the historical owner was proven
+// dead. The settlement writes the failed state, its effect, and the exact
+// stream-bound block in one transaction.
+type AgentDeliveryAbandonedSettlementRepository interface {
+	SettleAbandonedAgentDeliverySubmission(
+		ctx context.Context,
+		request *models.AgentDeliveryAbandonedSettlementRequest,
+	) (*models.AgentDeliveryAbandonedSettlementResult, error)
 }
 
 // AgentDeliveryRepository owns the backend side of the durable agentctl

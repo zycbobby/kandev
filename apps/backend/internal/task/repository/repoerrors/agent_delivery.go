@@ -22,4 +22,7 @@ var (
 
 	ErrAgentDeliveryPreIntakeSettlementConflict = errors.New("agent delivery pre-intake settlement conflicts with current state")
 	ErrAgentDeliveryPreIntakeSettlementStale    = errors.New("agent delivery pre-intake settlement owner changed")
+
+	ErrAgentDeliveryAbandonedSettlementConflict = errors.New("agent delivery abandoned settlement conflicts with current state")
+	ErrAgentDeliveryAbandonedSettlementStale    = errors.New("agent delivery abandoned settlement owner changed")
 )
