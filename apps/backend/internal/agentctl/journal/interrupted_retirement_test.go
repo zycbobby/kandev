@@ -2,6 +2,7 @@ package journal
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -51,5 +52,37 @@ func TestSuccessorRetirementPreservesUnfinishedEvidence(t *testing.T) {
 				t.Fatalf("retirement retained admission fence: %v, %v", unresolved, err)
 			}
 		})
+	}
+}
+
+// TestZeroEventAuthorizationRetiresSameGenerationDispatching pins the journal
+// primitive: same-generation dispatching work stays fenced without the exact
+// zero-event authorization and retires only for the authorized ID.
+func TestZeroEventAuthorizationRetiresSameGenerationDispatching(t *testing.T) {
+	ctx := context.Background()
+	j, err := Open(Config{Path: t.TempDir() + "/journal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	input := Submission{
+		ID: "prompt:dispatched", SessionID: "session", IncarnationID: "session", HarnessGeneration: 2,
+		StreamID: "stream", Hash: "hash", Payload: []byte("never started"), State: SubmissionDispatching,
+	}
+	if _, err = j.PutSubmission(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = j.RetireSubmissionWithEvidence(ctx, input.ID, input.HarnessGeneration, ""); !errors.Is(err, ErrSubmissionGeneration) {
+		t.Fatalf("same-generation dispatching retirement without authorization = %v, want %v", err, ErrSubmissionGeneration)
+	}
+	if _, err = j.RetireSubmissionWithEvidence(ctx, input.ID, input.HarnessGeneration, "prompt:other"); !errors.Is(err, ErrSubmissionGeneration) {
+		t.Fatalf("authorization bound to another submission = %v, want %v", err, ErrSubmissionGeneration)
+	}
+	retired, err := j.RetireSubmissionWithEvidence(ctx, input.ID, input.HarnessGeneration, input.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retired.Retired || retired.State != SubmissionInterruptedUnknown || string(retired.Payload) != string(input.Payload) {
+		t.Fatalf("authorized zero-event retirement = %+v", retired)
 	}
 }

@@ -22,15 +22,18 @@ type RetainedRetirementTarget struct {
 // RetainedRetirementRequest retires the complete unresolved inventory of one
 // retained owner journal. The backend must enumerate every unresolved
 // submission; a partial inventory is rejected so no peer keeps admission
-// blocked.
+// blocked. NeverStartedSubmissionID optionally authorizes exactly one named
+// target for zero-event retirement; without it every target must already be
+// interrupted_unknown.
 type RetainedRetirementRequest struct {
-	Root              string                     `json:"root"`
-	SessionID         string                     `json:"session_id"`
-	ExecutionID       string                     `json:"execution_id"`
-	IncarnationID     string                     `json:"incarnation_id"`
-	HarnessGeneration uint64                     `json:"harness_generation"`
-	Submissions       []RetainedRetirementTarget `json:"submissions"`
-	OriginalRuntime   processidentity.Identity   `json:"original_runtime"`
+	Root                     string                     `json:"root"`
+	SessionID                string                     `json:"session_id"`
+	ExecutionID              string                     `json:"execution_id"`
+	IncarnationID            string                     `json:"incarnation_id"`
+	HarnessGeneration        uint64                     `json:"harness_generation"`
+	Submissions              []RetainedRetirementTarget `json:"submissions"`
+	NeverStartedSubmissionID string                     `json:"never_started_submission_id,omitempty"`
+	OriginalRuntime          processidentity.Identity   `json:"original_runtime"`
 }
 
 // RetainedRetirementResponse reports the post-retirement descriptor and the
@@ -68,7 +71,7 @@ func RetireRetainedRecovery(ctx context.Context, request RetainedRetirementReque
 		return nil, err
 	}
 	for _, submission := range pending {
-		updated, err := retained.RetireSubmission(ctx, submission.ID, request.HarnessGeneration)
+		updated, err := retained.RetireSubmissionWithEvidence(ctx, submission.ID, request.HarnessGeneration, request.NeverStartedSubmissionID)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +91,23 @@ func RetireRetainedRecovery(ctx context.Context, request RetainedRetirementReque
 func validRetainedRetirementRequest(request RetainedRetirementRequest) bool {
 	return request.SessionID != "" && request.ExecutionID != "" && request.IncarnationID != "" &&
 		request.HarnessGeneration > 0 && len(request.Submissions) > 0 &&
-		request.OriginalRuntime.Validate() == nil
+		request.OriginalRuntime.Validate() == nil &&
+		validNeverStartedRetirementTarget(request)
+}
+
+// validNeverStartedRetirementTarget requires a zero-event authorization to
+// name one of the request's own targets. The authorization is bound to the
+// exact submission ID and never widens or narrows the retirement inventory.
+func validNeverStartedRetirementTarget(request RetainedRetirementRequest) bool {
+	if request.NeverStartedSubmissionID == "" {
+		return true
+	}
+	for _, target := range request.Submissions {
+		if zeroEventRetirementAuthorized(target.ID, request.NeverStartedSubmissionID) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateRetainedRetirement verifies every target against the stored record
@@ -149,7 +168,8 @@ func readRetainedRetirementTarget(
 	target RetainedRetirementTarget,
 	seen map[string]struct{},
 ) (Submission, error) {
-	if !validRetainedRetirementTarget(target, request.HarnessGeneration) {
+	neverStarted := zeroEventRetirementAuthorized(target.ID, request.NeverStartedSubmissionID)
+	if !validRetainedRetirementTarget(target, request.HarnessGeneration, neverStarted) {
 		return Submission{}, ErrSubmissionState
 	}
 	if _, duplicate := seen[target.ID]; duplicate {
@@ -163,19 +183,24 @@ func readRetainedRetirementTarget(
 		}
 		return Submission{}, err
 	}
-	if err := validateRetainedRetirementSubmission(submission, target, request.SessionID); err != nil {
+	if err := validateRetainedRetirementSubmission(submission, target, request.SessionID, neverStarted); err != nil {
 		return Submission{}, err
 	}
 	return submission, nil
 }
 
-func validRetainedRetirementTarget(target RetainedRetirementTarget, requestGeneration uint64) bool {
-	return target.ID != "" && target.StreamID != "" && target.Hash != "" &&
-		target.HarnessGeneration > 0 && target.HarnessGeneration <= requestGeneration &&
-		target.State == SubmissionInterruptedUnknown
+func validRetainedRetirementTarget(target RetainedRetirementTarget, requestGeneration uint64, neverStarted bool) bool {
+	if target.ID == "" || target.StreamID == "" || target.Hash == "" ||
+		target.HarnessGeneration == 0 || target.HarnessGeneration > requestGeneration {
+		return false
+	}
+	if neverStarted {
+		return neverStartedRetirementState(target.State)
+	}
+	return target.State == SubmissionInterruptedUnknown
 }
 
-func validateRetainedRetirementSubmission(submission Submission, target RetainedRetirementTarget, sessionID string) error {
+func validateRetainedRetirementSubmission(submission Submission, target RetainedRetirementTarget, sessionID string, neverStarted bool) error {
 	if submission.SessionID != sessionID {
 		return ErrOwnerMismatch
 	}
@@ -183,13 +208,33 @@ func validateRetainedRetirementSubmission(submission Submission, target Retained
 		submission.HarnessGeneration != target.HarnessGeneration {
 		return ErrSubmissionConflict
 	}
-	if submission.State != target.State || submission.State != SubmissionInterruptedUnknown {
+	if submission.State != target.State {
+		return ErrSubmissionState
+	}
+	if neverStarted && !neverStartedRetirementState(submission.State) {
+		return ErrSubmissionState
+	}
+	if !neverStarted && submission.State != SubmissionInterruptedUnknown {
 		return ErrSubmissionState
 	}
 	if submission.TerminalEventRetained || submission.TerminalSequence != 0 {
 		return ErrSubmissionState
 	}
 	return nil
+}
+
+// neverStartedRetirementState reports whether an explicit zero-event
+// authorization may retire a submission in this state. The authorization is
+// the auditable evidence that the submission produced no events; retained
+// terminal evidence is rejected separately and always blocks retirement.
+func neverStartedRetirementState(state SubmissionState) bool {
+	switch state {
+	case SubmissionPrepared, SubmissionAccepted, SubmissionDispatching, SubmissionInterruptedUnknown,
+		SubmissionCompleted, SubmissionFailed, SubmissionCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func proveRetainedRetirementOwnerTerminated(identity processidentity.Identity) error {
@@ -234,7 +279,7 @@ func confirmRetainedRetirement(
 }
 
 func retainedRetirementPreserved(before, after Submission) bool {
-	return after.Retired && after.State == before.State && after.StreamID == before.StreamID &&
+	return after.Retired && after.State == normalizedRetirementState(before.State) && after.StreamID == before.StreamID &&
 		after.Hash == before.Hash && after.HarnessGeneration == before.HarnessGeneration &&
 		bytes.Equal(after.Payload, before.Payload)
 }

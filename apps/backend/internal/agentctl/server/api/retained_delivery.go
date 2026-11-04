@@ -7,13 +7,16 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/journal"
 )
 
-const invalidRecoveryIdentityCode = "INVALID_RECOVERY_IDENTITY"
+const (
+	invalidRecoveryIdentityCode = "INVALID_RECOVERY_IDENTITY"
+	deliveryErrorCodeKey        = "code"
+)
 
 func (m *ControlServer) handleRetainedDelivery(c *gin.Context) {
 	var request journal.RetainedRecoveryRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || request.SessionID == "" || request.ExecutionID == "" || request.SubmissionID == "" || request.StreamID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 || request.Limit < 1 || request.Limit > 4 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
+		c.JSON(http.StatusBadRequest, gin.H{deliveryErrorCodeKey: invalidRecoveryIdentityCode})
 		return
 	}
 	if m.instMgr == nil {
@@ -41,7 +44,7 @@ func (m *ControlServer) handleRetainedRetirement(c *gin.Context) {
 	var request journal.RetainedRetirementRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || !validRetainedRetirementBody(request) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
+		c.JSON(http.StatusBadRequest, gin.H{deliveryErrorCodeKey: invalidRecoveryIdentityCode})
 		return
 	}
 	if !m.retainedSessionIsUnowned(c, request.SessionID) {
@@ -60,12 +63,28 @@ func validRetainedRetirementBody(request journal.RetainedRetirementRequest) bool
 		request.HarnessGeneration == 0 || len(request.Submissions) == 0 {
 		return false
 	}
+	if request.NeverStartedSubmissionID != "" && !retainedRetirementAuthorizationNamesTarget(request) {
+		return false
+	}
 	for _, target := range request.Submissions {
 		if !validRetainedRetirementTargetBody(target) {
 			return false
 		}
 	}
 	return true
+}
+
+// retainedRetirementAuthorizationNamesTarget requires the never-started
+// authorization to name one of the submitted target IDs. The authorization is
+// target-bound, so an unlisted ID is a malformed body rather than a silently
+// ignored one.
+func retainedRetirementAuthorizationNamesTarget(request journal.RetainedRetirementRequest) bool {
+	for _, target := range request.Submissions {
+		if target.ID == request.NeverStartedSubmissionID {
+			return true
+		}
+	}
+	return false
 }
 
 func validRetainedRetirementTargetBody(target journal.RetainedRetirementTarget) bool {
@@ -77,7 +96,7 @@ func (m *ControlServer) handleRetainedReconstructionEvidence(c *gin.Context) {
 	var request journal.RetainedReconstructionEvidenceRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || request.SessionID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
+		c.JSON(http.StatusBadRequest, gin.H{deliveryErrorCodeKey: invalidRecoveryIdentityCode})
 		return
 	}
 	if !m.retainedSessionIsUnowned(c, request.SessionID) {
@@ -95,7 +114,7 @@ func (m *ControlServer) handleRetainedReconstructionSubmission(c *gin.Context) {
 	var request journal.RetainedReconstructionSubmissionRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<10)
 	if err := c.ShouldBindJSON(&request); err != nil || request.SessionID == "" || request.IncarnationID == "" || request.HarnessGeneration == 0 || request.Candidate.ID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": invalidRecoveryIdentityCode})
+		c.JSON(http.StatusBadRequest, gin.H{deliveryErrorCodeKey: invalidRecoveryIdentityCode})
 		return
 	}
 	if !m.retainedSessionIsUnowned(c, request.SessionID) {

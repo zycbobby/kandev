@@ -82,6 +82,14 @@ func (j *Journal) ListSubmissions(ctx context.Context, sessionID string) ([]Subm
 // may acknowledge an interrupted unknown outcome in the same generation;
 // unproven terminal labels retain their state; live work requires a newer generation.
 func (j *Journal) RetireSubmission(ctx context.Context, id string, recoveryGeneration uint64) (Submission, error) {
+	return j.RetireSubmissionWithEvidence(ctx, id, recoveryGeneration, "")
+}
+
+// RetireSubmissionWithEvidence retires one submission, honoring an explicit
+// zero-event authorization. The authorization names the exact submission ID
+// that may be retired in its own harness generation without an unproven
+// outcome; every other ID keeps the generic generation rule unchanged.
+func (j *Journal) RetireSubmissionWithEvidence(ctx context.Context, id string, recoveryGeneration uint64, zeroEventSubmissionID string) (Submission, error) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	db, err := j.dbLocked()
@@ -92,14 +100,12 @@ func (j *Journal) RetireSubmission(ctx context.Context, id string, recoveryGener
 	if err != nil {
 		return Submission{}, err
 	}
-	if !canRetireSubmissionAtGeneration(current, recoveryGeneration) {
+	if !zeroEventRetirementAuthorized(id, zeroEventSubmissionID) && !canRetireSubmissionAtGeneration(current, recoveryGeneration) {
 		return Submission{}, ErrSubmissionGeneration
 	}
 	updatedAt := time.Now().UTC()
 	current.Retired = true
-	if current.State == SubmissionPrepared || current.State == SubmissionAccepted || current.State == SubmissionDispatching {
-		current.State = SubmissionInterruptedUnknown
-	}
+	current.State = normalizedRetirementState(current.State)
 	current.UpdatedAt = updatedAt
 	encoded, err := json.Marshal(current)
 	if err != nil {
@@ -112,7 +118,7 @@ func (j *Journal) RetireSubmission(ctx context.Context, id string, recoveryGener
 	var retired Submission
 	err = j.updateLocked(func(tx *bolt.Tx) error {
 		var updateErr error
-		retired, updateErr = retireSubmissionTx(ctx, tx, id, recoveryGeneration, updatedAt)
+		retired, updateErr = retireSubmissionTx(ctx, tx, id, recoveryGeneration, updatedAt, zeroEventSubmissionID)
 		return updateErr
 	})
 	j.finishDiskCapacityReservation(diskReservation, err == nil)
@@ -123,12 +129,30 @@ func (j *Journal) RetireSubmission(ctx context.Context, id string, recoveryGener
 	return retired, err
 }
 
+// zeroEventRetirementAuthorized reports whether id is the exact submission a
+// zero-event retirement request authorized.
+func zeroEventRetirementAuthorized(id, zeroEventSubmissionID string) bool {
+	return zeroEventSubmissionID != "" && id == zeroEventSubmissionID
+}
+
 func canRetireSubmissionAtGeneration(submission Submission, recoveryGeneration uint64) bool {
 	return recoveryGeneration > 0 && (recoveryGeneration > submission.HarnessGeneration ||
 		(recoveryGeneration == submission.HarnessGeneration && HasUnprovenOutcome(submission)))
 }
 
-func retireSubmissionTx(ctx context.Context, tx *bolt.Tx, id string, recoveryGeneration uint64, updatedAt time.Time) (Submission, error) {
+// normalizedRetirementState is the state a retirement commit leaves behind:
+// non-terminal dispatch states normalize to interrupted unknown while every
+// other recorded state is preserved.
+func normalizedRetirementState(state SubmissionState) SubmissionState {
+	switch state {
+	case SubmissionPrepared, SubmissionAccepted, SubmissionDispatching:
+		return SubmissionInterruptedUnknown
+	default:
+		return state
+	}
+}
+
+func retireSubmissionTx(ctx context.Context, tx *bolt.Tx, id string, recoveryGeneration uint64, updatedAt time.Time, zeroEventSubmissionID string) (Submission, error) {
 	var current Submission
 	if err := ctx.Err(); err != nil {
 		return current, err
@@ -141,13 +165,11 @@ func retireSubmissionTx(ctx context.Context, tx *bolt.Tx, id string, recoveryGen
 	if err := json.Unmarshal(raw, &current); err != nil {
 		return current, ErrJournalCorrupt
 	}
-	if !canRetireSubmissionAtGeneration(current, recoveryGeneration) {
+	if !zeroEventRetirementAuthorized(id, zeroEventSubmissionID) && !canRetireSubmissionAtGeneration(current, recoveryGeneration) {
 		return current, ErrSubmissionGeneration
 	}
 	current.Retired = true
-	if current.State == SubmissionPrepared || current.State == SubmissionAccepted || current.State == SubmissionDispatching {
-		current.State = SubmissionInterruptedUnknown
-	}
+	current.State = normalizedRetirementState(current.State)
 	current.UpdatedAt = updatedAt
 	encoded, err := json.Marshal(current)
 	if err != nil {
