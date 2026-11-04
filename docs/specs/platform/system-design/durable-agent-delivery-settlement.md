@@ -13,8 +13,10 @@ requirements:
 ## Purpose
 
 This design covers durable submissions that definitively never reached the
-agentctl journal, durable submissions that did reach it without terminal
-evidence, and the admission health that prevents new divergences.
+agentctl journal, durable submissions that reached it without terminal
+evidence — abandoned when agentctl exited before writing that evidence, and
+never-started when a provider stall left the prompt with zero turn events —
+and the admission health that prevents new divergences.
 It extends [durable agent delivery](durable-agent-delivery.md) and
 [missing record recovery](durable-agent-record-recovery.md) without changing
 their reconstruction or terminal settlement semantics.
@@ -25,6 +27,7 @@ their reconstruction or terminal settlement semantics.
 | --- | --- |
 | AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.25 | Pre-intake settlement |
 | AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.26 | Pre-intake settlement |
+| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.27 | Never-started stall settlement |
 | AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-001.1, 001.2 | Retry succession |
 | AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-002.1, 002.2 | Abandoned journal settlement |
 | AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-003.1, 003.2 | Abandoned journal settlement |
@@ -118,6 +121,94 @@ through the conservative rules below.
   prompt is never resent, and unrelated blocks and queue entries stay
   untouched.
 
+## Never-started stall settlement
+
+A provider stall can leave the prompt dispatching in the journal with zero
+turn events while the agent process stays alive. The lifecycle watchdog
+classifies the prompt generation as never-started, publishes the exact
+delivery identity (submission, stream, incarnation, harness generation) and
+the original runtime identity with the stall event, and the orchestrator
+force-stops the execution. The prompt RPC then returns an uncertain-delivery
+error, so without this path the SQL submission would stay
+`interrupted_unknown` / `prompt_dispatch_failed` with an open
+`unknown_prompt_outcome` block and no retry entry point.
+
+- **Eligibility.** Only interactive, non-passthrough, non-Office
+  durable-delivery sessions enter the settlement; the payload must carry the
+  complete delivery identity and runtime proof. Everything else keeps the
+  legacy terminal handling. A stall that observed any turn event since
+  dispatch stays advisory and never settles.
+- **Evidence.** The lifecycle retirement validator requires the complete
+  unresolved inventory of the authenticated retained journal to be exactly the
+  target, no terminal event and no terminal sequence on it, exact session,
+  incarnation, generation, stream, submission, and payload-hash binding
+  against the SQL row, and a validated historical `OriginalRuntime` whose
+  `processidentity.OwnedSessionTerminated` returns true. A live agentctl
+  instance that still owns the session blocks retirement: the zero-event
+  authorization exists only on the retained (unowned) path, so a stuck
+  teardown stays fail-closed. The force-stop normally deregisters the
+  instance, making the retained path the common case.
+- **Journal retirement.** Retirement keeps the default that a dispatch label
+  alone is not evidence an external call did not occur. A request field,
+  `NeverStartedSubmissionID`, authorizes exactly one named target to retire
+  from any state with no terminal evidence (`prepared`, `accepted`,
+  `dispatching`, `interrupted_unknown`, or terminal without evidence);
+  without the authorization, non-`interrupted_unknown` targets stay
+  non-retireable. Retirement preserves payload and hash, normalizes
+  non-terminal states to `interrupted_unknown`, never deletes the record, and
+  never writes terminal evidence.
+- **SQL settlement.** The transaction reuses the pre-intake structure —
+  session/turn locks, load the exact submission, CAS on the observed
+  state/outcome, insert the effect, resolve the bound blocks, advance the
+  recovery revision, commit — with its own effect type
+  `agent_delivery.never_started_settlement:<submissionID>`: this submission
+  did reach the journal, so a pre-intake effect would make the audit trail
+  false, and the record was retired rather than abandoned in place, so an
+  abandoned effect would too. The submission becomes `failed`/`failed` with
+  `terminal_sequence=0` and `fully_settled_at` NULL; it accepts
+  `dispatching`/`dispatching` or `interrupted_unknown`/`prompt_dispatch_failed`
+  as the observed state, and the caller re-reads and retries once on a
+  conflict. Blocks with any stream ID bound to the exact submission are
+  resolved with `authorized_action=durable_delivery_never_started`; unrelated
+  blocks are untouched and no queue work is released.
+- **Replay and crash convergence.** A submission already `failed` with the
+  effect returns already-settled and resolves only still-open bound blocks. A
+  `failed` submission without the effect is a conflict, never a silent
+  success. If the journal retirement commits and the SQL transaction fails or
+  the backend crashes, the retired record remains idempotent evidence: the SQL
+  row stays uncertain, and a later settlement or native resume still matches
+  the retired peer by ID, hash, and generation.
+- **Session ownership after the stop.** The final session and turn writes are
+  guarded by durable rows — the session's execution binding, the prompt
+  generation stamped on the captured turn at stall time, that turn still
+  being the active, non-terminal turn, and no cancel in flight — because the
+  force-stop removes the live execution from the runtime store.
+  `RUNNING`, `WAITING_FOR_INPUT`, and `IDLE` sessions stay eligible, so the
+  prompt error path's own revert does not suppress recovery. A successor
+  execution or turn, a terminal session, or a user cancellation ends
+  ownership; the delivery settlement still commits, but no session, turn,
+  notice, or task write is made and auto-resume is skipped.
+- **Session outcome and recovery.** The settled path reuses the
+  provider-turn-failure pipeline: the captured turn is patched
+  error-terminated, managed input settles failed with
+  `execution_failed_without_observed_effects`, the turn completes, the session
+  moves to `WAITING_FOR_INPUT` with the stall error, the task is reconciled
+  to review, and one deterministic-identity notice states the message was not
+  delivered. At most one auto-resume per stall episode then relaunches the
+  agent through the existing auto-resume path without dispatching the
+  historical prompt. See the [agent stall recovery design](../../agents/system-design/agent-stall-recovery.md).
+- **Late signals.** The force-stopped prompt's error path is terminal-aware:
+  after `markInterrupted`, it checks the submission and skips block creation
+  when the row is already terminal; `handlePromptError` skips the revert to
+  the previous session state and the turn completion for a settled
+  submission. Both guards read the database, so they hold regardless of which
+  goroutine wins and across a backend restart.
+- **Blocked fallback.** Missing identity, a live or mismatched owner,
+  conflicting or unavailable journal evidence, a failed SQL settlement, or an
+  expired settlement window performs no journal or SQL write: the session and
+  task take the legacy `FAILED` launch-failure outcome, the submission stays
+  uncertain, and its recovery block stays open.
+
 ## Admission health
 
 The capability carries `AdmissionBlocked` while the journal remains readable.
@@ -146,6 +237,13 @@ remain available.
 | agent_delivery_event_rejected_total | Events | agentctl update pump, reason (`event_too_large`, `queue_too_large`) |
 
 Both label sets are closed and never carry submission, stream, task, or payload identity.
+The orchestrator-side never-started settlement adds
+`provider_stall_settlement_total` (outcome `settled`, `already_settled`,
+`blocked`, `partial_output`, plus a closed blocked reason set:
+`identity_missing`, `owner_alive`, `journal_conflict`, `journal_unavailable`,
+`sql_failed`, `settlement_timeout`) and `provider_stall_auto_resume_total`
+(`attempted`, `succeeded`, `failed`, `skipped`), with the same closed-label
+rule.
 
 ## Related records
 
@@ -154,3 +252,5 @@ Both label sets are closed and never carry submission, stream, task, or payload 
 - [Recovery of missing durable delivery records](durable-agent-record-recovery.md).
 - [Pre-intake delivery settlement decision](../../../decisions/2026-11-03-pre-intake-delivery-settlement.md).
 - [Abandoned delivery settlement decision](../../../decisions/2026-11-04-abandoned-delivery-settlement.md).
+- [Never-started stall recovery decision](../../../decisions/2026-11-04-never-started-stall-recovery.md).
+- [Agent stall recovery design](../../agents/system-design/agent-stall-recovery.md).

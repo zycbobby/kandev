@@ -23,6 +23,7 @@ existing controls, recovery actions, and persistence.
 | --- | --- |
 | REQ-PLATFORM-DURABLE-AGENT-DELIVERY-006, criteria .7 and .10 | Workspace-only access |
 | REQ-PLATFORM-DURABLE-AGENT-DELIVERY-006, criteria .8, .9, .11 and .12 | Manual resume |
+| REQ-PLATFORM-DURABLE-AGENT-DELIVERY-006, criterion .27 | Never-started stall settlement |
 | REQ-PLATFORM-DURABLE-AGENT-DELIVERY-006, criteria .1 through .6 | Existing delivery and continuity designs |
 
 ## Workspace-only access
@@ -103,6 +104,28 @@ On backend adoption, unknown SQL history is excluded from active work only when 
 full peer records retain matching retirement, uncertain state, session/incarnation, generation,
 and payload hash. Missing or conflicting proof remains blocked. No recovery summary field,
 new endpoint, migration, native conversation replacement, or generation rotation is needed.
+
+## Never-started stall settlement
+
+A provider stall that leaves a prompt with zero turn events no longer waits on
+the uncertain-delivery path. When the watchdog stops the execution and the
+zero-event settlement succeeds, the durable submission becomes `failed`, its
+retained journal record is retired, and the bound recovery block is resolved
+in the same auditable operation (see the
+[settlement design](durable-agent-delivery-settlement.md)). The session is
+already `WAITING_FOR_INPUT` with a stall error and one deterministic-identity
+notice stating the message was not delivered, so manual Resume is not the
+recovery entry: at most one automatic resume per stall episode relaunches the
+agent without resending the historical prompt, and the composer accepts a new
+prompt directly.
+
+A settled submission is terminal, so it no longer matches the
+interrupted-unknown evidence this design reconciles, and native resume skips
+its retired journal peer instead of reporting disagreeing evidence. Blocked
+settlement evidence keeps this design's uncertain path authoritative: the
+submission stays `interrupted_unknown`, its `unknown_prompt_outcome` block
+stays open, and the explicit Resume and Retry controls keep their current
+meaning.
 
 ## Failure and compatibility
 

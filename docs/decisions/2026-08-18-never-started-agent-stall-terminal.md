@@ -1,6 +1,6 @@
 # ADR-2026-08-18-never-started-agent-stall-terminal: Treat Never-Started Agent Stalls as Terminal
 
-**Status:** accepted
+**Status:** superseded by [ADR-2026-11-04-never-started-stall-recovery](2026-11-04-never-started-stall-recovery.md)
 **Date:** 2026-08-18
 **Area:** backend, frontend, protocol
 
@@ -21,6 +21,13 @@ The snapshot carries a prompt activity epoch. The orchestrator validates the
 execution, prompt generation, and activity epoch before it applies the failure.
 The terminal message uses settled error rendering and has no running-only cancel
 action. Running notices keep their existing neutral cancel action.
+
+The never-started classification itself — the discriminator, the activity-epoch
+guard, and the process teardown — is retained by the superseding decision. The
+`FAILED` outcome is replaced by a settled/blocked split: a zero-event
+settlement leaves the session `WAITING_FOR_INPUT` with a not-delivered notice
+and one bounded automatic resume, while blocked evidence keeps the fail-closed
+`FAILED` path described here.
 
 ## Consequences
 
