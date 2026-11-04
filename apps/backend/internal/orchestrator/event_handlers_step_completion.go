@@ -60,6 +60,7 @@ func (s *Service) clearPendingStepSignalByID(ctx context.Context, sessionID stri
 		s.logger.Debug("clearPendingStepSignal: failed to persist nil bag entry",
 			zap.String("session_id", sessionID), zap.Error(err))
 	}
+	s.clearStepSignalDeliveryNotice(ctx, sessionID)
 }
 
 // recordAutoStepTransition writes the ADR 0015 audit row for an

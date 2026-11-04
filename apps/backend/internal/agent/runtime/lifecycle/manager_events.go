@@ -1516,6 +1516,9 @@ func (m *Manager) handleAgentEventAtContextResetBoundaryInternal(
 	if m.handleMCPAttachmentEvent(execution, &event, attemptID) {
 		return
 	}
+	if m.handleSignalDeliveryFailureEvent(execution, &event, attemptID) {
+		return
+	}
 	if event.PromptGeneration == 0 || (event.Type != toolStatusComplete && event.Type != toolStatusError) {
 		m.recordActivity(execution, event)
 	}
@@ -1558,6 +1561,39 @@ func (m *Manager) handleMCPAttachmentEvent(
 	}
 	// Attachment diagnostics must not count as model activity or alter turn
 	// ownership. They flow directly to the orchestrator for persistence.
+	m.eventPublisher.publishAgentStreamEventWithAttempt(execution, *event, attemptID)
+	return true
+}
+
+// handleSignalDeliveryFailureEvent forwards one completion-pending notice
+// without counting it as model activity or altering turn ownership. The
+// orchestrator persists the existing session error surface from it.
+func (m *Manager) handleSignalDeliveryFailureEvent(
+	execution *AgentExecution,
+	event *agentctl.AgentEvent,
+	attemptID string,
+) bool {
+	if event.Type != streams.EventTypeSignalDeliveryFailed {
+		return false
+	}
+	if event.SignalDeliveryFailure == nil {
+		m.logger.Warn("dropping signal delivery notice without notice payload",
+			zap.String("execution_id", execution.ID))
+		return true
+	}
+	notice := *event.SignalDeliveryFailure
+	if notice.SessionID != "" && notice.SessionID != execution.SessionID {
+		m.logger.Warn("dropping stale signal delivery notice",
+			zap.String("notice_session_id", notice.SessionID),
+			zap.String("live_session_id", execution.SessionID))
+		return true
+	}
+	if !notice.Reason.Valid() {
+		m.logger.Warn("dropping signal delivery notice with unknown reason",
+			zap.String("request_id", notice.RequestID),
+			zap.String("reason", string(notice.Reason)))
+		return true
+	}
 	m.eventPublisher.publishAgentStreamEventWithAttempt(execution, *event, attemptID)
 	return true
 }

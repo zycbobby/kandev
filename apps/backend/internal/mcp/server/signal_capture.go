@@ -32,9 +32,11 @@ const signalDeliveredTimeout = 5 * time.Second
 
 // SignalDeliveryScheduler owns the bounded delivery-window timers for captured
 // signals. The process manager implements it so timer lifetime follows the
-// instance's lifetime context rather than the stream connection.
+// instance's lifetime context rather than the stream connection. createdAt is
+// the capture time: a replayed record that is already past the window fires
+// immediately rather than restarting the window.
 type SignalDeliveryScheduler interface {
-	ScheduleSignalDeliveryNotice(signalID string)
+	ScheduleSignalDeliveryNotice(signalID string, createdAt time.Time)
 	CancelSignalDeliveryNotice(signalID string)
 }
 
@@ -134,6 +136,7 @@ func (c *ChannelBackendClient) captureSignal(
 		Action:    action,
 		SessionID: sessionID,
 		Payload:   payload,
+		CreatedAt: time.Now().UTC(),
 		// The immediate send is the first delivery attempt; replays advance it.
 		Attempts: 1,
 	}
@@ -149,7 +152,7 @@ func (c *ChannelBackendClient) captureSignal(
 	}
 	agentstream.RecordSignalCapture("captured")
 	if scheduler := c.signalDeliveryScheduler(); scheduler != nil {
-		scheduler.ScheduleSignalDeliveryNotice(id)
+		scheduler.ScheduleSignalDeliveryNotice(id, signal.CreatedAt)
 	}
 	return nil
 }
@@ -253,6 +256,14 @@ func (c *ChannelBackendClient) PendingSignalReplayBatch(ctx context.Context) ([]
 				c.logger.Debug("failed to record captured signal replay attempt",
 					zap.String("request_id", signal.ID),
 					zap.Error(err))
+			}
+		}
+		// A signal captured before an agentctl restart has no live timer. Re-arm
+		// from its capture time so a record already past the window reports
+		// completion-pending as soon as the stream returns.
+		if signal.NotifiedAt == nil {
+			if scheduler := c.signalDeliveryScheduler(); scheduler != nil {
+				scheduler.ScheduleSignalDeliveryNotice(signal.ID, signal.CreatedAt)
 			}
 		}
 		agentstream.RecordSignalReplay("replayed")

@@ -28,6 +28,7 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/server/utility"
 	"github.com/kandev/kandev/internal/agentctl/types"
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
+	"github.com/kandev/kandev/internal/common/agentstream"
 	"github.com/kandev/kandev/internal/common/logger"
 	"github.com/kandev/kandev/internal/common/mcpmode"
 	"github.com/kandev/kandev/internal/common/securityutil"
@@ -140,6 +141,12 @@ type Manager struct {
 	deliveryCancellationFailed  bool
 	deliveryPromptMu            sync.Mutex
 	deliveryPromptByGeneration  map[uint64]string
+
+	// signalNoticeMu guards the bounded delivery-window timers for captured
+	// signals. Timer callbacks read the journal, never in-memory payloads.
+	signalNoticeMu       sync.Mutex
+	signalNoticeTimers   map[string]*time.Timer
+	signalDeliveryWindow time.Duration
 
 	// Process state
 	cmd                *exec.Cmd
@@ -391,6 +398,7 @@ func (m *Manager) CloseAdmission() {
 	if m.shellMgr != nil {
 		m.shellMgr.BeginStop()
 	}
+	m.stopSignalDeliveryNotices()
 }
 
 // BeginOwnedOperation admits instance-scoped work and returns a context that
@@ -454,6 +462,8 @@ func NewManager(cfg *config.InstanceConfig, log *logger.Logger) *Manager {
 		lifetimeCtx:                lifetimeCtx,
 		lifetimeCancel:             lifetimeCancel,
 		deliveryPromptByGeneration: make(map[uint64]string),
+		signalNoticeTimers:         make(map[string]*time.Timer),
+		signalDeliveryWindow:       agentstream.SignalDeliveryWindow,
 		workspaceSourceRoots:       canonicalWorkspaceSourceRoots(cfg.WorkspaceSourceRoots),
 		trackerGitEnv:              append([]string(nil), cfg.AgentEnv...),
 	}

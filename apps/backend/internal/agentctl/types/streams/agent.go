@@ -97,6 +97,12 @@ const (
 	// protocol frames, tool payloads, credentials, and full endpoints.
 	EventTypeMCPAttachment = "mcp_attachment"
 
+	// EventTypeSignalDeliveryFailed carries one durable notice that a captured
+	// idempotent workflow signal was not confirmed delivered within the
+	// bounded delivery window. The notice contains identity, reason, attempts,
+	// and the first attempt time only; it never contains the signal payload.
+	EventTypeSignalDeliveryFailed = "signal_delivery_failed"
+
 	// EventTypeTurnStarted marks the single turn boundary this feature relies
 	// on: agentctl's own session/prompt dispatch, emitted on both a human
 	// prompt and a synthetic ScheduleWakeup self-resume. It carries only the
@@ -338,6 +344,10 @@ type AgentEvent struct {
 	// MCPAttachmentAttempt starts a new backend-owned evidence timeline. It is
 	// present only on the first EventTypeMCPAttachment event for an attempt.
 	MCPAttachmentAttempt *MCPAttachmentAttempt `json:"mcp_attachment_attempt,omitempty"`
+
+	// SignalDeliveryFailure carries one completion-pending notice when Type is
+	// EventTypeSignalDeliveryFailed. It never contains the captured payload.
+	SignalDeliveryFailure *SignalDeliveryFailure `json:"signal_delivery_failure,omitempty"`
 
 	// --- Permission request fields (for "permission_request" type) ---
 	// RequestID is the Kandev-generated identity for this exact request

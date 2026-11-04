@@ -35,7 +35,10 @@ type PendingSignal struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	DeliveredAt *time.Time      `json:"delivered_at,omitempty"`
-	Attempts    int             `json:"attempts"`
+	// NotifiedAt records that the bounded delivery-window notice was emitted.
+	// It is agentctl-internal and never crosses to the backend.
+	NotifiedAt *time.Time `json:"notified_at,omitempty"`
+	Attempts   int        `json:"attempts"`
 }
 
 // PendingSignalStore is the bounded capture surface used by signal capture and
@@ -218,6 +221,54 @@ func (j *Journal) IncrementPendingSignalAttempts(ctx context.Context, id string)
 		}
 		return bucket.Put([]byte(id), encoded)
 	})
+}
+
+// MarkPendingSignalNotified records the one bounded delivery-window notice for
+// a captured signal. It returns true only for the caller that made the
+// transition, so replays and restarts cannot emit a duplicate notice. A
+// delivered record is never notified.
+func (j *Journal) MarkPendingSignalNotified(ctx context.Context, id string) (bool, error) {
+	if id == "" {
+		return false, fmt.Errorf("%w: id is required", ErrPendingSignalInvalid)
+	}
+	now := time.Now().UTC()
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	marked := false
+	err := j.updateLocked(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		bucket := tx.Bucket(bucketPendingSignals)
+		if bucket == nil {
+			return ErrPendingSignalNotFound
+		}
+		raw := bucket.Get([]byte(id))
+		if raw == nil {
+			return ErrPendingSignalNotFound
+		}
+		signal, err := decodePendingSignal(raw)
+		if err != nil {
+			return err
+		}
+		if signal.DeliveredAt != nil || signal.NotifiedAt != nil {
+			return nil
+		}
+		signal.NotifiedAt = &now
+		encoded, err := json.Marshal(signal)
+		if err != nil {
+			return fmt.Errorf("encode pending signal: %w", err)
+		}
+		if err := bucket.Put([]byte(id), encoded); err != nil {
+			return err
+		}
+		marked = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return marked, nil
 }
 
 func validatePendingSignal(signal PendingSignal) error {

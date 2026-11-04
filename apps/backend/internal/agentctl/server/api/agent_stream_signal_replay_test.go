@@ -13,6 +13,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/kandev/kandev/internal/agentctl/journal"
+	"github.com/kandev/kandev/internal/agentctl/server/adapter"
+	"github.com/kandev/kandev/internal/agentctl/types/streams"
 	mcpserver "github.com/kandev/kandev/internal/mcp/server"
 	ws "github.com/kandev/kandev/pkg/websocket"
 )
@@ -147,5 +149,40 @@ func TestSignalReplayWriteFailureStopsWriterAndKeepsCapture(t *testing.T) {
 	}
 	if len(pending) != 1 || pending[0].ID != "req-replay-2" {
 		t.Fatalf("pending signals after write failure = %+v, want the captured record", pending)
+	}
+}
+
+// TestSignalDeliveryNoticeReplayedOnConnect proves the completion-pending
+// notice travels through the durable journal and is replayed to the backend
+// after a reconnect, not only while a stream is attached.
+func TestSignalDeliveryNoticeReplayedOnConnect(t *testing.T) {
+	server, procMgr, _ := newDurableDeliveryTestServer(t)
+	procMgr.PublishSignalDeliveryFailure(streams.SignalDeliveryFailure{
+		RequestID:      "req-notice",
+		Action:         ws.ActionMCPStepComplete,
+		SessionID:      "session-1",
+		Reason:         streams.SignalDeliveryFailureReasonWindowExceeded,
+		Attempts:       2,
+		FirstAttemptAt: time.Now().UTC(),
+	})
+
+	var replayed []adapter.AgentEvent
+	if _, err := server.replayAgentStream(context.Background(), 0, func(event adapter.AgentEvent) error {
+		replayed = append(replayed, event)
+		return nil
+	}); err != nil {
+		t.Fatalf("replay delivery stream: %v", err)
+	}
+	var notice *streams.SignalDeliveryFailure
+	for _, event := range replayed {
+		if event.Type == streams.EventTypeSignalDeliveryFailed {
+			notice = event.SignalDeliveryFailure
+		}
+	}
+	if notice == nil {
+		t.Fatal("durable replay did not deliver the completion-pending notice")
+	}
+	if notice.RequestID != "req-notice" || notice.Reason != streams.SignalDeliveryFailureReasonWindowExceeded || notice.Attempts != 2 {
+		t.Fatalf("replayed notice = %+v", notice)
 	}
 }

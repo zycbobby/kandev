@@ -225,6 +225,7 @@ func run(cfg *config.Config, log *logger.Logger) {
 		mcpBackendClient.SetPendingSignalStore(func() (journal.PendingSignalStore, error) {
 			return procMgr.DeliveryJournal()
 		})
+		mcpBackendClient.SetSignalDeliveryScheduler(procMgr)
 
 		// Create MCP server using the channel-based backend client
 		var mcpSrv *mcpserver.Server

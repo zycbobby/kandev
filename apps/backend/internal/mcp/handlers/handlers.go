@@ -2638,6 +2638,9 @@ func (h *Handlers) handleStepComplete(ctx context.Context, msg *ws.Message) (*ws
 	if !stored {
 		return h.handleDuplicateStepComplete(ctx, msg, req.TaskID, req.SessionID, launchStepID, session)
 	}
+	// A signal that reaches the backend settles any earlier completion-pending
+	// notice, even when this call is the duplicate branch above.
+	h.clearStepSignalDeliveryNotice(ctx, session)
 
 	// Counted here, at the durable bag write, not after publishStepCompletionEvent
 	// below: publish is a delivery concern, and a publish failure sends the agent
@@ -2761,6 +2764,7 @@ func (h *Handlers) handleDuplicateStepComplete(
 			return errMsg, err
 		}
 	}
+	h.clearStepSignalDeliveryNotice(ctx, session)
 	return ws.NewResponse(msg.ID, msg.Action, map[string]interface{}{
 		"accepted":   false,
 		mcpReasonKey: "already_signaled",

@@ -341,6 +341,11 @@ type AgentStreamEventData struct {
 	// MCPAttachmentAttempt starts a new backend-owned MCP evidence timeline.
 	MCPAttachmentAttempt *streams.MCPAttachmentAttempt `json:"mcp_attachment_attempt,omitempty"`
 
+	// SignalDeliveryFailure carries a durable agentctl notice that a captured
+	// workflow signal was not confirmed delivered within the bounded window.
+	// It contains no signal payload.
+	SignalDeliveryFailure *streams.SignalDeliveryFailure `json:"signal_delivery_failure,omitempty"`
+
 	// BackgroundWork contains background workload observation data.
 	BackgroundWork *streams.WorkloadRunObservation `json:"background_work,omitempty"`
 

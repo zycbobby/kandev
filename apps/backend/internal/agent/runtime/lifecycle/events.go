@@ -502,6 +502,7 @@ func buildAgentStreamEventData(event agentctl.AgentEvent) *AgentStreamEventData 
 		PlanContent:                 event.PlanContent,
 		MCPAttachment:               event.MCPAttachment,
 		MCPAttachmentAttempt:        event.MCPAttachmentAttempt,
+		SignalDeliveryFailure:       event.SignalDeliveryFailure,
 		BackgroundWork:              event.BackgroundWork,
 		BackgroundWorkOutput:        event.BackgroundWorkOutput,
 	}

@@ -1163,6 +1163,12 @@ const SessionMetaKeyAgentStartAttemptID = "agent_start_attempt_id"
 // failure for UI surfaces that need to keep the error visible after auto-resume.
 const SessionMetaKeyLastAgentError = "last_agent_error"
 
+// AgentErrorCodeStepSignalDeliveryFailed marks the session error breadcrumb
+// written when agentctl could not confirm delivery of a captured workflow
+// step-completion signal. The existing agent-error surface renders it; the
+// breadcrumb is cleared when a signal is accepted or the pending bag changes.
+const AgentErrorCodeStepSignalDeliveryFailed = "STEP_SIGNAL_DELIVERY_FAILED"
+
 // LastAgentError is persisted under TaskSession.Metadata[SessionMetaKeyLastAgentError].
 // RemediationURL is only ever set from an adapter-validated provider
 // diagnostic; it is never reconstructed from the error message.

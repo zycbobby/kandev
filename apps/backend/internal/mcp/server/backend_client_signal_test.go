@@ -115,16 +115,21 @@ func (s *fakePendingSignalStore) deliveredIDs() []string {
 	return append([]string(nil), s.delivered...)
 }
 
+type scheduledNotice struct {
+	id        string
+	createdAt time.Time
+}
+
 type fakeSignalScheduler struct {
 	mu        sync.Mutex
-	scheduled []string
+	scheduled []scheduledNotice
 	canceled  []string
 }
 
-func (s *fakeSignalScheduler) ScheduleSignalDeliveryNotice(signalID string) {
+func (s *fakeSignalScheduler) ScheduleSignalDeliveryNotice(signalID string, createdAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.scheduled = append(s.scheduled, signalID)
+	s.scheduled = append(s.scheduled, scheduledNotice{id: signalID, createdAt: createdAt})
 }
 
 func (s *fakeSignalScheduler) CancelSignalDeliveryNotice(signalID string) {
@@ -133,10 +138,18 @@ func (s *fakeSignalScheduler) CancelSignalDeliveryNotice(signalID string) {
 	s.canceled = append(s.canceled, signalID)
 }
 
-func (s *fakeSignalScheduler) snapshot() (scheduled, canceled []string) {
+func (s *fakeSignalScheduler) snapshot() (scheduled []scheduledNotice, canceled []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.scheduled...), append([]string(nil), s.canceled...)
+	return append([]scheduledNotice(nil), s.scheduled...), append([]string(nil), s.canceled...)
+}
+
+func scheduledNoticeIDs(notices []scheduledNotice) []string {
+	ids := make([]string, len(notices))
+	for i, notice := range notices {
+		ids[i] = notice.id
+	}
+	return ids
 }
 
 func newSignalTestClient(t *testing.T, store journal.PendingSignalStore, scheduler SignalDeliveryScheduler) *ChannelBackendClient {
@@ -176,7 +189,7 @@ func TestStepCompleteSignalCapturedBeforePublish(t *testing.T) {
 	require.Equal(t, 1, captured.Attempts)
 
 	scheduled, _ := scheduler.snapshot()
-	require.Equal(t, []string{request.ID}, scheduled)
+	require.Equal(t, []string{request.ID}, scheduledNoticeIDs(scheduled))
 
 	response, err := ws.NewResponse(request.ID, request.Action, map[string]any{"accepted": true})
 	require.NoError(t, err)
@@ -295,6 +308,27 @@ func TestStepCompleteSignalReplayUsesOriginalIdentity(t *testing.T) {
 	replayed, ok := store.get("req-original")
 	require.True(t, ok)
 	require.Equal(t, 2, replayed.Attempts)
+}
+
+func TestStepCompleteSignalReplayRearmsNoticeFromCaptureTime(t *testing.T) {
+	store := newFakePendingSignalStore()
+	scheduler := &fakeSignalScheduler{}
+	client := newSignalTestClient(t, store, scheduler)
+	capturedAt := time.Now().UTC().Add(-2 * time.Minute)
+	require.NoError(t, store.PutPendingSignal(context.Background(), journal.PendingSignal{
+		ID: "req-restarted", Action: ws.ActionMCPStepComplete, SessionID: "session-signal",
+		Payload: json.RawMessage(`{"summary":"done"}`), CreatedAt: capturedAt, Attempts: 1,
+	}))
+
+	requests, err := client.PendingSignalReplayBatch(context.Background())
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+
+	scheduled, _ := scheduler.snapshot()
+	require.Len(t, scheduled, 1, "a capture from before an agentctl restart must re-arm its notice")
+	require.Equal(t, "req-restarted", scheduled[0].id)
+	require.Equal(t, capturedAt, scheduled[0].createdAt,
+		"the window is derived from the capture time, not the reconnect time")
 }
 
 func TestStepCompleteSignalReplaySkipsDeliveredRecords(t *testing.T) {
