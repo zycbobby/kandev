@@ -191,7 +191,8 @@ type neverStartedStallOutcome struct {
 // the original runtime proof captured in the payload. Any blocked evidence,
 // conflicting state, or failed write leaves the uncertain submission and its
 // open block untouched and reports settled=false for the fail-closed
-// fallback.
+// fallback. Every return records its settlement outcome in
+// provider_stall_settlement_total, with a classified blocked reason.
 func (s *Service) settleNeverStartedStall(
 	ctx context.Context,
 	payload agentruntime.AgentStalledPayload,
@@ -200,14 +201,17 @@ func (s *Service) settleNeverStartedStall(
 ) neverStartedStallOutcome {
 	retirer, ok := s.agentManager.(neverStartedDeliveryRetirer)
 	if !ok {
+		providerStallBlocked(providerStallBlockedIdentityMissing)
 		return neverStartedStallOutcome{}
 	}
 	rows, ok := s.repo.(repository.AgentDeliveryRepository)
 	if !ok {
+		providerStallBlocked(providerStallBlockedIdentityMissing)
 		return neverStartedStallOutcome{}
 	}
 	observed, err := rows.GetAgentDeliverySubmission(ctx, payload.DeliverySubmissionID)
 	if err != nil || !neverStartedStallSubmissionMatchesPayload(observed, payload) {
+		providerStallBlocked(providerStallBlockedIdentityMissing)
 		s.logger.Warn("never-started stall settlement skipped; the SQL submission does not match the stall identity",
 			zap.String("task_id", payload.TaskID),
 			zap.String("session_id", payload.SessionID),
@@ -228,6 +232,7 @@ func (s *Service) settleNeverStartedStall(
 		PayloadHash:       observed.PayloadHash,
 		OriginalRuntime:   identity,
 	}); err != nil {
+		providerStallBlocked(providerStallRetirementBlockedReason(err))
 		s.logger.Warn("never-started stall settlement blocked by journal retirement",
 			zap.String("task_id", payload.TaskID),
 			zap.String("session_id", payload.SessionID),
@@ -237,6 +242,7 @@ func (s *Service) settleNeverStartedStall(
 	}
 	result, err := s.settleNeverStartedSQLSubmission(settleCtx, payload, observed)
 	if err != nil || result == nil || !result.Settled {
+		providerStallBlocked(providerStallSQLBlockedReason(err))
 		s.logger.Warn("never-started stall SQL settlement did not commit",
 			zap.String("task_id", payload.TaskID),
 			zap.String("session_id", payload.SessionID),
@@ -244,6 +250,7 @@ func (s *Service) settleNeverStartedStall(
 			zap.Error(err))
 		return neverStartedStallOutcome{}
 	}
+	providerStallSettled(result.AlreadySettled)
 	return neverStartedStallOutcome{settled: true, recovered: s.applySettledNeverStartedStall(ctx, payload, turnID)}
 }
 
@@ -612,15 +619,40 @@ func neverStartedBlockedNoticeContent(stalledFor time.Duration) string {
 }
 
 // attemptNeverStartedStallAutoResume performs the settlement's single
-// auto-resume attempt for a recovered session. It relaunches the agent through
-// the existing resume path without re-sending the historical prompt; a failure
-// is logged by the resume path itself and leaves the session recoverable, and
-// no retry is scheduled. Bounded by neverStartedStallAutoResumeBudget.
+// auto-resume attempt for a recovered session. It re-checks, from durable
+// rows, the ownership guards the settlement path itself needed — defense in
+// depth: settlement eligibility already excludes most of them, but the task
+// can be archived, reassigned to Office or automation, or the session made
+// passthrough between the eligibility check and this launch. A guard failure
+// or a refused autoResumeEligibility skips the launch entirely. Otherwise it
+// relaunches the agent through the existing resume path without re-sending
+// the historical prompt; a failure is logged by the resume path itself and
+// leaves the session recoverable, and no retry is scheduled. Bounded by
+// neverStartedStallAutoResumeBudget; every outcome is recorded in
+// provider_stall_auto_resume_total.
 func (s *Service) attemptNeverStartedStallAutoResume(ctx context.Context, taskID, sessionID string) {
 	resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), neverStartedStallAutoResumeBudget)
 	defer cancel()
+	task, _ := s.repo.GetTask(resumeCtx, taskID)
+	session, _ := s.repo.GetTaskSession(resumeCtx, sessionID)
+	if task == nil || session == nil || taskArchived(task) || task.IsFromOffice ||
+		models.IsAutomationTaskOrigin(task.Origin) || session.IsPassthrough {
+		providerStallAutoResume(providerStallResumeSkipped)
+		return
+	}
+	if allowed, _ := s.autoResumeEligibility(resumeCtx, task, session); !allowed {
+		providerStallAutoResume(providerStallResumeSkipped)
+		return
+	}
+	providerStallAutoResume(providerStallResumeAttempted)
 	s.logger.Debug("attempting never-started stall auto-resume",
 		zap.String("task_id", taskID),
 		zap.String("session_id", sessionID))
-	s.tryEnsureExecution(resumeCtx, sessionID, seam3CallShapeViewing, launchOriginAutomatic, "")
+	if err := s.tryEnsureExecutionWithBinding(
+		resumeCtx, sessionID, seam3CallShapeViewing, launchOriginAutomatic, "", nil,
+	); err != nil {
+		providerStallAutoResume(providerStallResumeFailed)
+		return
+	}
+	providerStallAutoResume(providerStallResumeSucceeded)
 }

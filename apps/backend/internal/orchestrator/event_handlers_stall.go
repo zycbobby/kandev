@@ -94,6 +94,7 @@ func (s *Service) handleAgentStalled(ctx context.Context, payload lifecycle.Agen
 		s.handleNeverStartedStall(ctx, payload, session, turnID)
 		return
 	}
+	providerStallPartialOutput()
 	metadata := map[string]interface{}{
 		metaKeySessionID:        payload.SessionID,
 		metaKeyTaskID:           payload.TaskID,
