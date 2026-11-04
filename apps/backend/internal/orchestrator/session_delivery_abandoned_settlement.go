@@ -20,6 +20,15 @@ type deliveryRecordRetirementClient interface {
 	RetireDeliveryRecordSubmissions(context.Context, agentruntime.DeliveryRecordRetirementRequest) (*agentruntime.DeliveryRecordRetirementResult, error)
 }
 
+// abandonedSettlementExcluded keeps Office- and automation-owned sessions on
+// their existing recovery paths. This settlement only serves user-owned work.
+func (s *Service) abandonedSettlementExcluded(ctx context.Context, session *models.TaskSession) (bool, error) {
+	if s.automationOwnsRetrySession(ctx, session.TaskID, session.ID) {
+		return true, nil
+	}
+	return s.lookupOfficeTask(ctx, session.TaskID)
+}
+
 // retryAbandonedJournalDelivery settles a submission whose retained journal
 // record proves the historical prompt was abandoned. It reports handled=false
 // when the evidence belongs to an existing recovery path (terminal history,
@@ -31,6 +40,13 @@ func (s *Service) retryAbandonedJournalDelivery(
 	recovery models.AgentDeliveryRecovery,
 	submission *models.AgentDeliverySubmission,
 ) (*SessionDeliveryRecoveryResponse, bool, error) {
+	excluded, err := s.abandonedSettlementExcluded(ctx, session)
+	if err != nil {
+		return nil, false, err
+	}
+	if excluded {
+		return nil, false, nil
+	}
 	if recovery.Phase != models.AgentDeliveryRecoveryUncertain || recovery.HistoryGap != nil ||
 		!abandonedBlockMatches(block, recovery) {
 		return nil, false, nil

@@ -39,7 +39,10 @@ func TestChannelBackendClientCloseBeforeRequestDoesNotPublish(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
 	err := client.RequestPayload(ctx, "test.action", map[string]any{"value": "test"}, nil)
-	require.EqualError(t, err, "MCP backend client is closed")
+	var deliveryErr *RequestDeliveryError
+	require.ErrorAs(t, err, &deliveryErr)
+	require.Equal(t, RequestDeliveryClientClosedCode, deliveryErr.Code)
+	require.True(t, deliveryErr.Retryable)
 
 	select {
 	case msg := <-client.GetRequestChannel():
@@ -86,6 +89,21 @@ func TestChannelBackendClientDoesNotQueueRequestWithoutStreamConsumer(t *testing
 		t.Fatalf("request %q was queued without a stream consumer", msg.ID)
 	default:
 	}
+}
+
+// @covers AC-PLATFORM-AGENT-STREAM-SIGNAL-002.2
+func TestChannelBackendClientUnpublishedRequestReturnsTypedRetryableError(t *testing.T) {
+	client := NewChannelBackendClient(nil)
+	t.Cleanup(client.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	t.Cleanup(cancel)
+
+	err := client.RequestPayload(ctx, "mcp.tools.call", map[string]any{"name": "x"}, nil)
+	var deliveryErr *RequestDeliveryError
+	require.ErrorAs(t, err, &deliveryErr)
+	require.Equal(t, RequestDeliveryCancelledCode, deliveryErr.Code)
+	require.True(t, deliveryErr.Retryable)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the transport cause remains inspectable")
 }
 
 // @covers AC-AGENTS-MCP-BRIDGE-RELIABILITY-001.5

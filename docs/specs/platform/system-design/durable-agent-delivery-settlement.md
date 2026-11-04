@@ -87,7 +87,9 @@ through the conservative rules below.
   missing or terminal. Any active SQL peer, any `prepared`/`accepted`/
   `dispatching` record, a truncated descriptor, or an unproven outcome keeps
   the whole settlement blocked. Session, incarnation, generation, stream,
-  submission ID, and immutable payload hash must match.
+  submission ID, and immutable payload hash must match. The persisted recovery
+  record must be in the `uncertain` phase with no recorded history gap; other
+  phases keep their existing reconciliation path.
 - **Death proof.** The historical `OriginalRuntime` must validate and
   `processidentity.OwnedSessionTerminated` must return true. Unsupported
   platforms fail closed.

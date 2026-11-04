@@ -246,7 +246,9 @@ func (s *Service) handleAgentStreamEvent(ctx context.Context, payload *lifecycle
 		s.handleSessionMCPAttachmentEvent(ctx, payload)
 
 	case streams.EventTypeSignalDeliveryFailed:
-		s.handleSignalDeliveryFailureNoticeEvent(ctx, payload)
+		if payload.Data != nil {
+			s.handleSignalDeliveryFailureNoticeEvent(ctx, payload.TaskID, payload.SessionID, payload.ExecutionID, payload.Data.SignalDeliveryFailure)
+		}
 
 	case streams.EventTypeSessionInfo:
 		s.handleSessionInfoEvent(ctx, payload)

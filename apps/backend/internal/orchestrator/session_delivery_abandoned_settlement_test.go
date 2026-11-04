@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kandev/kandev/internal/agentctl/journal"
+	"github.com/kandev/kandev/internal/automation"
 	"github.com/kandev/kandev/internal/common/processidentity"
 	"github.com/kandev/kandev/internal/orchestrator/executor"
 	"github.com/kandev/kandev/internal/orchestrator/messagequeue"
@@ -44,6 +45,30 @@ type abandonedRetryFixture struct {
 	repo    *tasksqlite.Repository
 	payload []byte
 	hash    string
+}
+
+type abandonedAutomationService struct {
+	runs []*automation.AutomationRun
+}
+
+func (f *abandonedAutomationService) GetAutomation(context.Context, string) (*automation.Automation, error) {
+	return nil, nil
+}
+
+func (f *abandonedAutomationService) RecordRun(context.Context, *automation.AutomationRun) error {
+	return nil
+}
+
+func (f *abandonedAutomationService) MarkRunFailedByTaskID(context.Context, string, string) error {
+	return nil
+}
+
+func (f *abandonedAutomationService) MarkRunSucceededByTaskID(context.Context, string) error {
+	return nil
+}
+
+func (f *abandonedAutomationService) ListOpenRunsByTaskID(context.Context, string) ([]*automation.AutomationRun, error) {
+	return f.runs, nil
 }
 
 func seedAbandonedRetry(t *testing.T, options abandonedRetryOptions) *abandonedRetryFixture {
@@ -461,6 +486,38 @@ func TestRetrySessionDeliveryAbandonedSettlementRejectsBeforeWrites(t *testing.T
 		_, err := fixture.service.RetrySessionDelivery(ctx, fixture.session.TaskID, fixture.session.ID)
 		require.Error(t, err)
 		require.Zero(t, fixture.manager.inspectCalls, "authorization must run before any evidence read")
+		require.Zero(t, fixture.manager.retirementCalls)
+		require.Empty(t, fixture.manager.capturedPromptCalls)
+	})
+	t.Run("office task", func(t *testing.T) {
+		ctx := context.Background()
+		fixture := seedAbandonedRetry(t, abandonedRetryOptions{})
+		task, err := fixture.repo.GetTask(ctx, fixture.session.TaskID)
+		require.NoError(t, err)
+		task.ProjectID = "office-project"
+		require.NoError(t, fixture.repo.UpdateTask(ctx, task))
+
+		response, err := fixture.service.RetrySessionDelivery(ctx, fixture.session.TaskID, fixture.session.ID)
+		require.NoError(t, err)
+		require.NotEqual(t, SessionDeliveryRecoverySettled, response.Outcome)
+		require.Zero(t, fixture.manager.inspectCalls, "office tasks must not enter abandoned settlement")
+		require.Zero(t, fixture.manager.retirementCalls)
+		require.Empty(t, fixture.manager.capturedPromptCalls)
+		submission, err := fixture.repo.GetAgentDeliverySubmission(ctx, abandonedRetrySubmission)
+		require.NoError(t, err)
+		require.Equal(t, models.DeliverySubmissionInterruptedUnknown, submission.State)
+	})
+	t.Run("automation owned session", func(t *testing.T) {
+		ctx := context.Background()
+		fixture := seedAbandonedRetry(t, abandonedRetryOptions{})
+		fixture.service.automationService = &abandonedAutomationService{runs: []*automation.AutomationRun{{
+			RetryGroupID: "retry-group-abandoned", SessionID: fixture.session.ID,
+		}}}
+
+		response, err := fixture.service.RetrySessionDelivery(ctx, fixture.session.TaskID, fixture.session.ID)
+		require.NoError(t, err)
+		require.NotEqual(t, SessionDeliveryRecoverySettled, response.Outcome)
+		require.Zero(t, fixture.manager.inspectCalls, "automation-owned sessions must not enter abandoned settlement")
 		require.Zero(t, fixture.manager.retirementCalls)
 		require.Empty(t, fixture.manager.capturedPromptCalls)
 	})

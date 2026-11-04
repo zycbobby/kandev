@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kandev/kandev/internal/agent/runtime/lifecycle"
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
 	"github.com/kandev/kandev/internal/events"
 	"github.com/kandev/kandev/internal/events/bus"
@@ -21,19 +20,19 @@ const stepSignalDeliveryStampPrefix = "signal-delivery:"
 // completion-pending notice on the existing session error breadcrumb. It adds
 // no UI concept: the message states the workflow step is pending and names the
 // agent's recovery path (resend the signal or reply in chat).
-func (s *Service) handleSignalDeliveryFailureNoticeEvent(ctx context.Context, payload *lifecycle.AgentStreamEventPayload) {
-	if payload == nil || payload.Data == nil || payload.SessionID == "" || s.repo == nil {
+func (s *Service) handleSignalDeliveryFailureNoticeEvent(
+	ctx context.Context,
+	taskID, sessionID, executionID string,
+	notice *streams.SignalDeliveryFailure,
+) {
+	if notice == nil || notice.RequestID == "" || sessionID == "" || s.repo == nil {
 		return
 	}
-	notice := payload.Data.SignalDeliveryFailure
-	if notice == nil || notice.RequestID == "" {
-		return
-	}
-	session, err := s.repo.GetTaskSession(ctx, payload.SessionID)
+	session, err := s.repo.GetTaskSession(ctx, sessionID)
 	if err != nil || session == nil {
 		if err != nil {
 			s.logger.Warn("failed to load session for signal delivery notice",
-				zap.String("session_id", payload.SessionID), zap.Error(err))
+				zap.String("session_id", sessionID), zap.Error(err))
 		}
 		return
 	}
@@ -50,19 +49,19 @@ func (s *Service) handleSignalDeliveryFailureNoticeEvent(ctx context.Context, pa
 		Message:     stepSignalDeliveryMessage(notice),
 		OccurredAt:  time.Now().UTC(),
 		Scope:       models.ErrorScopeSession,
-		ExecutionID: payload.ExecutionID,
+		ExecutionID: executionID,
 		Code:        models.AgentErrorCodeStepSignalDeliveryFailed,
 		Details:     stepSignalDeliveryDetails(notice),
 		StampValue:  stamp,
 	}
 	writeCtx := context.WithoutCancel(ctx)
-	if err := s.repo.SetSessionMetadataKey(writeCtx, payload.SessionID, models.SessionMetaKeyLastAgentError, lastErr); err != nil {
+	if err := s.repo.SetSessionMetadataKey(writeCtx, sessionID, models.SessionMetaKeyLastAgentError, lastErr); err != nil {
 		s.logger.Warn("failed to persist signal delivery notice",
-			zap.String("session_id", payload.SessionID),
+			zap.String("session_id", sessionID),
 			zap.Error(err))
 		return
 	}
-	s.publishStepSignalDeliveryErrorChanged(writeCtx, payload.TaskID, payload.SessionID, lastErr)
+	s.publishStepSignalDeliveryErrorChanged(writeCtx, taskID, sessionID, lastErr)
 }
 
 func stepSignalDeliveryMessage(notice *streams.SignalDeliveryFailure) string {

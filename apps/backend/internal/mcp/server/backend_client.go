@@ -183,7 +183,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 				Retryable: true,
 			}
 		}
-		return fmt.Errorf("MCP backend client is closed")
+		return sendFailure(false, action, RequestDeliveryClientClosedCode, "the MCP backend client is closed", nil)
 	}
 	publishing := true
 	defer func() {
@@ -239,7 +239,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 	case c.requestCh <- msg:
 		// Request sent
 	case <-c.done:
-		return signalDeliveryFailure(captured, action, fmt.Errorf("MCP backend client is closed"))
+		return sendFailure(captured, action, RequestDeliveryClientClosedCode, "the MCP backend client is closed", fmt.Errorf("MCP backend client is closed"))
 	case <-ctx.Done():
 		c.logger.Debug("MCP request cancelled before send",
 			zap.String("request_id", id),
@@ -247,7 +247,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 			zap.String("session_id", sessionID),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(ctx.Err()))
-		return signalDeliveryFailure(captured, action, ctx.Err())
+		return sendFailure(captured, action, RequestDeliveryCancelledCode, "the request was cancelled before publication", ctx.Err())
 	case <-time.After(5 * time.Second):
 		c.logger.Warn("timed out sending MCP request to agent stream",
 			zap.String("request_id", id),
@@ -258,7 +258,7 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 		// was blocked (typically on a stalled frame write) for the whole
 		// budget. Count it as a typed transport failure.
 		agentstream.RecordMCPRequestFailure(agentstream.AgentStreamReasonWriteTimeout)
-		return signalDeliveryFailure(captured, action, fmt.Errorf("timeout sending request to agent stream"))
+		return sendFailure(captured, action, RequestDeliverySendTimeoutCode, "the agent-stream send deadline expired", fmt.Errorf("timeout sending request to agent stream"))
 	}
 	publishing = false
 	c.publishWG.Done()
@@ -317,6 +317,21 @@ func (c *ChannelBackendClient) RequestPayload(ctx context.Context, action string
 		return signalDeliveryFailure(captured, action, ctx.Err())
 	case <-c.done:
 		return signalDeliveryFailure(captured, action, fmt.Errorf("MCP backend client is closed"))
+	}
+}
+
+// sendFailure converts a pre-publication failure into a typed error. A captured
+// signal keeps its capture-pending semantics. Any other request never reached
+// the backend, so retrying it cannot repeat a side effect.
+func sendFailure(captured bool, action, code, reason string, cause error) error {
+	if captured {
+		return signalDeliveryFailure(true, action, cause)
+	}
+	return &RequestDeliveryError{
+		Code:      code,
+		Message:   fmt.Sprintf("%s was not sent because %s; retrying is safe", action, reason),
+		Retryable: true,
+		Err:       cause,
 	}
 }
 

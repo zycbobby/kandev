@@ -76,7 +76,9 @@ deadlock, so that no live work is settled as failed.
   complete unresolved inventory contains only the exact target or other
   `interrupted_unknown` peers whose SQL rows are missing or terminal, all
   session, incarnation, generation, stream, submission ID, and payload hash
-  bindings match, and the historical owner process is proven terminated.
+  bindings match, the historical owner process is proven terminated, and the
+  persisted recovery record is in the `uncertain` phase without a recorded
+  history gap. Other recovery phases keep their existing reconciliation path.
 - **AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-002.2:** A truncated descriptor, a
   `prepared`/`accepted`/`dispatching` record, a terminal state without terminal
   evidence, an active SQL peer, a hash or stream mismatch, or missing death

@@ -36,6 +36,10 @@ func signalDeliveryPayload(notice *streams.SignalDeliveryFailure) *lifecycle.Age
 	}
 }
 
+func callSignalDeliveryNoticeHandler(ctx context.Context, svc *Service, payload *lifecycle.AgentStreamEventPayload) {
+	svc.handleSignalDeliveryFailureNoticeEvent(ctx, payload.TaskID, payload.SessionID, payload.ExecutionID, payload.Data.SignalDeliveryFailure)
+}
+
 func TestSignalDeliveryNoticeSurfacesCompletionPending(t *testing.T) {
 	ctx := context.Background()
 	repo := setupTestRepo(t)
@@ -95,7 +99,7 @@ func TestSignalDeliveryNoticeClearedByAcceptedSignal(t *testing.T) {
 	svc := createTestService(repo, newMockStepGetter(), newMockTaskRepo())
 	svc.eventBus = &recordingEventBus{}
 
-	svc.handleSignalDeliveryFailureNoticeEvent(ctx, signalDeliveryPayload(newSignalDeliveryNotice()))
+	callSignalDeliveryNoticeHandler(ctx, svc, signalDeliveryPayload(newSignalDeliveryNotice()))
 	if _, ok := models.LoadLastAgentError(mustSession(t, repo, "s1").Metadata); !ok {
 		t.Fatal("notice was not persisted")
 	}
@@ -120,7 +124,7 @@ func TestSignalDeliveryNoticeClearedByChatFallback(t *testing.T) {
 	svc := createTestService(repo, newMockStepGetter(), newMockTaskRepo())
 	svc.eventBus = &recordingEventBus{}
 
-	svc.handleSignalDeliveryFailureNoticeEvent(ctx, signalDeliveryPayload(newSignalDeliveryNotice()))
+	callSignalDeliveryNoticeHandler(ctx, svc, signalDeliveryPayload(newSignalDeliveryNotice()))
 	session := mustSession(t, repo, "s1")
 	// A fresh user message takes the same path that clears a stale pending bag.
 	svc.clearPendingStepSignal(ctx, session)
@@ -140,7 +144,7 @@ func TestSignalDeliveryNoticeSkippedWhenSignalAlreadyPending(t *testing.T) {
 		t.Fatalf("seed pending signal: %v", err)
 	}
 
-	svc.handleSignalDeliveryFailureNoticeEvent(ctx, signalDeliveryPayload(newSignalDeliveryNotice()))
+	callSignalDeliveryNoticeHandler(ctx, svc, signalDeliveryPayload(newSignalDeliveryNotice()))
 	if _, ok := models.LoadLastAgentError(mustSession(t, repo, "s1").Metadata); ok {
 		t.Fatal("a notice arriving after an accepted signal must not surface completion-pending")
 	}
