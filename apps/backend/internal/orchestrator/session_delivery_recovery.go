@@ -418,13 +418,18 @@ func sessionDeliveryRecoveryResponse(
 	}
 }
 
+// recoverySessionMatches checks the durable identity shared by the session and
+// the stored prompt. Execution ownership is decided by runtime successor
+// evidence, not here: a successor execution can legitimately own the same
+// session and the runtime already proves readiness, generation, and dead-owner
+// history before reconciliation.
 func recoverySessionMatches(session *models.TaskSession, recovery models.AgentDeliveryRecovery, currentGeneration int64) bool {
 	incarnationID := session.QueueIncarnationID
 	if incarnationID == "" {
 		incarnationID = session.ID
 	}
 	return recovery.SessionID == session.ID && recovery.AgentExecutionID != "" &&
-		(session.AgentExecutionID == "" || recovery.AgentExecutionID == session.AgentExecutionID) && recovery.IncarnationID == incarnationID &&
+		recovery.IncarnationID == incarnationID &&
 		recovery.HarnessGeneration == currentGeneration && recovery.SubmissionID != "" && recovery.StreamID != "" && recovery.PromptGeneration > 0
 }
 
