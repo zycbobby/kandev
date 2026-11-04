@@ -71,7 +71,7 @@ func (m *Manager) RetireDeliveryRecordSubmissions(
 		return nil, errors.Join(ErrDeliveryOwnerMismatch, ErrDeliveryRecoveryBlocked)
 	}
 	if instance == nil {
-		return m.retireRetainedDeliveryRecordSubmissions(ctx, control, request)
+		return m.retireRetainedDeliveryRecordSubmissions(ctx, control, request, "")
 	}
 	return m.retireLiveDeliveryRecordSubmissions(ctx, lease, instance, request)
 }
@@ -121,8 +121,10 @@ func deliveryRecordRetirementOwnerTerminated(request DeliveryRecordRetirementReq
 
 // validateDeliveryRecordRetirementTargets requires the targets to enumerate the
 // complete unresolved inventory and match each summary exactly. Terminal and
-// non-interrupted records fail closed instead of being retired.
-func validateDeliveryRecordRetirementTargets(descriptor journal.RecoveryDescriptor, request DeliveryRecordRetirementRequest) error {
+// non-interrupted records fail closed instead of being retired. A
+// never-started authorization widens the state requirement for exactly the
+// authorized target only.
+func validateDeliveryRecordRetirementTargets(descriptor journal.RecoveryDescriptor, request DeliveryRecordRetirementRequest, neverStartedSubmissionID string) error {
 	if descriptor.SubmissionsTruncated {
 		return errors.Join(ErrDeliveryRecordEvidenceTruncated, ErrDeliveryRecoveryBlocked)
 	}
@@ -135,7 +137,7 @@ func validateDeliveryRecordRetirementTargets(descriptor journal.RecoveryDescript
 	}
 	for _, target := range request.Submissions {
 		summary, listed := inventory[target.ID]
-		if !listed || !deliveryRecordRetirementTargetMatches(target, summary) {
+		if !listed || !deliveryRecordRetirementTargetMatches(target, summary, neverStartedSubmissionID) {
 			return errors.Join(ErrDeliveryRecordEvidenceConflict, ErrDeliveryRecoveryBlocked)
 		}
 		delete(inventory, target.ID)
@@ -146,19 +148,27 @@ func validateDeliveryRecordRetirementTargets(descriptor journal.RecoveryDescript
 	return nil
 }
 
-func deliveryRecordRetirementTargetMatches(target DeliveryRecordRetirementTarget, summary journal.SubmissionSummary) bool {
+func deliveryRecordRetirementTargetMatches(target DeliveryRecordRetirementTarget, summary journal.SubmissionSummary, neverStartedSubmissionID string) bool {
 	if summary.StreamID != target.StreamID || summary.Hash != target.Hash ||
-		summary.HarnessGeneration != target.HarnessGeneration || summary.State != target.State ||
-		summary.State != journal.SubmissionInterruptedUnknown {
+		summary.HarnessGeneration != target.HarnessGeneration || summary.State != target.State {
 		return false
 	}
-	return !summary.TerminalEventRetained && summary.TerminalSequence == 0
+	if neverStartedSubmissionID != "" && target.ID == neverStartedSubmissionID {
+		return !summary.TerminalEventRetained && summary.TerminalSequence == 0
+	}
+	return summary.State == journal.SubmissionInterruptedUnknown &&
+		!summary.TerminalEventRetained && summary.TerminalSequence == 0
 }
 
+// retireRetainedDeliveryRecordSubmissions retires the unresolved inventory of
+// an unowned session. neverStartedSubmissionID optionally authorizes exactly
+// one named target for zero-event retirement; empty keeps the generic
+// interrupted-unknown contract.
 func (m *Manager) retireRetainedDeliveryRecordSubmissions(
 	ctx context.Context,
 	control *agentctl.ControlClient,
 	request DeliveryRecordRetirementRequest,
+	neverStartedSubmissionID string,
 ) (*DeliveryRecordRetirementResult, error) {
 	evidence, err := control.ReadRetainedReconstructionEvidence(ctx, journal.RetainedReconstructionEvidenceRequest{
 		Root: m.dataDir, SessionID: request.SessionID, IncarnationID: request.IncarnationID,
@@ -170,14 +180,15 @@ func (m *Manager) retireRetainedDeliveryRecordSubmissions(
 	if err := validateDeliveryRecordDescriptor(evidence.Descriptor, deliveryRecordRetirementEvidenceRequest(request)); err != nil {
 		return nil, err
 	}
-	if err := validateDeliveryRecordRetirementTargets(evidence.Descriptor, request); err != nil {
+	if err := validateDeliveryRecordRetirementTargets(evidence.Descriptor, request, neverStartedSubmissionID); err != nil {
 		return nil, err
 	}
 	response, err := control.RetireRetainedDelivery(ctx, journal.RetainedRetirementRequest{
 		Root: m.dataDir, SessionID: request.SessionID, ExecutionID: request.ExecutionID,
 		IncarnationID: request.IncarnationID, HarnessGeneration: request.HarnessGeneration,
-		Submissions:     retainedRetirementTargets(request.Submissions),
-		OriginalRuntime: request.OriginalRuntime,
+		Submissions:              retainedRetirementTargets(request.Submissions),
+		NeverStartedSubmissionID: neverStartedSubmissionID,
+		OriginalRuntime:          request.OriginalRuntime,
 	})
 	if err != nil {
 		return nil, deliveryRetirementControlError(err)
@@ -223,7 +234,7 @@ func (m *Manager) retireLiveDeliveryRecordSubmissions(
 	if err := validateDeliveryRecordDescriptor(*descriptor, deliveryRecordRetirementEvidenceRequest(request)); err != nil {
 		return nil, err
 	}
-	if err := validateDeliveryRecordRetirementTargets(*descriptor, request); err != nil {
+	if err := validateDeliveryRecordRetirementTargets(*descriptor, request, ""); err != nil {
 		return nil, err
 	}
 	for _, target := range request.Submissions {
@@ -286,4 +297,151 @@ func deliveryRetirementControlError(err error) error {
 		return errors.Join(ErrDeliveryRecoveryBlocked, err)
 	}
 	return err
+}
+
+// NeverStartedDeliveryRetirementRequest retires one exact submission whose
+// prompt produced zero turn events. The retained journal must hold the record
+// with no terminal evidence, the complete unresolved inventory must consist of
+// exactly this target, and the historical owner must be proven terminated. A
+// live agentctl instance that still owns the session blocks retirement: the
+// zero-event authorization exists only on the retained control route.
+type NeverStartedDeliveryRetirementRequest struct {
+	TaskID            string
+	SessionID         string
+	ExecutionID       string
+	IncarnationID     string
+	HarnessGeneration uint64
+	SubmissionID      string
+	StreamID          string
+	PayloadHash       string
+	OriginalRuntime   processidentity.Identity
+}
+
+// NeverStartedDeliveryRetirementResult reports the preserved retired record
+// and the post-retirement descriptor. It never carries prompt payloads.
+type NeverStartedDeliveryRetirementResult struct {
+	Retired           journal.Submission
+	Descriptor        journal.RecoveryDescriptor
+	ProcessTerminated bool
+}
+
+// RetireNeverStartedDeliverySubmission retires the exact journal record of a
+// never-started prompt through the retained control route. Evidence is
+// inspected before anything changes: the stored record must carry the exact
+// requested identity without terminal evidence, the descriptor inventory must
+// resolve to the target alone, and the owner must be proven terminated. A
+// replay after the record is retired converges without another journal write.
+func (m *Manager) RetireNeverStartedDeliverySubmission(
+	ctx context.Context,
+	request NeverStartedDeliveryRetirementRequest,
+) (*NeverStartedDeliveryRetirementResult, error) {
+	if !validNeverStartedDeliveryRetirementRequest(request) {
+		return nil, errors.Join(ErrDeliveryOwnerMismatch, ErrDeliveryRecoveryBlocked)
+	}
+	evidence, err := m.InspectDeliveryRecordEvidence(ctx, neverStartedDeliveryEvidenceRequest(request))
+	if err != nil {
+		return nil, err
+	}
+	if evidence.LiveExecutionID != "" {
+		return nil, errors.Join(ErrDeliveryOwnerMismatch, ErrDeliveryRecoveryBlocked)
+	}
+	if evidence.ProcessTerminated == nil || !*evidence.ProcessTerminated {
+		return nil, errors.Join(ErrDeliveryOwnerMismatch, ErrDeliveryRecoveryBlocked)
+	}
+	stored := evidence.StoredSubmission
+	if stored == nil || !neverStartedDeliveryRecordMatches(*stored, request) {
+		return nil, errors.Join(ErrDeliveryRecordEvidenceConflict, ErrDeliveryRecoveryBlocked)
+	}
+	if stored.Retired && neverStartedDeliveryInventoryResolved(evidence.Descriptor) {
+		return neverStartedDeliveryResult(*stored, evidence.Descriptor), nil
+	}
+	target, err := neverStartedDeliveryInventoryTarget(evidence.Descriptor, *stored)
+	if err != nil {
+		return nil, err
+	}
+	lease, control, err := m.acquireDeliveryRecordEvidenceLease(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+	retired, err := m.retireRetainedDeliveryRecordSubmissions(
+		ctx, control, neverStartedDeliveryRetirementRequest(request, target), request.SubmissionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if retired == nil || len(retired.Retired) != 1 {
+		return nil, errors.Join(ErrDeliveryRecordEvidenceConflict, ErrDeliveryRecoveryBlocked)
+	}
+	return neverStartedDeliveryResult(retired.Retired[0], retired.Descriptor), nil
+}
+
+func validNeverStartedDeliveryRetirementRequest(request NeverStartedDeliveryRetirementRequest) bool {
+	return request.TaskID != "" && request.SessionID != "" && request.ExecutionID != "" &&
+		request.IncarnationID != "" && request.HarnessGeneration > 0 &&
+		request.SubmissionID != "" && request.StreamID != "" && request.PayloadHash != ""
+}
+
+func neverStartedDeliveryEvidenceRequest(request NeverStartedDeliveryRetirementRequest) DeliveryRecordEvidenceRequest {
+	return DeliveryRecordEvidenceRequest{
+		StoredSubmissionID: request.SubmissionID,
+		TaskID:             request.TaskID, SessionID: request.SessionID, ExecutionID: request.ExecutionID,
+		IncarnationID: request.IncarnationID, HarnessGeneration: request.HarnessGeneration,
+		OriginalRuntime: &request.OriginalRuntime,
+	}
+}
+
+// neverStartedDeliveryRecordMatches requires the stored record to carry the
+// exact requested identity with no terminal evidence: a dispatch state label
+// alone is not evidence, and retained terminal evidence always blocks
+// retirement.
+func neverStartedDeliveryRecordMatches(stored journal.Submission, request NeverStartedDeliveryRetirementRequest) bool {
+	if stored.ID != request.SubmissionID || stored.SessionID != request.SessionID ||
+		stored.IncarnationID != request.IncarnationID || stored.HarnessGeneration != request.HarnessGeneration ||
+		stored.StreamID != request.StreamID || stored.Hash != request.PayloadHash {
+		return false
+	}
+	return !stored.TerminalEventRetained && stored.TerminalSequence == 0
+}
+
+// neverStartedDeliveryInventoryTarget requires the complete unresolved
+// inventory to consist of exactly the stored target; any other unresolved
+// submission keeps the settlement blocked.
+func neverStartedDeliveryInventoryTarget(descriptor journal.RecoveryDescriptor, stored journal.Submission) (DeliveryRecordRetirementTarget, error) {
+	if descriptor.SubmissionCount != 1 || len(descriptor.Submissions) != 1 {
+		return DeliveryRecordRetirementTarget{}, errors.Join(ErrDeliveryRecordEvidenceAmbiguous, ErrDeliveryRecoveryBlocked)
+	}
+	summary := descriptor.Submissions[0]
+	target := DeliveryRecordRetirementTarget{
+		ID: stored.ID, StreamID: stored.StreamID, Hash: stored.Hash,
+		HarnessGeneration: stored.HarnessGeneration, State: stored.State,
+	}
+	if summary.ID != target.ID || summary.StreamID != target.StreamID || summary.Hash != target.Hash ||
+		summary.HarnessGeneration != target.HarnessGeneration || summary.State != target.State ||
+		summary.TerminalEventRetained || summary.TerminalSequence != 0 {
+		return DeliveryRecordRetirementTarget{}, errors.Join(ErrDeliveryRecordEvidenceConflict, ErrDeliveryRecoveryBlocked)
+	}
+	return target, nil
+}
+
+func neverStartedDeliveryRetirementRequest(request NeverStartedDeliveryRetirementRequest, target DeliveryRecordRetirementTarget) DeliveryRecordRetirementRequest {
+	return DeliveryRecordRetirementRequest{
+		TaskID: request.TaskID, SessionID: request.SessionID, ExecutionID: request.ExecutionID,
+		IncarnationID: request.IncarnationID, HarnessGeneration: request.HarnessGeneration,
+		Submissions: []DeliveryRecordRetirementTarget{target}, OriginalRuntime: request.OriginalRuntime,
+	}
+}
+
+func neverStartedDeliveryResult(retired journal.Submission, descriptor journal.RecoveryDescriptor) *NeverStartedDeliveryRetirementResult {
+	retired.Payload = nil
+	return &NeverStartedDeliveryRetirementResult{
+		Retired: retired, Descriptor: descriptor, ProcessTerminated: true,
+	}
+}
+
+// neverStartedDeliveryInventoryResolved reports the post-retirement state of a
+// converged never-started settlement: no unresolved submissions and no
+// unacknowledged stream work.
+func neverStartedDeliveryInventoryResolved(descriptor journal.RecoveryDescriptor) bool {
+	return !descriptor.Unresolved && descriptor.SubmissionCount == 0 && len(descriptor.Submissions) == 0
 }
