@@ -76,6 +76,58 @@ func neverStartedStallDeliveryIdentityComplete(payload agentruntime.AgentStalled
 		payload.OriginalRuntime.Validate() == nil
 }
 
+// resolveNeverStartedSubmissionFromDurableRows fills a stall payload whose
+// DeliverySubmissionID was never bound. The cancel-and-replace path clears the
+// execution's delivery binding, and a replacement prompt whose dispatch fails
+// (outcome prompt_dispatch_failed) never re-binds it, so the stall event
+// arrives with an empty submission ID while SQL still holds exactly one
+// admitted-but-undelivered submission for this session, incarnation, and
+// harness generation. That row is the stalled prompt: the settlement's write
+// guards re-validate ownership against the journal and SQL before committing.
+// Anything other than exactly one candidate stays unresolved and keeps the
+// legacy terminal handling.
+func (s *Service) resolveNeverStartedSubmissionFromDurableRows(
+	ctx context.Context,
+	payload agentruntime.AgentStalledPayload,
+) (agentruntime.AgentStalledPayload, bool) {
+	if payload.DeliverySubmissionID != "" ||
+		payload.DeliveryIncarnationID == "" || payload.DeliveryHarnessGeneration == 0 {
+		return payload, false
+	}
+	lister, ok := s.repo.(nativeResumeDeliverySubmissionReader)
+	if !ok {
+		return payload, false
+	}
+	rows, err := lister.ListAgentDeliverySubmissions(ctx, payload.SessionID)
+	if err != nil {
+		s.logger.Warn("never-started stall durable identity resolution failed",
+			zap.String("task_id", payload.TaskID),
+			zap.String("session_id", payload.SessionID),
+			zap.Error(err))
+		return payload, false
+	}
+	var candidate *models.AgentDeliverySubmission
+	for _, row := range rows {
+		if row.IncarnationID != payload.DeliveryIncarnationID ||
+			row.HarnessGeneration != int64(payload.DeliveryHarnessGeneration) ||
+			terminalDeliverySubmission(row.State) {
+			continue
+		}
+		if candidate != nil {
+			s.logger.Warn("never-started stall durable identity ambiguous; keeping legacy handling",
+				zap.String("task_id", payload.TaskID),
+				zap.String("session_id", payload.SessionID))
+			return payload, false
+		}
+		candidate = row
+	}
+	if candidate == nil {
+		return payload, false
+	}
+	payload.DeliverySubmissionID = candidate.ID
+	return payload, true
+}
+
 // neverStartedStallSettlementEligible reports whether a never-started stall
 // may take the recoverable settlement path. The payload must carry the exact
 // durable-delivery identity and runtime proof, the session must be an

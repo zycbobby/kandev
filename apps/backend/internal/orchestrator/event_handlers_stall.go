@@ -141,6 +141,11 @@ func (s *Service) handleNeverStartedStall(
 	session *models.TaskSession,
 	turnID string,
 ) {
+	if !neverStartedStallDeliveryIdentityComplete(payload) {
+		if resolved, ok := s.resolveNeverStartedSubmissionFromDurableRows(ctx, payload); ok {
+			payload = resolved
+		}
+	}
 	if s.neverStartedStallSettlementEligible(ctx, payload, session) {
 		if s.startNeverStartedStallSettlement(ctx, payload, turnID) {
 			return
