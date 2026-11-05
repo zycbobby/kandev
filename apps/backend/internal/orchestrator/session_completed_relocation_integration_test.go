@@ -279,6 +279,12 @@ func newCompletedRelocationServiceFixture(t *testing.T, repositoryCount int) *co
 		taskDirName   = "task-completed-relocation-root"
 	)
 	ctx := context.Background()
+	// Host machines with a global git filter (e.g. git-lfs) fail the managed
+	// clone relocation safety check, which rejects checkouts with checkout
+	// filters. Isolate the global and system git config so the fixture is
+	// hermetic regardless of the host's ~/.gitconfig.
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "git-config-global"))
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	fixture := &completedRelocationServiceFixture{
 		taskID: taskID, sessionID: sessionID, environmentID: environmentID, taskDirName: taskDirName,
 	}
