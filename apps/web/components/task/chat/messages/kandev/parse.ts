@@ -29,7 +29,16 @@ export function extractKandevArgs(value: unknown): Record<string, unknown> | und
   const input = asRecord(value);
   if (!input) return undefined;
   const rawInput = asRecord(input.raw_input);
-  return asRecord(rawInput?.arguments) ?? asRecord(rawInput?.args) ?? rawInput ?? input;
+  return (
+    asRecord(rawInput?.arguments) ??
+    asRecord(rawInput?.args) ??
+    // The Grok CLI names its MCP tool argument object `tool_input` instead of
+    // `arguments`/`args`; unwrap it so Kandev renderers see the actual call
+    // arguments on that transport too.
+    asRecord(rawInput?.tool_input) ??
+    rawInput ??
+    input
+  );
 }
 
 export function extractKandevStem(toolName: string | undefined): string | null {

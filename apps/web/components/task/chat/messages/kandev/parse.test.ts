@@ -27,6 +27,21 @@ describe("extractKandevArgs", () => {
       }),
     ).toEqual(argsValue);
   });
+
+  it("unwraps tool_input from the Grok CLI MCP envelope", () => {
+    const argsValue = {
+      version: 2,
+      description: "5-minute page",
+      spec: { root: "r", elements: {} },
+    };
+    expect(
+      extractKandevArgs({
+        raw_input: {
+          tool_input: argsValue,
+        },
+      }),
+    ).toEqual(argsValue);
+  });
 });
 
 describe("extractKandevStem", () => {
