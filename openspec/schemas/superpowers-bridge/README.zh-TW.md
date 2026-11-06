@@ -78,7 +78,7 @@
 - 策略：依 capability 保守合併
 - 優先更新既有 `openspec/specs/<capability>/spec.md`
 - 非必要不要新增新的頂層 capability 目錄
-- 若需要 ADR，先看 `openspec/config.yaml` 的 `archive.decisions_dir`；若未設定，於 `dev-docs/decisions`、`docs/decisions`、`doc/decisions` 中選一個並記錄偏好
+- 若有人讀決策，確認 apply 已寫入專案 adr 索引與對應正文（預設 `openspec/adr.md`；專案可用 `archive.decisions_dir` 宣告既有目錄）；不寫入未宣告的 ADR 目錄
 
 ## 交付內容
 
@@ -99,8 +99,8 @@
 
 若專案採用本 schema，建議這樣分流：
 
-- narrative 想法討論 → 可先選 proposal 執行器（`superpowers:brainstorming` / docs-aware grilling / 內聯澄清或 direct）→ `/opsx:propose`
-- 已有 active change → `/opsx:plan` / `/opsx:apply` / `/opsx:verify` / `/opsx:archive`
+- narrative 想法討論 → 可先選 proposal 執行器（`superpowers:brainstorming` / docs-aware grilling / 內聯澄清或 direct）→ `openspec-propose` skill
+- 已有 active change → `openspec-plan` / `openspec-apply-change` / `openspec-verify-change` / `openspec-archive-change` skills
 - bug fix / typo / 小 config tweak → 直接 PR，不建 change
 
 ## Vendored 說明

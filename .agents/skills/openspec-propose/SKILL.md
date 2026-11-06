@@ -15,7 +15,7 @@ description: >
 **分流（与 post-apply 修复）**：
 
 - **pre-apply** 的既有 spec 行为偏离 → 本 skill 的 **Step 2.4 bugfix triage**（仍产出 `proposal.md`，后续可 plan）
-- **post-apply / archived** 上的快速修复 → **`openspec-bugfix` / `/opsx:bugfix`**，不要默认重走完整 plan
+- **post-apply / archived** 上的快速修复 → **`openspec-bugfix` skill**，不要默认重走完整 plan
 - **新能力 / 行为扩展** → 本 skill 的 feature proposal 流程
 
 ## 工作哲学：先调研，再定范围
@@ -48,18 +48,19 @@ openspec new change <change-id> --schema superpowers-bridge
 - 读取 `.openspec.yaml`
 - 若不是 `schema: superpowers-bridge`，暂停并告知用户
 
-### Step 2：读取上下文
+### Step 2：读取上下文（不默认全库枚举）
 
 ```bash
-openspec list
-openspec list --specs
+cat openspec/changes/<change-id>/.openspec.yaml
 cat openspec/changes/<change-id>/proposal.md 2>/dev/null
-cat openspec/changes/<change-id>/specs/*/spec.md 2>/dev/null
+ls openspec/changes/<change-id>/specs/ 2>/dev/null && cat openspec/changes/<change-id>/specs/<capability>/spec.md 2>/dev/null
 ```
+
+`openspec list --specs` 仅在需要定位某个特定 capability 的既有 spec 时使用（如 bugfix triage）。**任何阶段禁止读取 `openspec/changes/archive/` 作为上下文参考。**
 
 ### Step 2.3：问题空间调研 / 最小可行验证
 
-在选择 proposal 引擎或写 `proposal.md` 前，先做一次 bounded research：
+**调用方结论复用（硬规则，非建议）**：若调用方已提供结构化调研结论（workflow 步骤提示 / 上一步交接摘要 / 本会话刚跑过 openspec-explore 的汇报），**跳过全库探索**，不得重做已确认的调研，只补摘要中标注的未决未知；把复用的结论与补做的小验证一并写入 `proposal.md` 的 `## Research Log`。无调用方结论时，在选择 proposal 引擎或写 `proposal.md` 前，先做一次 bounded research：
 
 1. **列出未知**：哪些事实会改变 proposal 的 Why、What Changes、Capabilities、Impact 或 non-goals？
 2. **选择最小验证**：能否用一个低风险动作试通成功路径，例如读取现有实现、运行最小命令、调用无副作用接口、
@@ -78,7 +79,7 @@ cat openspec/changes/<change-id>/specs/*/spec.md 2>/dev/null
 
 Step 2.3 之后、选择 proposal 引擎之前，先判断本次变更是否属于 bugfix 场景。bugfix 指**在既有 spec 上发现并修复缺陷**，而非新增/扩展能力。
 
-**若缺陷已锚定 post-apply 或 archived change**：不要用本步硬套完整 proposal/plan；改走 **`openspec-bugfix` / `/opsx:bugfix`**。
+**若缺陷已锚定 post-apply 或 archived change**：不要用本步硬套完整 proposal/plan；改走 **`openspec-bugfix` skill**。
 
 **触发判断**：
 
@@ -177,6 +178,8 @@ proposal 引擎输出和 Step 2.3 调研结论必须**直接沉淀到 `proposal.
 - `Capabilities` 必须为后续 spec delta 提供映射
 - 若已执行 Step 2.3 的 bounded research，把调研结论写入 `## Research Log` 章节（固定字段：未知描述 / 验证方式 / 结论 / 证据摘要）；该章节可选，未执行任何调研时可省略
 - 不把未验证猜测写成确定事实；未知要么被试通、要么被拒绝/移出范围、要么作为 blocker 明示
+- 若本次含人读架构/决策，Impact 必须列出将改的项目 adr 索引与正文（默认 `openspec/adr.md` 与 `openspec/adr/<slug>.md`；项目以 `archive.decisions_dir` 声明其他目录时为对应路径）
+- 禁止把 `openspec/changes/` 或 `openspec/specs/` 写进持久产品文件（例外：skill、command、当前 change 工作集、`workflows/*.yaml`、`schema-assets/**`）；how-to 写在产品文件自己里头
 
 **bugfix 分支的 proposal 写法**（Step 2.4 判定为 bugfix 时适用）：
 
@@ -215,4 +218,4 @@ openspec validate <change-id> --strict --no-interactive
 - proposal 已写入 `openspec/changes/<change-id>/proposal.md`
 - specs delta 已写入 `openspec/changes/<change-id>/specs/`
 - 下一步进入 `openspec-plan`
-- 若后续在 apply 之后或 archive 之后才发现缺陷：用 `openspec-bugfix` / `/opsx:bugfix`，不要默认再开一轮完整 plan
+- 若后续在 apply 之后或 archive 之后才发现缺陷：用 `openspec-bugfix` skill，不要默认再开一轮完整 plan

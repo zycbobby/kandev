@@ -101,8 +101,8 @@ It does **not** ship templates for removed extra artifacts.
 
 If you use the adopter CLAUDE fragment, the repo should route work like this:
 
-- narrative idea discussion → optional proposal executor (`superpowers:brainstorming`, docs-aware grilling, inline clarification/direct) → `/opsx:propose`
-- active change → `/opsx:plan` / `/opsx:apply` / `/opsx:verify` / `/opsx:archive`
+- narrative idea discussion → optional proposal executor (`superpowers:brainstorming`, docs-aware grilling, inline clarification/direct) → the `openspec-propose` skill
+- active change → the `openspec-plan` / `openspec-apply-change` / `openspec-verify-change` / `openspec-archive-change` skills
 - bug fix / typo / tiny config tweak → direct PR, no change
 
 ## Vendored-source note

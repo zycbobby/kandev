@@ -56,7 +56,7 @@ openspec list 2>/dev/null
 告知用户：
 - 本次探测的结论（试通证据 / 拒绝理由 / blocker）
 - 若已追加进某个 change 的 Research Log，说明追加到了哪个文件
-- 若结论支持继续推进，建议下一步调用 `openspec-propose`；若结论是拒绝或明确的 blocker，说明不建议继续的理由
+- 若结论支持继续推进，给出 **Propose 可直接复用的四要素**：① **建议的 change 范围**（建议 change-id、涉及 capability、文件面）② **已确认事实**（已验证事实与证据位置）③ **未决问题**（留给 Propose 决策的点）④ **不要做什么**（明确排除的范围）；宿主通过完成信号传递阶段交接时（如 workflow 的 step summary），把四要素写入该信号；若结论是拒绝或明确的 blocker，说明不建议继续的理由
 
 ## 约束
 

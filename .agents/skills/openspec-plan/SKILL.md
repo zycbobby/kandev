@@ -36,12 +36,15 @@ cat openspec/changes/<change-id>/specs/*/spec.md 2>/dev/null
 
 必须确认：
 - 当前 change 的 schema 是 `superpowers-bridge`
+- 只读取当前 change 的 artifacts，不扫描仓库、不读取 `openspec/changes/archive/`；仅当 proposal 的 `## Research Log` 仍有未解决未知时才做定向 bounded research
 
 ### Step 1.5：选择规划引擎（内联 / superpowers:writing-plans）
 
 规划引擎指本阶段用什么方式产出 `design.md` / `tasks.md`，只服务于 `openspec-plan` 本身，与 apply 阶段如何写代码无关。
 
-在生成 `design.md` / `tasks.md` 前，必须向用户显式展示两个选项，并等待用户选择：
+在生成 `design.md` / `tasks.md` 前，**先判断调用方已指定规划引擎还是未指定**（workflow 步骤提示或调用参数，如「规划方式默认采用 superpowers:writing-plans」）：已指定则直接按指定项执行，跳过菜单。
+
+未指定时，必须向用户显式展示两个选项，并等待用户选择：
 
 1. **内联**：由本 skill 直接用高推理强度推进规划。适用于默认路径、简单 change、或不需要专门 planning skill 的场景。
 2. **`superpowers:writing-plans`**：调用该 skill 做方案权衡、任务拆分、风险识别和 Verification Strategy 规划；
@@ -73,7 +76,7 @@ plan 阶段的调研不是附加说明，而是定稿任务前的准出门禁：
 - 会在实现或验证中调用的**外部 CLI**、命令输出、退出码、配置探测
 - 其他 agent、编排器、模型、工具运行时的 **agent/runtime 响应**、transcript、日志或状态文件
 - 任何不在当前代码库内、但会影响设计、任务拆分或验收标准的知识
-- 当调研会占用大量上下文（例如第三方接口、外部 CLI、外部服务、agent/runtime 响应或长日志/transcript）时，可优先派发一个**专门 subagent** 承接 bounded research / manual probe；subagent 只回传本地事实、关键输出、失败模式、限制条件和验收建议，主 agent 负责把结论写入 `design.md` / `tasks.md`
+- 当调研会占用大量上下文（例如第三方接口、外部 CLI、外部服务、agent/runtime 响应或长日志/transcript）时，可**可选**派发一个**专门 subagent** 承接 bounded research / manual probe——此派发**默认关闭**，仅在主会话上下文确实受限且调研量较大时才启用；subagent 只回传本地事实、关键输出、失败模式、限制条件和验收建议，主 agent 负责把结论写入 `design.md` / `tasks.md`
 
 若凭据、网络、沙箱、成本、速率限制和副作用边界都安全可控，必须先做 bounded research / manual probe：用最小、可复现、低风险的方式**真实跑通**关键路径（实际执行 demo / 最小调用，而不是仅凭文档推断），并在本地记录完整事实或必要摘要。
 
@@ -148,6 +151,7 @@ plan 阶段的调研不是附加说明，而是定稿任务前的准出门禁：
 - 有明确文件路径
 - 有清晰边界
 - 有准出标准
+若 proposal Impact 列出项目 adr 索引或正文，实现清单必须包含写入这些文件的 task。
 
 ### Step 5：为 apply 阶段预埋状态恢复要求
 

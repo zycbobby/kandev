@@ -26,8 +26,9 @@ cat openspec/changes/<change-id>/tasks.md
 # 如有 design，也读取
 cat openspec/changes/<change-id>/design.md 2>/dev/null
 
-# 读取相关 spec deltas
-cat openspec/changes/<change-id>/specs/*/spec.md 2>/dev/null
+# 读取相关 spec deltas（精确路径；只读当前 change，不枚举全部 changes）
+# 禁止读取 openspec/changes/archive/
+ls openspec/changes/<change-id>/specs/ && cat openspec/changes/<change-id>/specs/<capability>/spec.md
 
 # 如有 review ledger，也读取
 cat openspec/changes/<change-id>/reviews/state.json 2>/dev/null
@@ -50,9 +51,9 @@ cat openspec/changes/<change-id>/reviews/index.md 2>/dev/null
 
 ### Step 2：选择执行器并逐任务实现
 
-#### Step 2-0：交互式执行器选择（agent-agnostic）
+#### Step 2-0：交互式执行器选择（agent-agnostic，调用方已指定时跳过）
 
-> **本步骤是必填项，不是可选步骤。** 即使可用执行器只有两项，也必须向用户展示菜单并等待回答后再继续。
+> **调用方已指定执行器时，直接采用并记入账本，跳过菜单，不再询问用户。** 判定依据：workflow 步骤提示 / 调用参数 / 环境已写明执行器（如「<5 个实现 task 或线性依赖 → 内联；否则 subagent-driven」或直接指定 inline / subagent-driven）。只有交互会话且调用方未指定时，才展示菜单并等待回答。
 
 在开始实现前，**让用户选择执行器**，而不是替用户自动决定。
 
@@ -60,11 +61,11 @@ cat openspec/changes/<change-id>/reviews/index.md 2>/dev/null
 
    | 执行器 | 可用条件 | 账本机制 | 漂移风险 | 备注 |
    |--------|---------|---------|---------|------|
-   | `subagent-driven` | `superpowers:subagent-driven-development` 可见 | ✅ TodoWrite + 双重审查 | 低 | **多任务首选**；每个 task 独立 context + spec/quality 双审 |
+   | `subagent-driven` | `superpowers:subagent-driven-development` 可见 | ✅ TodoWrite | 低 | 仅当多文件、可并行且调用方明确要求时使用；child 只拿 work packet |
    | `ultragoal` | `/ultragoal` 命令可见（OMC/OMX 体系） | ✅ OMC/OMX state 完整账本 | 低 | 启动较重；仅当本机有 OMC/OMX 时才列入 |
    | `executing-plans` | `superpowers:executing-plans` 可见 | ⚠️ 依赖执行器内部机制 | 中 | 跨 session 推进，适合长时任务 |
    | `/goal` | Claude Code 原生，仅当可见 | ⚠️ 独立 Evaluator 每轮对账（防目标遗忘），但仅读 transcript，无法验证真实文件系统 | 中 | 轻量；task 少（≤5）时够用；**condition 必须要求 Claude 把验证结果显式打印出来**，否则 Evaluator 可能误判完成 |
-   | **内联基线** | 永远在列 | ❌ 仅靠 skill 自带 ledger/index.md | 高 | 零依赖兜底；task 多时慎用 |
+   | **内联基线** | 永远在列 | ❌ 仅靠 skill 自带 ledger/index.md | 高 | 零依赖兜底；无人值守回退与 <5 个实现 task / 线性依赖时的默认 |
 
 2. **询问用户**：把上面探测到的可用项组成菜单向用户提问，请其选择，并附上每项的账本/漂移特征说明。提问用**平台中立**的方式描述——**不要把指令绑定到某个具体提问工具名**。
 3. **用户选定** → 按执行器分流：
@@ -86,7 +87,7 @@ cat openspec/changes/<change-id>/reviews/index.md 2>/dev/null
    - CI / headless 管道中运行（无终端、无 MCP 对话通道）
    - 用户调用时已显式传入 executor 参数
 
-   满足条件时按优先级自动选择：`subagent-driven`（可见时首选）→ `executing-plans` → `/goal` → 内联基线；并在账本（见 Step 2b）记录 `executor: auto`。**`ultragoal` 不参与自动回退**（启动重，不适合无感知启动）。回退不报错、不阻塞、不要求用户安装任何东西。
+   满足条件时使用**内联基线**；`subagent-driven` 仅在多文件、可并行且调用方明确要求时使用；并在账本（见 Step 2b）记录 `executor: auto`。**`ultragoal` 不参与自动回退**（启动重，不适合无感知启动）。回退不报错、不阻塞、不要求用户安装任何东西。
 
 **无论选哪个执行器，以下纪律始终保留**：设计冲突暂停（Step 3）、scope 约束、review-session 阻塞判断（Step 1a / Step 4）、以及所有 task 完成后向 `ledger/index.md` 汇总结果（Step 2b）。
 
@@ -172,11 +173,15 @@ apply 全程维护一份账本，位置 `openspec/changes/<change-id>/ledger/ind
 
 ## 约束
 
-- **只修改代码、tasks.md 与 change `ledger/`**：不修改 proposal.md、design.md、spec deltas
+- **只修改代码、tasks.md、change `ledger/`、以及 tasks.md 列出的项目 adr 索引与正文**：不修改 proposal.md、design.md、spec deltas
+- **不得往持久产品文件写入 `openspec/changes/` 或 `openspec/specs/`**（例外：skill、command、当前 change 工作集、`workflows/*.yaml`、`schema-assets/**`）；how-to 写在产品文件自己里头
 - **遇到设计冲突必须暂停**：不自行决策，等待用户指引
 - **保持 tasks.md 勾选状态最新**：每完成一个 task 立即更新
 - **collecting review session 阻塞 apply**：review 未 reconcile 前不得继续编码
 - **全流程验证循环是退出条件**：所有 task 完成后必须至少跑一轮 verify → bugfix → verify，不通过不能宣告完成
+- **子代理 work packet**：为某个 task 派发子代理时，每个 child 只给 change-id、当前 task 原文、允许修改的文件列表、准出命令；child 需要 proposal/design/spec delta 时自行按路径读取；禁止把本 skill 全文、全部 spec deltas、整份 proposal/design 贴进 child prompt
+- **不按 task 双开审查子代理**：spec-compliance / quality-review 审查由父会话抽查，或仅在最后一个实现 task / exit gate 做一次
+- **spawn 失败熔断**：同一 task 的子代理 spawn 失败最多重试 1 次，然后停下报告失败原因与已做进度；不得换模型或换参数连续重开
 
 ## 输出
 

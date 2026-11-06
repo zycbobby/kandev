@@ -1,122 +1,91 @@
 ---
 name: openspec-verify-change
 description: >
-  Use after implementation is complete to detect drift between code and spec.
-  Dispatches a subagent to compare implementation against proposal.md and
-  design.md, reports unimplemented requirements, out-of-scope additions, and
-  design deviations, and refuses to verify while a review reconciliation round is
-  still collecting or blocking apply. Triggers: "检查漂移", "verify",
-  "check drift", after openspec-apply-change completes.
+  Use after implementation is complete to run a convergence check instead of
+  a drift report: machine checks first (openspec validate + project tests),
+  a coverage matrix over the change's spec deltas, gaps classified as
+  missing/partial/contradicts/unrequested, every finding requiring both a
+  source ID and an observable consequence, output as Phase: Convergence
+  tasks appended to tasks.md (unrequested items become adjudication
+  requests). Does not block archive. Triggers: "检查收敛", "verify",
+  "检查漂移", "check drift", "convergence", after openspec-apply-change
+  completes.
 ---
 
-# OpenSpec Verify
+# OpenSpec Verify（收敛检查）
 
-本 skill 在实现完成后，通过派发 subagent 对比代码与 proposal/design，检测三类漂移问题：未实现、超出范围、设计偏差。
+本 skill 在实现完成后对照**封闭清单**核对覆盖：以 change 的 spec deltas 与 tasks.md 为准逐条找实现证据，缺口转化为任务，而不是对 proposal/design 散文做开放比对。`Converged` 是健康常态。**verify 不阻塞 archive**——门禁职责归 tasks 勾选与 `openspec validate`。
 
 ## 执行流程
 
-### Step 1：收集检测材料
+### Step 0：机器先行
 
-读取规格文档：
+先跑机器检查，把结果压成两行纳入检测材料（这些活不派给 LLM）：
 
 ```bash
-cat openspec/changes/<change-id>/proposal.md
-cat openspec/changes/<change-id>/tasks.md
-cat openspec/changes/<change-id>/design.md 2>/dev/null
-cat openspec/changes/<change-id>/specs/*/spec.md 2>/dev/null
-cat openspec/changes/<change-id>/reviews/state.json 2>/dev/null
-cat openspec/changes/<change-id>/reviews/index.md 2>/dev/null
+openspec validate <change-id> --strict --no-interactive
+# 项目测试：按仓库约定执行（如 npm test / pytest；CLAUDE.md 有约定用约定）
 ```
 
-### Step 1a：先检查 review session 是否已收束
+### Step 1：检查 review session 是否已收束
 
-如果 `reviews/state.json` 存在，则必须先判断：
+如果 `reviews/state.json` 存在，必须先判断：
 
 - `status` 是否仍为 `collecting`
 - `applyBlocked` 是否仍为 `true`
 
-**若任一条件成立：**
-- 停止 drift detection
-- 告知用户当前 review round 尚未 finalize / cancel
-- 明确要求先完成 `openspec-review-change`
-- 注意：review round 只能在用户显式确认后 finalize，Agent 不能自行结束当前 review
+**若任一条件成立**：停止收敛检查，告知用户当前 review round 尚未 finalize / cancel，要求先完成 `openspec-review-change`。review round 只能在用户显式确认后 finalize，Agent 不能自行结束当前 review。
 
-### Step 2：收集实现内容
+### Step 2：组装检测材料（scoped work packet）
 
-获取实现内容（优先 git diff，无 git 则读取相关文件）：
+只传**路径与范围**，不内联全文：
 
-```bash
-# 优先：与主分支对比
-git diff main...HEAD 2>/dev/null
+- deltas：`openspec/changes/<change-id>/specs/*/spec.md` ← **唯一比对基准**
+- tasks：`openspec/changes/<change-id>/tasks.md`（勾选状态）
+- rulings：`openspec/changes/<change-id>/reviews/`（**rejected / deferred 的 feedback 不计缺口**）
+- 实现范围：`git diff main...HEAD`（备选 `HEAD~1...HEAD`）限定为本 change 触及文件；不携带全仓库 diff，不重新探索 codebase；git 不可用则读 proposal Impact 列出的文件
+- intent 边界：`proposal.md` 的 Why / Impact 段（仅用于 unrequested 的能力级判定）
 
-# 备选：最近一次提交
-git diff HEAD~1...HEAD 2>/dev/null
-```
+### Step 3：派发收敛检查 subagent
 
-如果 git 不可用，读取 proposal 中 Impact 列出的相关代码文件。
-
-### Step 3：派发 drift-detection subagent
-
-使用 Agent tool 派发 subagent，将以下 prompt 中的占位符替换为实际内容后发送：
+使用 Agent tool 派发 subagent（「规格收敛检查员」），packet 如下：
 
 ---
 
-你是一个漂移检测专家。请对比规格文档与实现，检测三类问题。
+你是规格收敛检查员。对照封闭清单核对实现，产出缺口任务；不做泛泛 review。
 
-**规格文档（proposal.md）**：
-[此处插入 proposal.md 完整内容]
+**材料路径**：（同 Step 2 所列，按路径自读）
 
-**design.md**（如有）：
-[此处插入 design.md 内容，无则写"无"]
+**步骤（按序）**：
 
-**tasks.md**：
-[此处插入 tasks.md 内容]
+1. **覆盖矩阵（主体任务）**：对 deltas 中每条 Requirement / Scenario，给出实现证据——`文件:行` 或测试名。给不出证据 → 缺口。注意力放在「逐条找证据」，不是「扫 diff 找问题」。
+2. **越界审计**：只查 diff 中**新增的对外可观察行为**——新命令、端点、flag、持久化状态、错误契约变化、用户可见行为。找不到 Requirement 支撑 → unrequested。
+   明确**不算** unrequested：内部 helper、重命名、注释、日志文案、目录组织、防御分支、重构。
+3. **design 偏离**：仅当偏离改变上述对外可观察行为面才报；内部实现路径选择不算。
 
-**spec deltas**：
-[此处插入 spec deltas 内容]
+**缺口四分类**：`missing`（无实现证据）/ `partial`（有证据但场景覆盖不全）/ `contradicts`（实现与 Requirement 行为不符）/ `unrequested`（新增可观察行为无 Requirement 支撑）。
 
-**review ledger**（如有）：
-[此处插入 reviews/index.md 与当前 relevant round 摘要；若某些 feedback 已明确 rejected / deferred，也要包含]
+**降噪硬规则**：
 
-**实现内容（git diff 或代码文件）**：
-[此处插入实现内容]
+- 每条缺口必须**同时**给出：出处（Requirement/Scenario ID 或 diff 位置）+ 可观察后果（哪个用户/测试/模块会看到什么不同）。给不出后果 → 删除该条，不输出。
+- 不确定 → 降为 note，宁漏报不误报。
+- 永不报告：风格、命名、注释、文档措辞、目录组织、内部实现路径。那是 review 的事。
+- 不爬本 change 触及文件之外的代码；每条发现至多一次定点检查。
 
-检测三类问题：
+**输出**：
 
-1. **未实现（Missing）**：proposal 中的 Requirement 或 Scenario 在代码中没有对应实现
-2. **超出范围（Out of Scope）**：代码实现了 proposal 中未提到的功能
-3. **设计偏差（Design Deviation）**：实现与 design.md 的技术决策不符
-
-输出格式：
-
-## Drift Report
-
-**Status:** Clean | Drift Found
-
-**Issues（如有）：**
-- [Missing] `Requirement: <名称>` - Scenario "<场景名>" 未找到对应实现
-- [Out of Scope] `<文件>:<行号>` - 实现了 proposal 未描述的 <功能>
-- [Design Deviation] `<文件>:<行号>` - 使用了 <实际方案>，design.md 要求 <设计方案>
-
-校准：只报告真实的漂移问题。代码风格差异、命名不同、小的实现细节不是漂移。若 review ledger 中已明确拒绝某条 feedback，不要把它当成 drift。
+- 无缺口 → `Converged`
+- 有缺口 → `## Phase: Convergence` 任务块，每条含：做什么 + 验收（哪个 Scenario 通过）+ 改码或改规格
+- unrequested 项**不自动追加**，单独列为裁决请求（保留并补 delta 合法化 / 移除）
 
 ---
 
-### Step 4：处理检测结果
+### Step 4：处置产出
 
-**如果 Status: Clean**：
-- 告知用户实现与规格一致，无漂移
-- 提示：下一步运行 `openspec-archive-change` 归档变更
-
-**如果 Status: Drift Found**：
-- 展示完整的 Drift Report 给用户
-- 分析每个问题的优先级：
-  - **Must Fix**：Missing 和 Design Deviation（影响规格正确性）
-  - **Discuss**：Out of Scope（可能是合理的实现细节，也可能是 scope creep）
-- 询问用户：
-  - 每个 Out of Scope 项是保留还是移除
-  - Must Fix 项返回 `openspec-apply-change` 修正
+- **Converged**：告知用户实现与规格收敛，提示下一步运行 `openspec-archive-change`。
+- **有缺口**：展示产出，经用户确认后把 `Phase: Convergence` 任务追加进 `tasks.md`，返回 `openspec-apply-change` 执行，完成后再跑本 skill，直至 Converged。
+- **unrequested**：逐项请用户裁决——保留则补 delta 合法化（语义增补走对应流程）；移除则回 `openspec-apply-change` 删除。
 
 ## 输出
 
-**无文件输出**，只产生报告和行动建议。
+无独立报告文件。唯一写入动作：经用户确认后的收敛任务追加进 `tasks.md`。

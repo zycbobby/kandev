@@ -11,8 +11,8 @@ Superpowers 只作為 OpenSpec 各階段中的內嵌能力。
 
 | 觸發 | 該怎麼做 |
 |---|---|
-| 使用者要做新功能 / 新 capability / 架構變更 | 用 `/opsx:propose`，確保 change 以 `--schema superpowers-bridge` 建立 |
-| 使用者已在某個 active change 中 | 用 `/opsx:plan` / `/opsx:apply` / `/opsx:verify` / `/opsx:archive` |
+| 使用者要做新功能 / 新 capability / 架構變更 | 用 `openspec-propose` skill，確保 change 以 `--schema superpowers-bridge` 建立 |
+| 使用者已在某個 active change 中 | 用 `openspec-plan` / `openspec-apply-change` / `openspec-verify-change` / `openspec-archive-change` skills |
 | 使用者只是先用自然語言討論想法 | 可以使用 proposal 執行器，例如 verbal `superpowers:brainstorming`，但正式開 change 後要把結論寫進 `proposal.md` |
 | 使用者明確是 bug fix / typo / 很小的 config tweak | 直接 PR，不建 change |
 

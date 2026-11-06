@@ -11,8 +11,8 @@ Use Superpowers only as embedded capability inside OpenSpec stages.
 
 | Trigger | What to do |
 |---|---|
-| User starts a new feature / capability / architectural change | Use `/opsx:propose` so the change is created with `--schema superpowers-bridge` |
-| User is already inside an active change | Use `/opsx:plan`, `/opsx:apply`, `/opsx:verify`, `/opsx:archive` |
+| User starts a new feature / capability / architectural change | Use the `openspec-propose` skill so the change is created with `--schema superpowers-bridge` |
+| User is already inside an active change | Use the `openspec-plan`, `openspec-apply-change`, `openspec-verify-change`, `openspec-archive-change` skills |
 | User is only discussing ideas narratively | You may use a proposal executor such as verbal `superpowers:brainstorming`, but write the outcome into `proposal.md` when the change is opened |
 | User explicitly says bug fix / typo / tiny config tweak | Direct PR, no change |
 
