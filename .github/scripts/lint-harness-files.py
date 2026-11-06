@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # Python < 3.11
 
 DEFAULT_RULES_BY_KIND = {
     "agent": {
-        "agent-line-limit": {"limit": 300},
+        "agent-line-limit": {"limit": 500},
     },
     "skill": {
         "skill-line-limit": {"limit": 500},

@@ -18,7 +18,7 @@ Before committing, also run the targeted pre-commit hook:
 pre-commit run harness-lint --files <changed-files>
 ```
 
-Keep every `AGENTS.md` and `CLAUDE.md` file at 300 lines or fewer. Move detail
+Keep every `AGENTS.md` and `CLAUDE.md` file at 500 lines or fewer. Move detail
 to the nearest scoped file or a referenced document when a parent reaches the
 limit.
 

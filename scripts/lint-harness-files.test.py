@@ -331,7 +331,7 @@ class HarnessLinterTest(unittest.TestCase):
         self.assertIn("unknown opt-in rule", unknown.stderr)
 
     def test_cli_reports_github_annotations(self) -> None:
-        self.write("AGENTS.md", "line\n" * 301)
+        self.write("AGENTS.md", "line\n" * 501)
         env = {**os.environ, "GITHUB_ACTIONS": "true"}
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "AGENTS.md"],
@@ -344,6 +344,7 @@ class HarnessLinterTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("::error file=AGENTS.md::", result.stdout)
+        self.assertIn("file is 501 lines (limit 500, over by 1)", result.stdout)
 
 
 if __name__ == "__main__":

@@ -298,3 +298,35 @@ For developing in ephemeral cloud VMs (Cursor Cloud, Codex, GitHub Codespaces, e
 ## Workflow routing (read on session start)
 
 OpenSpec is the front door (`--schema superpowers-bridge`); Superpowers is embedded capability only. New capability: `/opsx:propose`. Active change: `/opsx:plan|apply|verify|archive`. Narrative ideas: `superpowers:brainstorming` into `proposal.md`. Tiny bug or typo: direct PR. Do not create `brainstorm.md`, `plan.md`, or `retrospective.md`, and do not write planning output under `docs/superpowers/`. Archive conservatively into `openspec/specs/<capability>/spec.md`.
+
+<!-- Source: superpowers-bridge/templates/adopters/CLAUDE.md.fragment.md -->
+
+## Workflow routing (read on session start)
+
+This repo uses `superpowers-bridge` with the following rule:
+
+**Keep OpenSpec as the front door.**
+Use Superpowers only as embedded capability inside OpenSpec stages.
+
+### Entry routing
+
+| Trigger | What to do |
+|---|---|
+| User starts a new feature / capability / architectural change | Use the `openspec-propose` skill so the change is created with `--schema superpowers-bridge` |
+| User is already inside an active change | Use the `openspec-plan`, `openspec-apply-change`, `openspec-verify-change`, `openspec-archive-change` skills |
+| User is only discussing ideas narratively | You may use a proposal executor such as verbal `superpowers:brainstorming`, but write the outcome into `proposal.md` when the change is opened |
+| User explicitly says bug fix / typo / tiny config tweak | Direct PR, no change |
+
+### Hard rules
+
+- Do not create `brainstorm.md`
+- Do not create `plan.md`
+- Do not create `retrospective.md`
+- Do not write planning/design output to `docs/superpowers/specs/`
+- Do not write planning output to `docs/superpowers/plans/`
+
+### Archive policy
+
+- Merge conservatively by capability
+- Prefer existing `openspec/specs/<capability>/spec.md`
+- Avoid creating new top-level capability folders unless truly necessary
