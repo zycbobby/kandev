@@ -359,6 +359,16 @@ func (m *mockRepository) CompleteActiveClarificationBundle(
 ) ([]*models.Message, bool, error) {
 	return nil, false, nil
 }
+func (m *mockRepository) CompleteActiveClarificationBundleWithAttachments(
+	context.Context,
+	string,
+	string,
+	map[string]interface{},
+	[]models.ClarificationAttachmentClaim,
+	models.ClarificationAttachmentScope,
+) ([]*models.Message, bool, []string, error) {
+	return nil, false, nil, nil
+}
 func (m *mockRepository) FinalizeClarificationResponseDelivery(
 	context.Context,
 	string,
@@ -377,6 +387,9 @@ func (m *mockRepository) RestoreActiveClarificationBundle(
 }
 func (m *mockRepository) UpdateMessage(ctx context.Context, message *models.Message) error {
 	return nil
+}
+func (m *mockRepository) UpdatePermissionPresentation(context.Context, models.PermissionPresentationUpdate) (*models.Message, bool, error) {
+	return nil, false, nil
 }
 func (m *mockRepository) ClaimPermissionResolution(context.Context, models.PermissionResolutionClaimRequest) (*models.PermissionResolutionClaimResult, error) {
 	return &models.PermissionResolutionClaimResult{Outcome: models.PermissionClaimNotFound}, nil

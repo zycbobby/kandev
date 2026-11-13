@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { IconChevronDown, IconChevronRight, IconMessageQuestion } from "@tabler/icons-react";
 import { Button } from "@kandev/ui/button";
 import { useTranslation } from "react-i18next";
@@ -133,6 +133,10 @@ function RowExpandedPanel({
   shortcutScopeRef,
   initialAnswers,
   onAnswersChange,
+  initialMaxHeightVh,
+  allocationRef,
+  anchorRef,
+  reservedSiblingRefs,
 }: {
   source?: { instanceId: string; instanceName: string };
   bundle: ClarificationInboxBundle;
@@ -142,6 +146,10 @@ function RowExpandedPanel({
   shortcutScopeRef: React.RefObject<HTMLDivElement | null>;
   initialAnswers?: readonly ClarificationAnswer[];
   onAnswersChange?: (answers: ClarificationAnswer[]) => void;
+  initialMaxHeightVh: number;
+  allocationRef?: RefObject<HTMLElement | null>;
+  anchorRef?: RefObject<HTMLElement | null>;
+  reservedSiblingRefs?: readonly RefObject<HTMLElement | null>[];
 }) {
   const initialAnswersRef = useRef(initialAnswers);
   if (source) {
@@ -155,7 +163,10 @@ function RowExpandedPanel({
         initialAnswers={initialAnswersRef.current}
         onAnswersChange={onAnswersChange}
         shortcutScopeRef={shortcutScopeRef}
-        maxHeightVh={50}
+        initialMaxHeightVh={initialMaxHeightVh}
+        allocationRef={allocationRef}
+        anchorRef={anchorRef}
+        reservedSiblingRefs={reservedSiblingRefs}
       />
     );
   }
@@ -168,7 +179,10 @@ function RowExpandedPanel({
       onLateAnswer={onLateAnswer}
       lateAnswerState={lateAnswerState}
       shortcutScopeRef={shortcutScopeRef}
-      maxHeightVh={50}
+      initialMaxHeightVh={initialMaxHeightVh}
+      allocationRef={allocationRef}
+      anchorRef={anchorRef}
+      reservedSiblingRefs={reservedSiblingRefs}
     />
   );
 }
@@ -224,11 +238,13 @@ function useRemoteAnswerDraft(
 // eslint-disable-next-line max-lines-per-function -- the row keeps its responsive actions and inline panel together.
 export function NeedsYouInboxRow({
   bundle,
+  allocationRef,
   onLateAnswer,
   lateAnswerState,
   source,
 }: {
   bundle: ClarificationInboxBundle;
+  allocationRef?: RefObject<HTMLElement | null>;
   onLateAnswer?: (snapshot: LateClarificationSnapshot) => Promise<MessageAdmissionOutcome>;
   lateAnswerState?: LateClarificationState;
   // Present on remote-instance rows: answers and sidecar writes forward
@@ -240,6 +256,8 @@ export function NeedsYouInboxRow({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
+  const rowHeaderRef = useRef<HTMLDivElement>(null);
+  const reservedSiblingRefs = useMemo(() => [rowHeaderRef], []);
   const bumpRefreshTick = useAppStore((s) => s.bumpNeedsYouInboxRefreshTick);
   const bumpRemoteRefreshTick = useAppStore((s) => s.bumpRemoteInboxRefreshTick);
   const bumpTick = source ? () => bumpRemoteRefreshTick(source.instanceId) : bumpRefreshTick;
@@ -276,7 +294,7 @@ export function NeedsYouInboxRow({
 
   return (
     <div ref={rowRef} data-testid="needs-you-inbox-row" data-pending-id={bundle.pending_id}>
-      <div className="flex items-center gap-3 px-4 py-2.5">
+      <div ref={rowHeaderRef} className="flex items-center gap-3 px-4 py-2.5">
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer max-md:min-h-11 [@media(pointer:coarse)]:min-h-11"
@@ -346,6 +364,10 @@ export function NeedsYouInboxRow({
           shortcutScopeRef={rowRef}
           initialAnswers={savedDraft}
           onAnswersChange={onAnswersChange}
+          initialMaxHeightVh={50}
+          allocationRef={allocationRef}
+          anchorRef={rowRef}
+          reservedSiblingRefs={reservedSiblingRefs}
         />
       )}
     </div>

@@ -250,9 +250,6 @@ func (s *Service) stopNeverStartedExecutionBounded(ctx context.Context, payload 
 }
 
 func stallNoticeContent(payload lifecycle.AgentStalledPayload) string {
-	if payload.NeverStarted {
-		return neverStartedNoticeContent
-	}
 	tool := strings.TrimSpace(payload.ToolTitle)
 	if tool == "" {
 		tool = strings.TrimSpace(payload.ToolName)

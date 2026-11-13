@@ -11,7 +11,7 @@ export type SettingsDiscoveryDefinition = {
   href: string;
   targetId?: string;
   order: number;
-  requires?: "account" | "users" | "workspace" | "organizations" | "multiInstance";
+  requires?: "account" | "users" | "workspace" | "organizations" | "multiInstance" | "office";
 };
 
 export type SettingsDiscoveryGroupDefinition = {
@@ -42,6 +42,7 @@ export type SettingsDiscoveryContext = {
   coordinatorEnabled?: boolean;
   /** Gates the remote-instance registry entry. Defaults to false (flag off). */
   multiInstanceEnabled?: boolean;
+  officeEnabled?: boolean;
   workspaces: Array<{ id: string; name: string }>;
   agents: Array<{
     name: string;

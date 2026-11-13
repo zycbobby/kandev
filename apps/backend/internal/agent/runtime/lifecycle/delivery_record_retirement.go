@@ -238,7 +238,7 @@ func (m *Manager) retireLiveDeliveryRecordSubmissions(
 		return nil, err
 	}
 	for _, target := range request.Submissions {
-		if err := client.RetireDeliverySubmission(ctx, target.ID); err != nil {
+		if err := m.deliveryJournalReleaser().retire(ctx, client, target.ID); err != nil {
 			return nil, deliveryRetirementControlError(err)
 		}
 	}

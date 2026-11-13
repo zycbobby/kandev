@@ -1,15 +1,15 @@
 ---
-status: draft
+status: current
 system: agents
 requirements:
   - REQ-AGENTS-AGENT-STALL-RECOVERY-001
 created: 2026-09-02
-updated: 2026-11-04
+updated: 2026-11-13
 owners:
   - Kandev
 ---
 
-# Agent Stall Recovery System Design
+# Agent stall recovery system design
 
 ## Purpose and boundaries
 
@@ -27,11 +27,22 @@ the legacy launch-failure transition. Reaching an execution from a task ID
 stays with
 [task stop reachability](../../tasks/system-design/task-stop-reachability.md).
 
+Platform owns durable cancellation uncertainty and
+[interrupted-prompt recovery](../../platform/system-design/interrupted-prompt-recovery.md).
+The [silent prompt work package](../../../plans/silent-prompt-recovery/plan.md) records implementation
+and verification of the advisory path.
+
 ## Requirement mapping
 
 | Requirement | Design sections |
 | --- | --- |
-| `REQ-AGENTS-AGENT-STALL-RECOVERY-001` | [Prompt progress clock](#prompt-progress-clock), [Watchdog classification](#watchdog-classification), [Terminal teardown](#terminal-teardown), [Failure and recovery](#failure-and-recovery) |
+| REQ-AGENTS-AGENT-STALL-RECOVERY-001, .1-.9 | Progress clock, advisory notice resolution |
+| REQ-AGENTS-AGENT-STALL-RECOVERY-001, .10-.15 | Never-started settlement, watchdog and cancellation |
+| REQ-AGENTS-AGENT-STALL-RECOVERY-001, .16-.19 | Advisory notice, acceptance evidence, cancellation, diagnostic snapshot |
+
+Never-started stalls settle recoverably under the
+[ADR-2026-11-04 decision](../../../decisions/2026-11-04-never-started-stall-recovery.md);
+the historical terminal rule is superseded.
 
 ## Components and responsibilities
 
@@ -54,8 +65,16 @@ stays with
   retires the exact record under the zero-event authorization.
 - **The agent manager's stop entry point** performs teardown. It stops the
   runtime and deregisters the execution without writing session state.
+- **`SessionManager.markPromptDispatched`** and the execution store record the
+  current accepted generation after `triggerPrompt` succeeds. Acceptance is
+  distinct from output and effect evidence.
+- **`recordActivity`** (`manager_events.go`) classifies content and metadata
+  frames for the progress clock.
+- **Existing cancellation services** own protocol cancellation, bounded
+  escalation, state projection, and durable recovery blocks. The watchdog does
+  not bypass their owner checks or settle their submission records.
 
-## Data and contracts
+## Acceptance evidence
 
 The published stall payload carries the delivery identity alongside the
 existing fields (task, session, and execution identity, prompt generation,
@@ -69,24 +88,36 @@ coexist with the active one; the identity must come from the execution that
 owns the prompt. If the agentctl client or its identity is unavailable, the
 fields stay empty and the orchestrator takes the fail-closed legacy path.
 
-The prompt progress timestamp is the single clock behind that payload. Exactly
-four inputs advance it:
+Use the current `dispatchedPromptGeneration` boundary for ordinary dispatch.
+Expose acceptance in a snapshot paired with execution ID and prompt generation.
+Take lifecycle ownership before activity state, following the existing lock
+order; revalidate the same generation at the consumer. Do not read mutable
+fields without their owner or infer acceptance from a request being sent.
 
-| Input | Meaning |
-| --- | --- |
-| Prompt dispatch | A new prompt is armed; the clock restarts and the discriminator is cleared |
-| Turn event | Assistant text, reasoning, tool call, tool update, plan, or permission request |
-| Terminal completion | The prompt's own completion or error frame |
-| User steer | New user input delivered into the running turn |
+Restore may establish acceptance only from the authenticated active durable
+submission with matching session, execution, incarnation, stream and generation.
+Native session identity, `session_info`, usage, and a prior turn's acceptance
+are insufficient. Unsupported or missing evidence is unconfirmed and remains
+advisory. A provider-specific native start event is optional supporting evidence,
+not a prerequisite or a new public ACP capability.
 
-A metadata frame advances nothing. It is still processed, published, and
-recorded for its own purposes; it is not evidence of progress.
+Do not set `agentEventSincePrompt` for acceptance. The existing
+`promptAttemptEvidenceSnapshot` uses it for both `OutputObserved` and
+`EffectObserved`. Acceptance alone must not change those fields. Preserve
+content that arrives before the dispatch acknowledgment; recording acceptance
+must not reset already-observed output, effects, or the newer progress clock.
+Completion or a successor generation invalidates the old acceptance snapshot.
 
-The discriminator remains separate from the clock. Prompt dispatch clears it;
-a turn event or terminal completion sets it. A user steer restarts the clock
-without setting it, because user input is not agent output.
+## Progress clock
 
-## Control flow
+Retain the one-minute watchdog and five-minute threshold. Dispatch arms the
+clock. Genuine content, reasoning, tool calls/updates, plans, permission requests,
+terminal completion, and delivered same-turn user input retain their existing
+clock behavior. Metadata and acceptance acknowledgments do not repeatedly reset
+it. The completion-signal watchdog retains this same progress meaning and its
+separate explicit-signal recovery policy.
+
+## Watchdog and cancellation
 
 1. Prompt dispatch arms the clock and clears the discriminator.
 2. Each inbound frame is classified. A turn event advances the clock, sets the
@@ -106,6 +137,15 @@ without setting it, because user input is not agent output.
    settlement, and one of two final outcomes (settled or blocked). Out of
    scope, it persists the terminal error notice, applies the launch-failure
    transition, and then requests execution teardown.
+
+An accepted advisory event never writes a launch-failure state or forces a
+stop, including when acceptance is unconfirmed. On user **Cancel turn**, use
+the existing `agent.cancel` route with the captured execution, turn, and
+generation; busy state prevents duplicate operations. Confirmed terminal
+cancellation follows normal reconciliation. A notification send, HTTP
+acknowledgment, released local waiter, or timeout is not itself a confirmed
+durable outcome; missing outcome evidence retains the matching block and
+prevents prompt or queue dispatch.
 
 ### Advisory notice resolution
 
@@ -134,19 +174,22 @@ events and reload therefore resolve notices independently of the loaded page.
 The advisory message remains persisted and the watchdog still publishes at
 most once per prompt generation; resolution adds no automatic cancellation.
 
-### Prompt progress clock
+## Desktop and phone
 
-Because the clock advances only on the four inputs above, an adapter that emits
-metadata frames while producing no turn output cannot postpone detection. The
-never-started elapsed time is measured from prompt dispatch, which is the
-behavior the requirement describes.
+Reuse `action-message.tsx`, `action-message-actions.tsx`, and the current
+`task-layout.tsx` phone chat composition. The transcript owns scrolling.
+The short status and inline content-width Cancel turn control need no overlay
+or new navigation. Phone and coarse-pointer targets remain at least 44px;
+compact fine-pointer desktop styling remains unchanged. Reuse the shared
+localized labels, keyboard behavior, cancellation pending state, and recovery
+surface. No new animation or alert decoration is needed.
 
-The same clock also feeds the ten-minute completion-signal watchdog. That
-consumer inherits the corrected semantics: a signalled session that has gone
-quiet apart from metadata frames becomes reclaimable on schedule instead of
-never. No separate clock is introduced for it.
+## Diagnostic snapshot
 
-### Watchdog classification
+Extend the existing first-stall structured log. Emit at most one record per
+execution/prompt generation before any subsequent user cancellation. Capture
+from in-memory or already authenticated state; do not perform provider I/O
+while holding the activity or cancellation lock.
 
 Classification is a pure read of the snapshot. An advisory stall leaves task
 state, session state, prompt admission, and process liveness untouched. A
@@ -154,7 +197,31 @@ never-started stall stops the execution; its outcome is recoverable when the
 zero-event settlement succeeds and terminal only when the evidence blocks the
 settlement.
 
-### Terminal teardown
+The same record may include bounded stream-stage counters and ages for adapter
+updates, agentctl writes, backend reads, and durable projection. An internal
+heartbeat is sent only when the backend requests that capability; retained
+older peers may omit it. Metadata is not a turn event or prompt progress.
+Unavailable or stale measurements remain unknown, and a later connection's
+projection counters cannot be replaced by an older connection.
+
+Allowlist: task/session/execution identity; prompt and harness generations;
+submission and stream identity when known; acceptance state; output/effect
+booleans; last-progress time and elapsed milliseconds; agent type; managed
+adapter and CLI versions when already known; current delivery state; received
+and projected sequences when cached; the latest normalized retry/transport
+category only if already observed. Unknown fields stay absent or explicitly
+unknown. Do not infer bundled Codex version from the host CLI version.
+Output and effect booleans share conservative turn-content evidence, as in
+`PromptAttemptEvidence`; they do not independently prove persisted effects.
+
+Use fixed enums, typed numbers, and strings capped at 128 UTF-8 bytes, with a
+4 KiB total encoded record limit. Omit malformed UTF-8 input. Truncate valid
+strings at the last complete rune boundary within the byte cap. Optional values
+that fail validation are omitted. No prompts, environment, URLs, paths, tool
+arguments, free-form provider errors, raw ACP frames or private logs enter the
+record. Use the existing rotated backend log retention; no new table, file
+writer or high-cardinality metric. Snapshot failure is logged as a fixed
+category and cannot change the turn, notice or cancel availability.
 
 In settlement scope, teardown runs before the final state is chosen. The
 handler claims teardown ownership while it still holds the per-session guard,
@@ -183,7 +250,7 @@ identity or out of scope) keeps the original order — record the failure first,
 then tear down — so a teardown failure cannot replace the recorded `FAILED`
 state with a cancellation state.
 
-## Failure and recovery
+## Verification
 
 - Teardown failure is logged with the session and execution identity. On the
   legacy path the session and task remain `FAILED`; the execution stays
@@ -214,6 +281,12 @@ state with a cancellation state.
   notice identity, the settlement effect, and the guarded writes keep replay
   idempotent.
 
+Use deterministic clocks to cover accepted silence, metadata-only traffic,
+missing acceptance, late acknowledgment/output, completion races, restored
+acceptance, and stale generations. Confirm the output/effect snapshot remains
+unchanged by acceptance. Advisory-path handler tests assert no terminal state
+write or stop; never-started tests assert the settlement outcomes above.
+
 ## Persistence
 
 No schema change. The clock, discriminator, and epoch stay in memory for the
@@ -223,6 +296,12 @@ session, execution, and prompt generation), the `failed` delivery submission
 with its `agent_delivery.never_started_settlement:<submissionID>` effect, and
 the prompt generation stamped on the captured turn. The settlement writes no
 terminal event, terminal sequence, or `fully_settled_at`.
+
+No schema migration. Acceptance snapshots are execution-scoped and rebuilt
+from current authenticated evidence on adoption. Notices and recovery blocks
+keep existing persistence. Capture logs are diagnostic, never recovery proof.
+All managed providers use the same policy; passthrough sessions retain their
+existing exclusions. Office completion and scheduling rules remain separate.
 
 ## Security
 
@@ -251,3 +330,5 @@ submission, or payload identifier is a label.
 - [ADR-2026-08-18-never-started-agent-stall-terminal](../../../decisions/2026-08-18-never-started-agent-stall-terminal.md) (superseded)
 - [ADR-2026-09-02-terminal-stall-owns-process-teardown](../../../decisions/2026-09-02-terminal-stall-owns-process-teardown.md)
 - [ADR-2026-11-04-never-started-stall-recovery](../../../decisions/2026-11-04-never-started-stall-recovery.md)
+- [ADR-2026-10-20-silent-prompt-acceptance](../../../decisions/2026-10-20-silent-prompt-acceptance.md)
+- [ADR-2026-08-02-agent-terminal-diagnostics-over-stderr](../../../decisions/2026-08-02-agent-terminal-diagnostics-over-stderr.md)

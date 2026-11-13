@@ -10,12 +10,13 @@ import (
 
 	"github.com/kandev/kandev/internal/agentctl/journal"
 	"github.com/kandev/kandev/internal/agentctl/server/adapter"
+	"github.com/kandev/kandev/internal/agentctl/types/deliverylimits"
 )
 
 const (
 	deliveryWriterBatchBytes = 64 << 10
 	deliveryWriterBatchWait  = 20 * time.Millisecond
-	deliveryWriterQueueBytes = 4 << 20
+	deliveryWriterQueueBytes = int(deliverylimits.WriterQueueBytes)
 )
 
 var errDeliveryWriterClosed = errors.New("durable delivery writer is closed")
@@ -69,6 +70,9 @@ func newDeliveryEventWriter(manager *Manager) *deliveryEventWriter {
 }
 
 func (w *deliveryEventWriter) persist(ctx context.Context, update adapter.AgentEvent) (adapter.AgentEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return update, err
+	}
 	size, err := deliveryWriteSize(update)
 	if err != nil {
 		return update, err
@@ -105,12 +109,11 @@ func (w *deliveryEventWriter) persist(ctx context.Context, update adapter.AgentE
 		w.release(size)
 		return update, ctx.Err()
 	}
-	select {
-	case result := <-request.result:
-		return result.update, result.err
-	case <-ctx.Done():
-		return update, ctx.Err()
-	}
+	// Once the request is in the single ordered writer, the durable write owns
+	// its native-session fence. Caller cancellation cannot release that fence
+	// while the writer may still commit; wait for the actual commit result.
+	result := <-request.result
+	return result.update, result.err
 }
 
 func (w *deliveryEventWriter) reserve(ctx context.Context, size int) error {

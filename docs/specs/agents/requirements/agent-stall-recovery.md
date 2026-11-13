@@ -31,12 +31,6 @@ a failed turn is not presented as healthy work.
 
 ### REQ-AGENTS-AGENT-STALL-RECOVERY-001: Agent Stall Recovery
 
-**Intent:** An agent turn can remain `RUNNING` after it stops emitting events.
-Silence is ambiguous because a legitimate long-running tool may also be quiet,
-but some agents know their provider stream failed and never close the ACP
-prompt. Kandev must distinguish trustworthy terminal evidence from mere
-inactivity so a failed turn is not presented as healthy work.
-
 #### Acceptance criteria
 
 - **AC-AGENTS-AGENT-STALL-RECOVERY-001.1:** Kandev checks running prompts for inactivity once per 60 seconds.
@@ -49,11 +43,16 @@ inactivity so a failed turn is not presented as healthy work.
 - **AC-AGENTS-AGENT-STALL-RECOVERY-001.8:** The backend logs the first stall detected for a prompt generation and does not emit another notice or log entry on every watchdog check.
 - **AC-AGENTS-AGENT-STALL-RECOVERY-001.9:** When an execution emits only metadata frames after a prompt is dispatched, the system shall not extend the five-minute inactivity threshold; only a turn event or newly delivered user input for the current prompt shall restart it.
 - **AC-AGENTS-AGENT-STALL-RECOVERY-001.10:** A never-started classification shall stop the agent execution, record the outcome even when the stop fails, and decide the final session, turn, and task writes from durable rows because the stop removes the live execution.
-- **AC-AGENTS-AGENT-STALL-RECOVERY-001.11:** When the never-started settlement succeeds, the session settles in `WAITING_FOR_INPUT` with a stall error naming the provider stall and the watchdog stop, the captured turn is completed or error-terminated, and the task does not enter `FAILED`; blocked evidence keeps `FAILED` with the uncertain submission and its open block.
-- **AC-AGENTS-AGENT-STALL-RECOVERY-001.12:** A never-started stall persists one notice for the prompt generation under a deterministic message identity: it states the no-output duration and that the message was not delivered, offers resume or re-send when settled, and states the unsettled outcome when blocked.
-- **AC-AGENTS-AGENT-STALL-RECOVERY-001.13:** After a successful settlement, Kandev attempts at most one automatic resume per stall episode through the existing auto-resume path: no historical prompt is dispatched, the archived, deferred-launch, auto-start, Office, automation, and passthrough guards apply, and a failed attempt is not retried.
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.11:** A successful never-started settlement leaves the session `WAITING_FOR_INPUT` with a stall error naming the provider stall and watchdog stop, the captured turn completed or error-terminated, and the task not `FAILED`; blocked evidence keeps `FAILED` with the uncertain submission and open block.
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.12:** A never-started stall persists one deterministic notice stating the no-output duration and undelivered message, offering resume or re-send when settled and the unsettled outcome when blocked.
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.13:** After a successful settlement, at most one automatic resume runs per stall episode through the existing path: no historical prompt is dispatched, archived, deferred-launch, auto-start, Office, automation, and passthrough guards apply, and a failed attempt is not retried.
 - **AC-AGENTS-AGENT-STALL-RECOVERY-001.14:** A stall that observed at least one turn event since dispatch keeps the existing advisory notice and **Cancel turn** action, with no settlement, session or task state change, or automatic resume.
 - **AC-AGENTS-AGENT-STALL-RECOVERY-001.15:** The recoverable outcome and automatic resume apply only to interactive, non-passthrough, non-Office durable-delivery sessions; others keep the existing stall handling.
+
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.16:** A running prompt outside .10's never-started scope shows the advisory notice after five minutes of silence, even with no output. Missing or ambiguous acceptance evidence never causes an inactivity-only failure, cancellation, stop, or admission change.
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.17:** Kandev shall distinguish prompt acceptance from output and tool effects. Late or stale acceptance shall not affect another turn. Metadata alone shall prove neither acceptance nor terminal failure; explicit startup errors and trustworthy terminal outcomes retain their existing failure behavior.
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.18:** Cancel turn uses bounded, current-turn cancellation and normal admission checks on confirmed settlement. Missing confirmation preserves delivery uncertainty and explicit recovery controls, including after reload, without automatic resend or queue dispatch; a stale cancellation leaves a successor turn untouched.
+- **AC-AGENTS-AGENT-STALL-RECOVERY-001.19:** At the first stall notice, retain one bounded diagnostic record of acceptance, progress, runtime identity, available versions, and delivery state. Unavailable provider details stay unknown. Exclude prompts, tool arguments, credentials, and raw vendor logs; capture failure never stops the turn or suppresses cancellation.
 
 ## Migrated source detail
 
@@ -63,18 +62,8 @@ Decisions:
 - [ADR-2026-08-02-agent-terminal-diagnostics-over-stderr](../../../decisions/2026-08-02-agent-terminal-diagnostics-over-stderr.md)
 - [ADR-2026-08-07-allowlisted-provider-action-links](../../../decisions/2026-08-07-allowlisted-provider-action-links.md)
 - [ADR-2026-08-08-provider-neutral-agent-error-recovery](../../../decisions/2026-08-08-provider-neutral-agent-error-recovery.md)
-- [ADR-2026-08-18-never-started-agent-stall-terminal](../../../decisions/2026-08-18-never-started-agent-stall-terminal.md)
 - [ADR-2026-09-02-terminal-stall-owns-process-teardown](../../../decisions/2026-09-02-terminal-stall-owns-process-teardown.md)
 - [ADR-2026-11-04-never-started-stall-recovery](../../../decisions/2026-11-04-never-started-stall-recovery.md)
-
-Implementation plans:
-
-- [Agent stall recovery](../../../plans/agent-stall-recovery/plan.md)
-- [Never-started stall teardown](../../../plans/never-started-stall-teardown/plan.md)
-- [Stale stall notice](../../../plans/stale-stall-notice/plan.md)
-- [Lost turn-completion cancel recovery](../../../plans/lost-turn-completion-cancel-recovery/plan.md)
-- [OpenCode terminal error surfacing](../../../plans/opencode-terminal-error-surfacing/plan.md)
-- [OpenCode actionable error links](../../../plans/opencode-actionable-error-links/plan.md)
 
 ## What
 
@@ -122,17 +111,12 @@ turn event, without an accepted signal, remains advisory.
 - OpenCode diagnostics come from the managed `opencode acp` process's
   error-only stderr stream; Kandev never reads OpenCode's private files under
   `~/.local/share/opencode/log`.
-- A correlated OpenCode `stream error` ends the affected prompt through the
-  existing agent-error lifecycle instead of waiting for the inactivity
-  threshold; the session stops presenting itself as `RUNNING` and retains its
-  recovery actions.
+- A correlated OpenCode `stream error` ends the affected prompt through the existing agent-error lifecycle rather than the inactivity threshold; the session stops presenting as `RUNNING` and retains recovery actions.
 - Kandev preserves only allowlisted diagnostic fields: source agent, provider,
   model, sanitized message, occurrence time, and a derived reset time; raw log
   lines, workspace URLs, account or workspace identifiers, paths, credentials,
   and unrelated stderr never reach storage or the browser.
-- A recognized OpenCode usage-limit message is classified as `quota_limited`:
-  the recovery surface names the affected model when known, explains when
-  capacity resets, and keeps sanitized details collapsed.
+- A recognized OpenCode usage-limit message is `quota_limited`: the recovery surface names the model when known, explains the reset, and keeps sanitized details collapsed.
 - Kanban treats `quota_limited` as user-actionable; a reset time never
   schedules a Kanban retry. Office may consume the same classification for
   provider fallback and scheduler recovery under its separate routing policy.
@@ -159,40 +143,25 @@ turn event, without an accepted signal, remains advisory.
   failed-session entry expose the same destination as a localized, keyboard-
   and touch-accessible external link; the sanitized message and collapsed
   technical details are unchanged.
-- A missing, malformed, untrusted, or unsupported URL produces no link and no
-  URL-bearing fallback text; existing recovery actions and generic error copy
-  remain available.
+- A missing, malformed, untrusted, or unsupported URL adds no link and no URL-bearing fallback; existing recovery actions and generic copy remain.
 
 ## Diagnostic contract
 
-The internal normalized provider diagnostic contains only:
-
-| Field | Meaning |
-| --- | --- |
-| `source` | Stable diagnostic source identifier, initially `opencode_stderr` |
-| `provider_id` | Provider identifier reported by the agent, when present |
-| `model_id` | Model identifier reported by the agent, when present |
-| `message` | Sanitized provider message with URLs and identifiers removed |
-| `occurred_at` | Parsed diagnostic timestamp |
-| `reset_at` | Relative reset duration added to `occurred_at`; absolute reset timestamps are not accepted |
-| `remediation_url` | Optional, exact-host OpenCode action URL accepted by the adapter-specific validator |
-
-The persisted recovery metadata uses
-`failure_kind: provider_quota_limited` plus the safe model and reset fields to
-select localized presentation; `error_output` may carry the same bounded,
-sanitized message for the collapsed technical-details surface.
+Normalized provider diagnostics carry only a stable `source` (initially `opencode_stderr`), `provider_id`, `model_id`, sanitized `message`, parsed `occurred_at`, relative `reset_at`, and an optional exact-host `remediation_url`. Persisted recovery metadata uses `failure_kind: provider_quota_limited` plus safe model and reset fields; `error_output` may carry the same bounded, sanitized message for collapsed technical details.
 
 ## Failure modes
 
 - If active tool identity is unavailable, the generic inactivity notice and
   cancel action still appear.
-- If the agent acknowledges cancellation, normal cancellation reconciliation
-  makes the session input-ready.
-- If the agent never acknowledges cancellation, the bounded cancel-escalation
-  path releases the prompt and reconciles the session.
+- If the agent acknowledges cancellation, normal reconciliation makes the session input-ready; otherwise the bounded cancel-escalation path releases the prompt and reconciles it.
 - Cancel escalation clears every prompt-admission barrier for the cancelled
   turn, including a pending dispatch-only completion; a later prompt can
   dispatch without a backend restart.
+- If cancellation cannot establish an authoritative outcome, durable delivery
+  remains blocked under [disconnect reconciliation](../../platform/requirements/durable-agent-delivery.md).
+  Releasing a local waiter or reaching a timeout does not prove cancellation.
+  Legacy cancellation keeps its existing bounded behavior without granting
+  permission to bypass durable uncertainty.
 - If notice-message persistence fails, the failure is logged without changing
   or terminating the running session.
 - If OpenCode lacks error-only stderr, changes its log format, or emits an
@@ -207,17 +176,7 @@ sanitized message for the collapsed technical-details surface.
 
 ## Persistence guarantees
 
-- Advisory stall notices retain their existing persisted-message behavior;
-  later same-turn agent activity hides them, including updates to earlier tool
-  rows.
-- Sanitized provider failures use the existing session error and recovery
-  message persistence and survive reloads like other recoverable failures.
-- A validated `remediation_url` is persisted only in structured recovery
-  metadata, staying available after reloads and through the Office
-  `session.state_changed` snapshot; it never appears in generic error text or
-  raw stderr.
-- Raw agent stderr remains a bounded, executor-local in-memory diagnostic and
-  is not added to session metadata, messages, debug exports, or durable logs.
+Advisory notices keep their persisted-message behavior and are hidden by later same-turn activity. Sanitized provider failures use the existing session error and recovery message persistence. A validated `remediation_url` stays in structured recovery metadata, including the Office `session.state_changed` snapshot, and never appears in generic error text or raw stderr. Raw agent stderr remains executor-local, bounded, and excluded from metadata, messages, debug exports, and durable logs.
 
 ## Scenarios
 
@@ -232,7 +191,8 @@ sanitized message for the collapsed technical-details surface.
   rendered and a delayed stall event creates no new notice for it.
 - **GIVEN** a visible stall notice, **WHEN** the user activates **Cancel
   turn**, **THEN** cancellation settles the turn and the session accepts new
-  input without a backend restart.
+  input without a backend restart. If its outcome remains uncertain, recovery
+  controls remain available and delivery stays blocked, on desktop and phone.
 - **GIVEN** a dispatch-only prompt never reports completion and cancellation
   escalates, **WHEN** the user sends a later prompt, **THEN** Kandev dispatches
   it without a backend restart.
@@ -299,8 +259,7 @@ sanitized message for the collapsed technical-details surface.
 - Making the stop path reach an execution for a task; that contract belongs
   to [task stop reachability](../../tasks/requirements/task-stop-reachability.md).
 - Making the inactivity threshold user-configurable.
-- Reading, tailing, or exposing an agent vendor's private log files.
-- Treating arbitrary stderr text as trusted terminal evidence.
+- Reading, tailing, or exposing an agent vendor's private log files, or treating arbitrary stderr as trusted terminal evidence.
 - Persisting raw stderr or raw OpenCode log records.
 - Following or exposing arbitrary provider URLs, account URLs, or balance URLs;
   only the exact allowlisted OpenCode remediation route is in scope.

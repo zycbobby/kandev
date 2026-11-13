@@ -13,6 +13,7 @@ import {
   isSubagentBackgroundRunning,
   isSubagentEffectivelyActive,
 } from "@/components/task/chat/messages/subagent-status";
+import { isContextCompactionEffectivelyActive } from "@/components/task/chat/messages/context-compaction-message";
 
 type TurnGroupMessageProps = {
   group: TurnGroup;
@@ -71,32 +72,30 @@ const TOOL_MESSAGE_TYPES = new Set([
  * Check if any tool or subagent in the group is still running.
  * A tool/subagent is considered running if it's not in a terminal state.
  */
-function isSubagentMessageRunning(
-  metadata: ToolCallMetadata | undefined,
-  isContainingTurnActive: boolean,
-): boolean {
-  // A backgrounded subagent keeps running after the turn ends, so the
-  // collapsed group header must keep its running cue too.
-  return (
-    isSubagentEffectivelyActive(metadata, isContainingTurnActive) ||
-    isSubagentBackgroundRunning(metadata?.normalized?.subagent_task)
-  );
+function isMessageRunning(msg: Message, isContainingTurnActive: boolean): boolean {
+  const metadata = msg.metadata as ToolCallMetadata | undefined;
+  const normalized = metadata?.normalized;
+  if (normalized?.kind === "subagent_task") {
+    // A backgrounded subagent keeps running after the turn ends, so the
+    // collapsed group header must keep its running cue too.
+    return (
+      isSubagentEffectivelyActive(metadata, isContainingTurnActive) ||
+      isSubagentBackgroundRunning(normalized.subagent_task)
+    );
+  }
+  if (normalized?.kind === "context_compaction") {
+    return isContextCompactionEffectivelyActive(
+      normalized.context_compaction,
+      isContainingTurnActive,
+    );
+  }
+  if (!msg.type || !TOOL_MESSAGE_TYPES.has(msg.type)) return false;
+  const status = metadata?.status;
+  return status !== "complete" && status !== "error" && status !== "cancelled";
 }
 
 function hasRunningTool(messages: Message[], isContainingTurnActive: boolean): boolean {
-  for (const msg of messages) {
-    const metadata = msg.metadata as ToolCallMetadata | undefined;
-    const isToolMessage = msg.type && TOOL_MESSAGE_TYPES.has(msg.type);
-    const isSubagent = metadata?.normalized?.kind === "subagent_task";
-    if (!isToolMessage && !isSubagent) continue;
-    if (isSubagent) {
-      if (isSubagentMessageRunning(metadata, isContainingTurnActive)) return true;
-      continue;
-    }
-    const status = metadata?.status;
-    if (status !== "complete" && status !== "error" && status !== "cancelled") return true;
-  }
-  return false;
+  return messages.some((msg) => isMessageRunning(msg, isContainingTurnActive));
 }
 
 type TurnGroupHeaderProps = {

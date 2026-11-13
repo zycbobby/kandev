@@ -17,19 +17,19 @@ steps, queued launches, and task process contracts.
 ## Ownership
 
 Owns task identity, metadata, [workspace discovery](requirements/workspace-search.md),
-documents, attachments, parent and dependency relationships, creation, launch,
-runtime state publication, workflow definitions and transitions, completion
-signals, and task scheduling.
+documents, attachments, hierarchy, creation, launch, runtime state, workflows,
+completion, and scheduling.
 
-Turn change sets bind immutable repository intervals to capture policy,
-historical content availability, and transcript anchors.
+Turn change sets bind repository intervals to capture policy,
+history, and transcript anchors. Workspaces own checkout identity; runtime owns
+ordered executor access.
 
 ## Exclusions
 
-- Agent identity, permissions, and runtime profiles belong to the [agent system](../agents).
-- Repository and worktree ownership belongs to the [workspace system](../workspaces).
-- Office-specific autonomous agent identities and dashboards belong to the [Office system](../office).
-- Presentation-only behavior belongs to the [UI specifications](../ui).
+- Agent identity, permissions, and profiles belong to [agents](../agents).
+- Repository and worktree ownership belongs to [workspace](../workspaces).
+- Office agent identities and dashboards belong to [Office](../office).
+- Presentation belongs to [UI specifications](../ui).
 
 ## Specification map
 
@@ -65,6 +65,7 @@ historical content availability, and transcript anchors.
 - [Link Existing Task to External References](requirements/link-existing-task-github-issue.md)
 - [MCP-Created Task Agent Profile Default](requirements/mcp-task-agent-profile-default.md)
 - [MCP Tool Name Stability](requirements/mcp-tool-name-stability.md)
+- [MCP task priority](requirements/mcp-task-priority.md)
 - [MCP workspace modes](requirements/mcp-workspace-mode.md)
 - [Missing task route recovery](requirements/missing-task-route-recovery.md)
 - [Task model unification](requirements/model-unification.md)
@@ -212,6 +213,7 @@ historical content availability, and transcript anchors.
 - [Audited cross-workspace task transfers](system-design/cross-workspace-task-transfer.md)
 - [Task Create Launch Preview](system-design/task-create-launch-preview.md)
 - [Task priority visibility](system-design/task-priority-visibility.md)
+- [MCP task priority](system-design/mcp-task-priority.md)
 - [Board priority sort and filter](system-design/board-priority-sort-filter.md)
 - [Threads task actions](system-design/threads-task-actions.md)
 - [WIP Limits and Visible Overflow Queues](system-design/wip-limit-pull-system.md)

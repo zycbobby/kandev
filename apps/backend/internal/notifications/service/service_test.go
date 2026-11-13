@@ -147,7 +147,7 @@ func TestNewServiceSuppressesSystemProviderForDesktopOwnedLaunch(t *testing.T) {
 		t.Fatalf("create logger: %v", err)
 	}
 
-	svc := NewService(nil, nil, nil, log, nil)
+	svc := NewService(nil, nil, nil, log, nil, false)
 
 	if _, exists := svc.providers[models.ProviderTypeSystem]; exists {
 		t.Fatal("system notification provider must be suppressed for a desktop-owned launch")
@@ -164,7 +164,7 @@ func TestNewServiceRetainsSystemProviderForNonDesktopLaunch(t *testing.T) {
 		t.Fatalf("create logger: %v", err)
 	}
 
-	svc := NewService(nil, nil, nil, log, nil)
+	svc := NewService(nil, nil, nil, log, nil, false)
 
 	if _, exists := svc.providers[models.ProviderTypeSystem]; !exists {
 		t.Fatal("system notification provider must remain enabled outside the desktop-owned launch")
@@ -189,7 +189,7 @@ func TestSemanticOccurrencesUseEventSpecificCopyAndOccurrenceIdempotency(t *test
 			},
 		},
 	}
-	service := NewService(repo, notificationTestTaskGetter{task: &taskmodels.Task{Title: "Fix delivery"}}, nil, log, nil)
+	service := NewService(repo, notificationTestTaskGetter{task: &taskmodels.Task{Title: "Fix delivery"}}, nil, log, nil, false)
 	capture := &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = capture
 
@@ -217,7 +217,7 @@ func TestUpdateAvailabilityIsAvailableEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create logger: %v", err)
 	}
-	service := NewService(&notificationTestRepository{}, nil, nil, log, nil)
+	service := NewService(&notificationTestRepository{}, nil, nil, log, nil, false)
 	if !containsEvent(service.AvailableEvents(), "system.update_available") {
 		t.Fatalf("available events = %#v, want system.update_available", service.AvailableEvents())
 	}
@@ -229,7 +229,7 @@ func TestFreshLocalProviderSubscribesToUpdateAvailability(t *testing.T) {
 		t.Fatalf("create logger: %v", err)
 	}
 	repo := &notificationTestRepository{subscriptions: make(map[string][]*models.Subscription)}
-	service := NewService(repo, nil, nil, log, nil)
+	service := NewService(repo, nil, nil, log, nil, false)
 	if _, _, err := service.ListProviders(context.Background(), "user-1"); err != nil {
 		t.Fatalf("list providers: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestConcurrentProviderInitializationCreatesSingletonDefaultsAndClaimsOneUpd
 		t.Fatalf("create logger: %v", err)
 	}
 	repo := &notificationTestRepository{subscriptions: make(map[string][]*models.Subscription)}
-	service := NewService(repo, nil, nil, log, nil)
+	service := NewService(repo, nil, nil, log, nil, false)
 	local, system := &captureProvider{}, &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = local
 	service.providers[models.ProviderTypeSystem] = system
@@ -308,7 +308,7 @@ func TestUpdateAvailabilityRoutesProviderScopedOccurrenceWithReleasePayload(t *t
 			"system":  {{ProviderID: "system", EventType: EventSystemUpdateAvailable, Enabled: true}},
 		},
 	}
-	service := NewService(repo, nil, nil, log, nil)
+	service := NewService(repo, nil, nil, log, nil, false)
 	local, apprise, system := &captureProvider{}, &captureProvider{}, &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = local
 	service.providers[models.ProviderTypeApprise] = apprise
@@ -346,7 +346,7 @@ func TestNoEligibleLocalUpdateSubscriberReleasesOccurrenceClaimForReplay(t *test
 			"local": {{ProviderID: "local", EventType: EventSystemUpdateAvailable, Enabled: true}},
 		},
 	}
-	service := NewService(repo, nil, gatewayws.NewHub(nil, log), log, nil)
+	service := NewService(repo, nil, gatewayws.NewHub(nil, log), log, nil, false)
 
 	service.HandleUpdateAvailable(context.Background(), "v1.2.3", "https://example.test/releases/v1.2.3")
 	if len(repo.deliveries) != 0 {
@@ -372,7 +372,7 @@ func TestFailedSemanticDeliveryReleasesOnlyItsOccurrenceClaim(t *testing.T) {
 			"provider-1": {{ProviderID: "provider-1", EventType: EventTaskSessionTurnFinished, Enabled: true}},
 		},
 	}
-	service := NewService(repo, nil, nil, log, nil)
+	service := NewService(repo, nil, nil, log, nil, false)
 	provider := &failOnceProvider{}
 	service.providers[models.ProviderTypeLocal] = provider
 
@@ -394,7 +394,7 @@ func TestProviderSendsClarificationAction(t *testing.T) {
 		t.Fatalf("create logger: %v", err)
 	}
 	provider := &models.Provider{ID: "provider-1", UserID: "user-1", Type: models.ProviderTypeLocal}
-	service := NewService(&notificationTestRepository{providers: []*models.Provider{provider}}, nil, nil, log, nil)
+	service := NewService(&notificationTestRepository{providers: []*models.Provider{provider}}, nil, nil, log, nil, false)
 	capture := &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = capture
 
@@ -443,7 +443,7 @@ func TestHandleManualStepWaitSuppressesSelfMoveAndDeliversOthers(t *testing.T) {
 			},
 		},
 	}
-	service := NewService(repo, notificationTestTaskGetter{task: &taskmodels.Task{Title: "Weekly routine"}}, nil, log, nil)
+	service := NewService(repo, notificationTestTaskGetter{task: &taskmodels.Task{Title: "Weekly routine"}}, nil, log, nil, false)
 	capture := &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = capture
 
@@ -481,7 +481,7 @@ func TestManualStepEnteredIsAnAvailableEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create logger: %v", err)
 	}
-	service := NewService(&notificationTestRepository{}, nil, nil, log, nil)
+	service := NewService(&notificationTestRepository{}, nil, nil, log, nil, false)
 	if !containsEvent(service.AvailableEvents(), EventTaskManualStepEntered) {
 		t.Fatalf("available events = %#v, want %s", service.AvailableEvents(), EventTaskManualStepEntered)
 	}
@@ -500,7 +500,7 @@ func TestFreshDefaultProvidersSubscribeToManualStepEntered(t *testing.T) {
 		t.Fatalf("create logger: %v", err)
 	}
 	repo := &notificationTestRepository{subscriptions: make(map[string][]*models.Subscription)}
-	service := NewService(repo, nil, nil, log, nil)
+	service := NewService(repo, nil, nil, log, nil, false)
 	if _, _, err := service.ListProviders(context.Background(), "user-1"); err != nil {
 		t.Fatalf("list providers: %v", err)
 	}

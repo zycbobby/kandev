@@ -260,7 +260,12 @@ export function EditorToolbarOverflowActions({
         repositoryId={repositoryId}
         repositoryName={repositoryName}
       />
-      <FileActionsMenuItems filePath={filePath} sessionId={sessionId ?? undefined} />
+      <FileActionsMenuItems
+        filePath={filePath}
+        sessionId={sessionId ?? undefined}
+        repositoryId={repositoryName ? undefined : repositoryId}
+        repositoryName={repositoryName}
+      />
       <EditorDownloadOverflowItem onDownload={onDownload} />
       <EditorDeleteOverflowItem onDelete={onDelete} />
     </PanelHeaderOverflowMenu>

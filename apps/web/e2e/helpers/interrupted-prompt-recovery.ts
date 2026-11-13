@@ -7,6 +7,7 @@ import { readdirSync, existsSync } from "node:fs";
 
 const nodeRequire = createRequire(path.join(process.cwd(), "package.json"));
 type TestDatabase = {
+  exec(sql: string): void;
   prepare(sql: string): {
     get(...args: unknown[]): unknown;
     all(...args: unknown[]): unknown[];
@@ -21,13 +22,14 @@ export function withDatabase<T>(tmpDir: string, read: (db: TestDatabase) => T): 
   };
   const db = new DatabaseSync(path.join(tmpDir, "kandev.db"));
   try {
+    db.exec("PRAGMA busy_timeout = 5000");
     return read(db);
   } finally {
     db.close();
   }
 }
 
-type JournalRecord = {
+export type JournalRecord = {
   id: string;
   session_id: string;
   incarnation_id: string;
@@ -39,7 +41,7 @@ type JournalRecord = {
   retired?: boolean;
 };
 
-function journalFixture(
+export function journalFixture(
   mode: "seed" | "read",
   journalPath: string,
   submission: Partial<JournalRecord>,
@@ -54,7 +56,7 @@ function journalFixture(
   );
 }
 
-function findSessionJournal(tmpDir: string, sessionId: string) {
+export function findSessionJournal(tmpDir: string, sessionId: string) {
   const root = path.join(tmpDir, ".kandev", "agentctl-journals");
   for (const owner of readdirSync(root)) {
     const journalPath = path.join(root, owner, "delivery.bbolt");

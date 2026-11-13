@@ -2,7 +2,7 @@
 status: draft
 system: platform
 created: 2026-09-10
-updated: 2026-11-04
+updated: 2026-11-13
 owners:
   - kandev
 ---
@@ -11,9 +11,7 @@ owners:
 
 ## Overview
 
-The platform system owns delivery between the backend and agentctl. This contract does not replace browser subscription recovery or native harness persistence.
-
-This draft defines proposed behavior. It does not claim that the current implementation provides these guarantees.
+Platform owns durable delivery between the backend and agentctl. Native harness persistence and browser subscription recovery retain their separate contracts.
 
 ## Terminology
 
@@ -28,8 +26,6 @@ This draft defines proposed behavior. It does not claim that the current impleme
 
 **Intent:** Events that agentctl accepts must survive a supported process restart.
 
-**User story:** As an operator, I want durable transport records, so that a disconnect does not erase accepted output.
-
 #### Acceptance criteria
 
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-001.1:** When durable delivery is active, agentctl must commit normalized events before publication and recover committed records after a process crash.
@@ -41,8 +37,6 @@ This draft defines proposed behavior. It does not claim that the current impleme
 
 **Intent:** Durability guarantees must match the actual executor storage lifetime.
 
-**User story:** As an operator, I want explicit storage limits, so that I know which failures permit recovery.
-
 #### Acceptance criteria
 
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-002.1:** When an executor advertises durable delivery, its journal must survive agentctl replacement within the retained environment. Native harness state must remain separate.
@@ -53,8 +47,6 @@ This draft defines proposed behavior. It does not claim that the current impleme
 
 **Intent:** A transport retry must not run the same logical prompt twice.
 
-**User story:** As a user, I want safe prompt delivery, so that a lost response does not repeat tool actions.
-
 #### Acceptance criteria
 
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-003.1:** When the backend repeats an accepted submission identifier with the same payload hash, agentctl must return its durable state without another harness dispatch.
@@ -63,8 +55,6 @@ This draft defines proposed behavior. It does not claim that the current impleme
 ### REQ-PLATFORM-DURABLE-AGENT-DELIVERY-004: Cursor-based event delivery
 
 **Intent:** Reconnect must restore committed events in order with bounded memory.
-
-**User story:** As a user, I want missing output after reconnect, so that the conversation remains complete.
 
 #### Acceptance criteria
 
@@ -80,8 +70,6 @@ This draft defines proposed behavior. It does not claim that the current impleme
 
 **Intent:** Replay must not duplicate messages, turn completion, or workflow effects.
 
-**User story:** As a user, I want one result per event, so that reconnect does not repeat task actions.
-
 #### Acceptance criteria
 
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-005.1:** When the backend acknowledges an event, the event must already exist in its durable inbox. Duplicate delivery must produce one canonical message effect.
@@ -94,16 +82,14 @@ This draft defines proposed behavior. It does not claim that the current impleme
 
 **Intent:** A broken stream is not proof that a prompt failed.
 
-**User story:** As a user, I want accurate reconnect status, so that Kandev does not restart work that already ran.
-
 #### Acceptance criteria
 
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.1:** When the transport disconnects, Kandev must reconcile the original submission and stream before declaring a terminal outcome or starting another prompt.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.2:** When reconciliation cannot establish the outcome, Kandev must show an uncertain state, keep Stop available, and prevent automatic queue dispatch or tool replay.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.3:** When adoption cannot establish the active submission, Kandev must block new dispatch and replacement. Stop must remain available during reconciliation.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.4:** After bounded initial reconciliation expires, later state-only reconciliation remains possible for the same owned submission without resend.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.5:** When retained evidence settles an uncertain submission, Kandev shall resolve only its matching delivery block after projection and authoritative outcome settlement. Other recovery blocks remain effective.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.6:** Reconnecting and uncertain session state shall survive browser reload and backend restart. It never appears idle and ready for new work while delivery remains unresolved.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.4:** After bounded initial reconciliation expires, later state-only reconciliation shall remain possible for the same owned submission without resend.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.5:** When retained evidence settles an uncertain submission, Kandev shall resolve only its matching delivery block after projection and authoritative outcome settlement. Other recovery blocks shall remain effective.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.6:** When an authenticated delivery failure has a matching current owner, recovery shall appear within ten seconds without another event or user action. This bound requires a reachable compatible agentctl and available backend storage. Reconnecting and uncertain state shall survive browser reload and backend restart. Unresolved delivery shall not appear ready for new work.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.7:** When a session has an uncertain prompt, workspace-only inspection shall remain available through an existing owned workspace execution. Cold workspace restoration may proceed when no saved execution or delivery recovery identity can be replaced. It shall not overwrite a pinned recovery source or candidate, start an agent, resend a prompt, or resolve uncertainty.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.8:** When a user clicks the existing Resume action in Quick Chat or task chat, Kandev shall use explicit session recovery rather than an ordinary launch blocked by an interrupted prompt. Automatic opening and focus remain subject to recovery admission.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.9:** A successful explicit native resume shall preserve the native conversation and record its recovery action without resending the interrupted instruction or declaring its historical unknown outcome terminal. Failed recovery shall retain the recovery block.
@@ -119,15 +105,15 @@ This draft defines proposed behavior. It does not claim that the current impleme
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.22:** Desktop and phone shall not show a restart-resume form, session-selection list, acknowledgment checkbox, or continuation-instruction field. Unresolved failures shall remain inspectable within the affected session, without blocking unrelated sessions or the application layout.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.23:** Recovery shall verify current ownership, process termination, native identity, and independent admission restrictions. Missing or conflicting evidence shall preserve a blocked session. Archived, completed, Office-owned, and automation-owned sessions shall not enter ordinary automatic chat recovery.
 - **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.24:** Repeated restart or interrupted recovery shall reuse durable progress without duplicate restore or prompt dispatch. Resolved recovery metadata never triggers another recovery attempt or stale-owner warning; one blocked candidate does not prevent other eligible candidates from recovering.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.25:** When agentctl refuses a durable prompt before writing its journal submission, Kandev shall settle the backend submission as `failed` without creating an `unknown_prompt_outcome` block; a refusal after the journal record may have been written keeps the submission uncertain on the existing recovery path.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.26:** Retry shall settle an `interrupted_unknown` submission as `failed` only when the authenticated retained journal proves the exact submission ID absent, with a durable untruncated descriptor, no other unresolved candidate, and matching recovery block, session, incarnation, and generation. It resolves only the bound block in the same transaction, never resends the historical prompt, and stays blocked for missing or conflicting evidence.
-- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.27:** A never-started prompt generation (zero turn events, proven-terminated owner, no other unresolved journal candidate, no terminal evidence, exact identity and hash binding) shall settle the submission `failed` with the `agent_delivery.never_started_settlement` effect, `terminal_sequence=0`, `fully_settled_at` unset, and retire the journal record under a target-bound zero-event authorization (`dispatching` is non-retireable without it). It resolves only bound blocks, never blocks native resume, and keeps late uncertain signals from reopening a block or reverting the session; missing or conflicting evidence or a live owner keeps the uncertain path.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.25:** When explicit native Resume encounters only verified projection delay or monotonic same-owner stream progress, it shall wait up to 10 seconds. The caller deadline can shorten this wait. If current recovery evidence becomes valid, the request shall complete without a second click or replay of the interrupted instruction.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.26:** While that wait runs, desktop and phone shall retain busy recovery controls. Timeout, cancellation, changed ownership, conflicting evidence, live work, or unavailable storage shall preserve the recovery block and existing failure feedback. A late result shall not resolve an unrelated block or alter a successor session.
 
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.27:** When agentctl refuses a durable prompt before writing its journal submission, Kandev shall settle the backend submission as `failed` without creating an `unknown_prompt_outcome` block; a refusal after the journal record may have been written keeps the submission uncertain on the existing recovery path.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.28:** Retry shall settle an `interrupted_unknown` submission as `failed` only when the authenticated retained journal proves the exact submission ID absent, with a durable untruncated descriptor, no other unresolved candidate, and matching recovery block, session, incarnation, and generation. It resolves only the bound block in the same transaction, never resends the historical prompt, and stays blocked for missing or conflicting evidence.
+- **AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.29:** A never-started prompt generation (zero turn events, proven-terminated owner, no other unresolved journal candidate, no terminal evidence, exact identity and hash binding) shall settle the submission `failed` with the `agent_delivery.never_started_settlement` effect, `terminal_sequence=0`, `fully_settled_at` unset, and retire the journal record under a target-bound zero-event authorization (`dispatching` is non-retireable without it). It resolves only bound blocks, never blocks native resume, and keeps late uncertain signals from reopening a block or reverting the session; missing or conflicting evidence or a live owner keeps the uncertain path.
 ### REQ-PLATFORM-DURABLE-AGENT-DELIVERY-007: Compatible rollout
 
 **Intent:** Compatible installations must receive durable delivery without an operator toggle or misleading fallback.
-
-**User story:** As an operator, I want explicit capability negotiation, so that mixed versions do not silently lose durability.
 
 #### Acceptance criteria
 
@@ -152,13 +138,16 @@ This draft defines proposed behavior. It does not claim that the current impleme
 - [Abandoned delivery settlement decision](../../decisions/2026-11-04-abandoned-delivery-settlement.md).
 - [Never-started stall recovery decision](../../decisions/2026-11-04-never-started-stall-recovery.md).
 
+- [Delivery write cost](durable-delivery-write-cost.md).
+
 ## Out of scope
 
 - Exactly-once execution of external tools, MCP requests, or model calls.
 - Survival of an erased executor volume or an unsupported shared filesystem.
 - Keeping agent processes alive after an executor intentionally terminates them.
-- Replacing backend SQL transcripts or the existing browser subscription contract.
+- Replacing backend SQL transcripts or the browser subscription contract.
 
 ## Pending backend retention extension
 
-[Backend delivery retention](backend-agent-delivery-retention.md) defines bounded transport cleanup preserving this contract; its [work package](../../../plans/backend-agent-delivery-retention/plan.md) has Tasks 01-07 implemented and Task 08 acceptance in progress, without changing implementation status.
+[Backend delivery retention](backend-agent-delivery-retention.md) defines bounded transport cleanup while preserving this contract.
+The [work package](../../../plans/backend-agent-delivery-retention/plan.md) records status.

@@ -452,8 +452,8 @@ git commit -m "fix(agentctl): expose and recover durable admission health"
 - [x] **Step 1: Update requirements**
 
 Add acceptance criteria under REQ-006 and REQ-007:
-- `AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.25`: a pre-journal rejection settles `failed` and creates no `unknown_prompt_outcome` block.
-- `AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.26`: retry settles a submission only when the authenticated retained journal proves exact absence, no other unresolved candidate, and exact block/owner binding; otherwise it stays blocked.
+- `AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.27`: a pre-journal rejection settles `failed` and creates no `unknown_prompt_outcome` block.
+- `AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.28`: retry settles a submission only when the authenticated retained journal proves exact absence, no other unresolved candidate, and exact block/owner binding; otherwise it stays blocked.
 - `AC-PLATFORM-DURABLE-AGENT-DELIVERY-007.7`: admission health is reflected in capability/status and blocks the prompt before any durable submission exists.
 Also add a note to REQ-001.4 / REQ-006 that an unjournalable oversized event must not permanently block admission.
 

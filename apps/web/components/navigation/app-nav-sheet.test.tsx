@@ -20,6 +20,7 @@ let resolvedTheme: "light" | "dark" = "light";
 const THEME_TOGGLE_TEST_ID = "mobile-theme-toggle-button";
 const NAV_TRIGGER = "app-nav-trigger";
 const ARIA_LABEL = "aria-label";
+const OFFICE_WORKFLOW_ID = "office-workflow";
 
 const state = {
   ...defaultState,
@@ -153,7 +154,21 @@ vi.mock("@/components/system-health/health-indicator", () => ({
 }));
 
 vi.mock("@/components/integrations/integrations-menu", () => ({
-  MobileIntegrationsSection: () => <div data-testid="mobile-integrations-section" />,
+  MobileIntegrationsSection: ({
+    pluginDestinations = [],
+    collapsible = false,
+  }: {
+    collapsible?: boolean;
+    pluginDestinations?: { id: string; label: string; href: string }[];
+  }) => (
+    <div data-testid="mobile-integrations-section" data-collapsible={String(collapsible)}>
+      {pluginDestinations.map((item) => (
+        <a key={item.id} href={item.href}>
+          {item.label}
+        </a>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock("./mobile-coordinators-section", () => ({
@@ -186,7 +201,9 @@ type SectionsProps = Parameters<typeof AppNavSections>[0];
 function SectionsHost({
   omitSections,
   omitDestinations,
+  phoneNavigation,
 }: {
+  phoneNavigation?: boolean;
   omitSections?: SectionsProps["omitSections"];
   omitDestinations?: SectionsProps["omitDestinations"];
 }) {
@@ -198,6 +215,7 @@ function SectionsHost({
         omitSections={omitSections}
         omitDestinations={omitDestinations}
         controls={controls}
+        phoneNavigation={phoneNavigation}
       />
       {controls.dialogs}
     </>
@@ -243,7 +261,7 @@ describe("AppNavSheet", () => {
   it("offers task views for Kanban, not Office workspaces", () => {
     const host = render(<SectionsHost />);
     expect(screen.getByRole("button", { name: "Task views" })).not.toBeNull();
-    state.workspaces.items[0].office_workflow_id = "office-workflow";
+    state.workspaces.items[0].office_workflow_id = OFFICE_WORKFLOW_ID;
     host.rerender(<SectionsHost />);
     expect(screen.queryByRole("button", { name: "Task views" })).toBeNull();
   });
@@ -297,7 +315,7 @@ describe("AppNavSheet", () => {
 
   it("does not offer Kanban destinations from an Office workspace on a shared page", () => {
     inOffice = true;
-    state.workspaces.items[0].office_workflow_id = "office-workflow";
+    state.workspaces.items[0].office_workflow_id = OFFICE_WORKFLOW_ID;
     render(<AppNavSheet />);
     fireEvent.click(screen.getByTestId(NAV_TRIGGER));
     expect(screen.queryByRole("link", { name: "Tasks" })).toBeNull();
@@ -524,7 +542,7 @@ describe("AppNavSections", () => {
 
   it("omits regular-workspace integrations from an Office layout", () => {
     inOffice = true;
-    state.workspaces.items[0].office_workflow_id = "office-workflow";
+    state.workspaces.items[0].office_workflow_id = OFFICE_WORKFLOW_ID;
 
     render(<SectionsHost />);
 
@@ -633,5 +651,44 @@ describe("AppNavSections theme toggle", () => {
 
     fireEvent.click(toggle);
     expect(mocks.setTheme).toHaveBeenCalledWith("light");
+  });
+});
+
+vi.mock("@/components/navigation/mobile-task-search-action", () => ({
+  MobileTaskSearchAction: () => null,
+}));
+
+describe("integration plugin grouping", () => {
+  afterEach(cleanup);
+  it.each([true, false])(
+    "limits the collapsed disclosure to phoneNavigation=%s",
+    (phoneNavigation) => {
+      render(<SectionsHost phoneNavigation={phoneNavigation} />);
+      expect(
+        screen.getByTestId("mobile-integrations-section").getAttribute("data-collapsible"),
+      ).toBe(String(phoneNavigation));
+    },
+  );
+  // @covers AC-UI-SIDEBAR-CUSTOMIZATION-001.10
+  it.each([false, true])("places an original integration plugin once with Office=%s", (office) => {
+    inOffice = office;
+    state.workspaces.items[0].office_workflow_id = office ? OFFICE_WORKFLOW_ID : null;
+    navRegistrations = [
+      {
+        pluginId: "youtrack",
+        id: "issues",
+        label: "YouTrack",
+        path: "/youtrack",
+        section: "integrations",
+      },
+    ];
+    render(<SectionsHost />);
+    const links = screen.getAllByRole("link", { name: "YouTrack" });
+    expect(links).toHaveLength(1);
+    if (office) {
+      expect(screen.queryByTestId("mobile-integrations-section")).toBeNull();
+    } else {
+      expect(links[0].closest('[data-testid="mobile-integrations-section"]')).not.toBeNull();
+    }
   });
 });

@@ -4,6 +4,8 @@ import type { AppState } from "@/lib/state/store";
 import {
   NOTIFICATION_EVENT_OFFICE_INBOX_ITEM,
   NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED,
+  NOTIFICATION_EVENT_SESSION_FAILED,
+  NOTIFICATION_EVENT_SESSION_PERMISSION_REQUESTED,
   NOTIFICATION_EVENT_SESSION_TURN_FINISHED,
   NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED,
 } from "@/lib/notifications/events";
@@ -23,13 +25,17 @@ export type SemanticEvent =
   | typeof NOTIFICATION_EVENT_SESSION_CLARIFICATION_REQUESTED
   | typeof NOTIFICATION_EVENT_SESSION_TURN_FINISHED
   | typeof NOTIFICATION_EVENT_OFFICE_INBOX_ITEM
-  | typeof NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED;
+  | typeof NOTIFICATION_EVENT_TASK_MANUAL_STEP_ENTERED
+  | typeof NOTIFICATION_EVENT_SESSION_PERMISSION_REQUESTED
+  | typeof NOTIFICATION_EVENT_SESSION_FAILED;
 
 export type SemanticNotificationMessage =
   | BackendMessageMap["session.clarification_requested"]
   | BackendMessageMap["session.turn_finished"]
   | BackendMessageMap["office.inbox_item"]
-  | BackendMessageMap["task.manual_step_entered"];
+  | BackendMessageMap["task.manual_step_entered"]
+  | BackendMessageMap["session.permission_requested"]
+  | BackendMessageMap["session.failed"];
 
 export function makeStore(overrides: Partial<AppState> = {}) {
   const state = {

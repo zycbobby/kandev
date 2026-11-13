@@ -23,6 +23,7 @@ import { Button } from "@kandev/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@kandev/ui/tooltip";
 import { IconCode, IconMessagePlus } from "@tabler/icons-react";
 import {
+  MarkdownFileLinkContext,
   MarkdownTaskContext,
   rehypePlugins,
   remarkPlugins,
@@ -387,28 +388,53 @@ function MarkdownPreviewCommentOverlays({
   );
 }
 
+/**
+ * Absolute directory of the previewed file, used as the base for relative
+ * image and file links. The file path is workspace-relative unless it already
+ * carries its own root.
+ */
+function markdownPreviewBasePath(path: string, worktreePath?: string): string | null {
+  const normalizedPath = path.replace(/\\/g, "/");
+  let absolutePath = normalizedPath;
+  if (!/^\//u.test(normalizedPath) && !/^[A-Za-z]:\//u.test(normalizedPath)) {
+    if (!worktreePath) return null;
+    absolutePath = `${worktreePath.replace(/\\/g, "/").replace(/\/+$/u, "")}/${normalizedPath}`;
+  }
+  if (!absolutePath) return null;
+  const slash = absolutePath.lastIndexOf("/");
+  return slash <= 0 ? absolutePath : absolutePath.slice(0, slash);
+}
+
 export function MarkdownPreviewRenderer({
   content,
   taskId,
+  sessionId,
+  worktreePath,
+  relativeBasePath,
 }: {
   content: string;
   taskId?: string | null;
+  sessionId?: string | null;
+  worktreePath?: string | null;
+  relativeBasePath?: string | null;
 }) {
   return (
-    <MarkdownTaskContext.Provider value={taskId ?? null}>
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={[
-          rehypeRaw,
-          [rehypeSanitize, markdownMathSanitizeSchema],
-          rehypeMathSource,
-          ...rehypePlugins,
-        ]}
-        components={markdownPreviewComponents}
-      >
-        {content}
-      </ReactMarkdown>
-    </MarkdownTaskContext.Provider>
+    <MarkdownFileLinkContext.Provider value={{ sessionId, worktreePath, relativeBasePath }}>
+      <MarkdownTaskContext.Provider value={taskId ?? null}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={[
+            rehypeRaw,
+            [rehypeSanitize, markdownMathSanitizeSchema],
+            rehypeMathSource,
+            ...rehypePlugins,
+          ]}
+          components={markdownPreviewComponents}
+        >
+          {content}
+        </ReactMarkdown>
+      </MarkdownTaskContext.Provider>
+    </MarkdownFileLinkContext.Provider>
   );
 }
 
@@ -430,6 +456,10 @@ export const MarkdownPreviewContent = memo(function MarkdownPreviewContent({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [overlayRoot, setOverlayRoot] = useState<HTMLElement | null>(null);
   const commentsEnabled = enableComments && !!sessionId;
+  const relativeBasePath = useMemo(
+    () => markdownPreviewBasePath(path, worktreePath),
+    [path, worktreePath],
+  );
   const commentState = useMarkdownPreviewComments({
     path,
     content,
@@ -484,7 +514,13 @@ export const MarkdownPreviewContent = memo(function MarkdownPreviewContent({
       <div ref={scrollRef} className="flex-1 overflow-auto p-6">
         <div ref={rootRef} className="markdown-body max-w-3xl" tabIndex={commentsEnabled ? 0 : -1}>
           <PreviewCommentContext.Provider value={previewCommentContextValue}>
-            <MarkdownPreviewRenderer content={content} taskId={taskId} />
+            <MarkdownPreviewRenderer
+              content={content}
+              taskId={taskId}
+              sessionId={sessionId}
+              worktreePath={worktreePath}
+              relativeBasePath={relativeBasePath}
+            />
           </PreviewCommentContext.Provider>
         </div>
       </div>

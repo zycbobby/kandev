@@ -24,6 +24,20 @@ type StorageCapability struct {
 	AdmissionBlocked bool   `json:"admission_blocked,omitempty"`
 	Path             string `json:"path,omitempty"`
 	Reason           string `json:"reason,omitempty"`
+	EventBytes       int64  `json:"event_bytes,omitempty"`
+	SubmissionBytes  int64  `json:"submission_bytes,omitempty"`
+	ReplayBytes      int64  `json:"replay_bytes,omitempty"`
+}
+
+// WithLimits advertises the optional event, submission, and replay budgets.
+// The fields grant no ownership or dispatch authority; older peers omit them.
+func (c StorageCapability) WithLimits(j *Journal) StorageCapability {
+	if j != nil {
+		c.EventBytes = j.MaxEventBytes()
+		c.SubmissionBytes = j.MaxSubmissionBytes()
+		c.ReplayBytes = j.MaxReplayBytes()
+	}
+	return c
 }
 
 // Location identifies the stable owner-scoped journal path. The path is

@@ -53,6 +53,11 @@ type NotificationOccurrenceDTO struct {
 }
 
 func FromProvider(provider *models.Provider, events []string) NotificationProviderDTO {
+	// A provider with no enabled subscriptions has a nil event slice, which
+	// serializes as JSON null and violates the []string contract clients read.
+	if events == nil {
+		events = []string{}
+	}
 	return NotificationProviderDTO{
 		ID:        provider.ID,
 		Name:      provider.Name,

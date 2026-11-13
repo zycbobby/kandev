@@ -2,7 +2,12 @@ import { isTerminalToolCallStatus } from "@/lib/utils/tool-call-status";
 import { normalizeToolCallStatus } from "./tool-status";
 import type { SubagentTaskPayload, ToolCallMetadata } from "@/components/task/chat/types";
 
-const LIVE_SUBAGENT_PAYLOAD_STATUSES = new Set(["pendingInit", "started", "async_launched"]);
+const LIVE_SUBAGENT_PAYLOAD_STATUSES = new Set([
+  "pendingInit",
+  "started",
+  "async_launched",
+  "running",
+]);
 
 // Mirrors backend subagentStatusTerminal: Codex session statuses that mean the
 // nested task has already settled, even while the parent turn is still active.

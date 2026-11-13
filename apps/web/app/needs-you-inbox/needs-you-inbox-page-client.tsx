@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { TabsContent } from "@kandev/ui/tabs";
 import { PageShell } from "@/components/page-shell";
@@ -81,11 +81,13 @@ function NeedsYouInboxList({
   hasMore,
   hiddenCount,
   listRevision,
+  allocationRef,
 }: {
   rows: readonly NeedsYouInboxRowType[];
   hasMore: boolean;
   hiddenCount: number;
   listRevision: number;
+  allocationRef: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useTranslation();
   return (
@@ -95,7 +97,11 @@ function NeedsYouInboxList({
           row.kind === "waiting" ? (
             <NeedsYouWaitingRow key={row.id} row={row} />
           ) : (
-            <NeedsYouInboxRowWithLateAnswer key={row.pending_id} bundle={row} />
+            <NeedsYouInboxRowWithLateAnswer
+              key={row.pending_id}
+              bundle={row}
+              allocationRef={allocationRef}
+            />
           ),
         )}
       </div>
@@ -111,11 +117,18 @@ function NeedsYouInboxList({
   );
 }
 
-function NeedsYouInboxRowWithLateAnswer({ bundle }: { bundle: ClarificationInboxBundle }) {
+function NeedsYouInboxRowWithLateAnswer({
+  bundle,
+  allocationRef,
+}: {
+  bundle: ClarificationInboxBundle;
+  allocationRef: RefObject<HTMLDivElement | null>;
+}) {
   const lateAnswer = useLateClarificationMessage(bundle.messages[0]);
   return (
     <NeedsYouInboxRow
       bundle={bundle}
+      allocationRef={allocationRef}
       onLateAnswer={lateAnswer.send}
       lateAnswerState={lateAnswer.state}
     />
@@ -123,10 +136,17 @@ function NeedsYouInboxRowWithLateAnswer({ bundle }: { bundle: ClarificationInbox
 }
 
 // "Needs you" is the tab strip's default-selected tab, and this content,
+// "Needs you" is the tab strip's default-selected tab, and this content,
 // count and behavior are unchanged by the strip's presence. Remote instance
 // sections render after the local content in every local view mode: one
 // instance's failure or emptiness never hides the others' rows.
-function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
+function NeedsYouInboxTabContent({
+  retry,
+  allocationRef,
+}: {
+  retry: () => void;
+  allocationRef: RefObject<HTMLDivElement | null>;
+}) {
   const { t } = useTranslation();
   const status = useAppStore(selectNeedsYouInboxStatus);
   const rows = useAppStore(selectNeedsYouInboxRows);
@@ -170,6 +190,7 @@ function NeedsYouInboxTabContent({ retry }: { retry: () => void }) {
           hasMore={hasMore}
           hiddenCount={hiddenCount}
           listRevision={listRevision}
+          allocationRef={allocationRef}
         />
       )}
       {remoteInstances.map((instance) => (
@@ -240,6 +261,7 @@ function InboxHistoryTabContent({ controller }: { controller: InboxHistoryContro
 // carries the phone nav trigger (design-03#D4).
 export function NeedsYouInboxPageClient() {
   const { t } = useTranslation();
+  const contentRef = useRef<HTMLDivElement>(null);
   const requestRetry = useAppStore((s) => s.requestNeedsYouInboxRetry);
   // The tab strip's Needs-you count and truncation flag are the composed
   // cross-instance values: local page plus every landed remote instance page.
@@ -272,7 +294,7 @@ export function NeedsYouInboxPageClient() {
   );
 
   return (
-    <PageShell title={t("sidebar:inbox")} contentClassName="space-y-4 p-6">
+    <PageShell title={t("sidebar:inbox")} contentClassName="space-y-4 p-6" contentRef={contentRef}>
       <InboxTabStrip
         selectedTab={selectedTab}
         onSelectTab={selectTab}
@@ -283,7 +305,7 @@ export function NeedsYouInboxPageClient() {
         historyCount={historyCount}
       >
         <TabsContent value="needs-you">
-          <NeedsYouInboxTabContent retry={retry} />
+          <NeedsYouInboxTabContent retry={retry} allocationRef={contentRef} />
         </TabsContent>
         <TabsContent value="failed">
           <FailedInboxTabPanel />

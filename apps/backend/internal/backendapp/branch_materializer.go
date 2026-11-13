@@ -10,6 +10,7 @@ import (
 
 	"github.com/kandev/kandev/internal/agent/runtime/lifecycle"
 	"github.com/kandev/kandev/internal/common/logger"
+	"github.com/kandev/kandev/internal/orchestrator"
 	"github.com/kandev/kandev/internal/task/models"
 	taskservice "github.com/kandev/kandev/internal/task/service"
 	"github.com/kandev/kandev/internal/worktree"
@@ -24,6 +25,7 @@ type branchMaterializerRepo interface {
 	ListTaskRepositories(ctx context.Context, taskID string) ([]*models.TaskRepository, error)
 	GetRepository(ctx context.Context, id string) (*models.Repository, error)
 	ListTaskSessions(ctx context.Context, taskID string) ([]*models.TaskSession, error)
+	ListTaskEnvironmentRepos(ctx context.Context, envID string) ([]*models.TaskEnvironmentRepo, error)
 	GetTaskEnvironment(ctx context.Context, id string) (*models.TaskEnvironment, error)
 	GetTaskEnvironmentByTaskID(ctx context.Context, taskID string) (*models.TaskEnvironment, error)
 	UpdateTaskEnvironment(ctx context.Context, env *models.TaskEnvironment) error
@@ -49,6 +51,7 @@ type agentctlRescanner interface {
 // or the task has never launched), it no-ops and lets the standard
 // multi-repo prepare path materialize on the next launch.
 type branchMaterializer struct {
+	hostCloner  orchestrator.RepositoryHostCloner
 	repo        branchMaterializerRepo
 	worktreeMgr *worktree.Manager
 	rescanner   agentctlRescanner
@@ -108,7 +111,7 @@ func (b *branchMaterializer) materializeUnfinalized(
 	if b == nil || b.worktreeMgr == nil {
 		return nil, nil
 	}
-	req, env, session, slug, ok, err := b.prepareMaterializeRequest(ctx, taskID, taskRepositoryID)
+	req, env, session, slug, ok, err := b.prepareMaterializeRequest(ctx, taskID, taskRepositoryID, expected)
 	if err != nil {
 		return nil, err
 	}
@@ -141,21 +144,14 @@ func (b *branchMaterializer) finalize(materialization *branchMaterialization, ct
 
 // prepareMaterializeRequest builds the worktree.CreateRequest plus the
 // (env, session, slug) context the finalize step needs. Returns ok=false
-// for the legitimate "skip materialize" cases (no local path, no active
+// for the legitimate "skip materialize" cases (no active
 // session, env not provisioned); ok=true means CreateRequest is ready.
 func (b *branchMaterializer) prepareMaterializeRequest(
-	ctx context.Context, taskID, taskRepositoryID string,
+	ctx context.Context, taskID, taskRepositoryID string, expected *taskservice.BranchMaterializationTarget,
 ) (worktree.CreateRequest, *models.TaskEnvironment, *models.TaskSession, string, bool, error) {
 	task, tr, repo, err := b.loadContext(ctx, taskID, taskRepositoryID)
 	if err != nil {
 		return worktree.CreateRequest{}, nil, nil, "", false, err
-	}
-	if repo.LocalPath == "" {
-		// Provider-backed repos that haven't been cloned yet need the
-		// orchestrator's repoCloner path. Defer to next launch.
-		b.logger.Info("skipping materialize: repository has no local path",
-			zap.String("repository_id", repo.ID), zap.String("task_id", taskID))
-		return worktree.CreateRequest{}, nil, nil, "", false, nil
 	}
 	session, err := b.pickActiveSession(ctx, taskID)
 	if err != nil {
@@ -173,26 +169,37 @@ func (b *branchMaterializer) prepareMaterializeRequest(
 	if env == nil {
 		return worktree.CreateRequest{}, nil, nil, "", false, nil
 	}
+	if err := b.verifyBranchCloneTarget(ctx, taskID, session, env, expected); err != nil {
+		return worktree.CreateRequest{}, nil, nil, "", false, err
+	}
+	if err := b.ensureHostRepositoryPath(ctx, taskID, session.ID, repo); err != nil {
+		return worktree.CreateRequest{}, nil, nil, "", false, err
+	}
+	if err := b.verifyBranchCloneTarget(ctx, taskID, session, env, expected); err != nil {
+		return worktree.CreateRequest{}, nil, nil, "", false, err
+	}
 	slug := deriveBranchSlugForRow(tr)
 	req := worktree.CreateRequest{
-		TaskID:                 taskID,
-		SessionID:              session.ID,
-		TaskEnvironmentID:      env.ID,
-		TaskTitle:              task.Title,
-		RepositoryID:           repo.ID,
-		RepositoryPath:         repo.LocalPath,
-		BaseBranch:             tr.BaseBranch,
-		IntegrationRef:         taskRepositoryIntegrationRef(tr),
-		FallbackBaseBranch:     repo.DefaultBranch,
-		CheckoutBranch:         tr.CheckoutBranch,
-		WorktreeBranchPrefix:   repo.WorktreeBranchPrefix,
-		WorktreeBranchTemplate: taskRepositoryBranchTemplate(repo, tr),
-		WorktreeBranchTicket:   worktree.TicketForBranchName(task.Identifier, task.Metadata),
-		PullBeforeWorktree:     repo.PullBeforeWorktree,
-		TaskDirName:            env.TaskDirName,
-		WorkspaceRelativePath:  tr.WorkspaceRelativePath,
-		RepoName:               repo.Name,
-		BranchSlug:             slug,
+		TaskID:                   taskID,
+		SessionID:                session.ID,
+		TaskEnvironmentID:        env.ID,
+		TaskTitle:                task.Title,
+		RepositoryID:             repo.ID,
+		RepositoryPath:           repo.LocalPath,
+		BaseBranch:               tr.BaseBranch,
+		BaseBranchFallbackPolicy: models.ResolveAttachmentBaseBranchFallbackPolicy(tr.Metadata, tr.BaseBranch),
+		IntegrationRef:           taskRepositoryIntegrationRef(tr),
+		FallbackBaseBranch:       repo.DefaultBranch,
+		CheckoutBranch:           tr.CheckoutBranch,
+		WorktreeBranchPrefix:     repo.WorktreeBranchPrefix,
+		WorktreeBranchTemplate:   taskRepositoryBranchTemplate(repo, tr),
+		WorktreeBranchTicket:     worktree.TicketForBranchName(task.Identifier, task.Metadata),
+		PullBeforeWorktree:       repo.PullBeforeWorktree,
+		TaskDirName:              env.TaskDirName,
+		WorkspaceRelativePath:    tr.WorkspaceRelativePath,
+		Position:                 tr.Position,
+		RepoName:                 repo.Name,
+		BranchSlug:               slug,
 	}
 	return req, env, session, slug, true, nil
 }
@@ -314,7 +321,7 @@ func (b *branchMaterializer) finalizeMaterialize(
 	repositoryID, slug, taskID string,
 ) string {
 	taskRoot := b.promoteWorkspacePathIfNeeded(ctx, env, wt.Path)
-	b.notifyAgentctlRescan(ctx, session, taskRoot)
+	b.notifyAgentctlRescan(ctx, session, taskRoot, wt.Path)
 	b.notifyMaterialized(&branchMaterialization{environment: env, session: session, worktree: wt, repositoryID: repositoryID, slug: slug, taskID: taskID}, taskRoot, ctx)
 	return taskRoot
 }
@@ -391,13 +398,33 @@ func (b *branchMaterializer) promoteWorkspacePathIfNeeded(ctx context.Context, e
 // No-op when no rescanner is wired (test stubs, agentless test envs) or
 // when the session has no active execution (agent stopped). The next
 // session launch picks up the new layout via prepareMultiRepo regardless.
-func (b *branchMaterializer) notifyAgentctlRescan(ctx context.Context, session *models.TaskSession, taskRoot string) {
+func (b *branchMaterializer) notifyAgentctlRescan(ctx context.Context, session *models.TaskSession, taskRoot, newWorktreePath string) {
 	if b.rescanner == nil {
 		return
 	}
+	roots := []string{newWorktreePath}
+	excluded := []string(nil)
+	if session != nil && session.TaskEnvironmentID != "" {
+		if rows, err := b.repo.ListTaskEnvironmentRepos(ctx, session.TaskEnvironmentID); err == nil {
+			excluded = detachedTaskEnvironmentRepoPaths(rows)
+			for _, row := range rows {
+				if row != nil && row.Status == models.TaskEnvironmentRepoStatusActive && row.WorktreePath != "" {
+					roots = append(roots, row.WorktreePath)
+				}
+			}
+		}
+	}
 	rescanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := b.rescanner.RescanWorkspaceForSession(rescanCtx, session.ID, taskRoot); err != nil {
+	var err error
+	if excluder, ok := b.rescanner.(interface {
+		RescanWorkspaceForSessionWithExclusions(context.Context, string, string, []string, []string) error
+	}); ok {
+		err = excluder.RescanWorkspaceForSessionWithExclusions(rescanCtx, session.ID, taskRoot, roots, excluded)
+	} else {
+		err = b.rescanner.RescanWorkspaceForSession(rescanCtx, session.ID, taskRoot, roots)
+	}
+	if err != nil {
 		b.logger.Warn("agentctl rescan failed; new worktree will appear after next session restart",
 			zap.String("session_id", session.ID),
 			zap.String("task_root", taskRoot),

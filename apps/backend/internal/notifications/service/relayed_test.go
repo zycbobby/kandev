@@ -32,7 +32,7 @@ func relayedService(t *testing.T, events ...string) (*Service, *captureProvider,
 	service := NewService(repo, notificationTestTaskGetter{
 		task:      &taskmodels.Task{Title: "Local task", WorkspaceID: "workspace-1"},
 		workspace: &taskmodels.Workspace{ID: "workspace-1", OwnerID: "someone-else"},
-	}, nil, log, nil)
+	}, nil, log, nil, false)
 	capture := &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = capture
 	return service, capture, repo

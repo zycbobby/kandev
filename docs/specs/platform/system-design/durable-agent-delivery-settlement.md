@@ -25,9 +25,9 @@ their reconstruction or terminal settlement semantics.
 
 | Requirement | Section |
 | --- | --- |
-| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.25 | Pre-intake settlement |
-| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.26 | Pre-intake settlement |
-| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.27 | Never-started stall settlement |
+| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.27 | Pre-intake settlement |
+| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.28 | Pre-intake settlement |
+| AC-PLATFORM-DURABLE-AGENT-DELIVERY-006.29 | Never-started stall settlement |
 | AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-001.1, 001.2 | Retry succession |
 | AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-002.1, 002.2 | Abandoned journal settlement |
 | AC-PLATFORM-DURABLE-DELIVERY-ABANDONED-003.1, 003.2 | Abandoned journal settlement |

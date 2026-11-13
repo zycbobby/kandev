@@ -23,6 +23,7 @@ import (
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
 	"github.com/kandev/kandev/internal/common/logger"
 	"github.com/kandev/kandev/internal/common/processidentity"
+	p "github.com/kandev/kandev/internal/mcp/profile"
 	"github.com/kandev/kandev/pkg/agent"
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 	ws "github.com/kandev/kandev/pkg/websocket"
@@ -54,12 +55,14 @@ type mockAgentServer struct {
 	mu                   sync.Mutex
 	actionLog            []string // ordered log of actions received
 	httpActionLog        []string
+	configuredAgents     []mockAgentConfigureRequest
 	rejectStreamAttempts int
 	agentStatus          string
 	instanceID           string
 	taskSessionID        string
 	nativeSessionID      string
 	deliveryStatus       *agentctl.DeliveryStatus
+	processGeneration    uint64
 	upgrader             websocket.Upgrader
 	handler              func(msg ws.Message) *ws.Message
 	afterResponse        func(msg ws.Message)
@@ -67,6 +70,15 @@ type mockAgentServer struct {
 	materialized         []materializedUpload
 	failMaterialize      bool
 	materializedName     string
+	promptAttachments    [][]v1.MessageAttachment
+	builtinBinding       *p.Context
+	builtinRequests      []string
+}
+
+type mockAgentConfigureRequest struct {
+	Command   string            `json:"command"`
+	AgentArgs []string          `json:"agent_args"`
+	Env       map[string]string `json:"env"`
 }
 
 // materializedUpload records one /api/v1/attachments/materialize request so a
@@ -98,9 +110,20 @@ func newMockAgentServer(t *testing.T) *mockAgentServer {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"success":true}`)
 	})
-	mux.HandleFunc("/api/v1/agent/configure", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/v1/agent/configure", func(w http.ResponseWriter, r *http.Request) {
+		var configured mockAgentConfigureRequest
+		_ = json.NewDecoder(r.Body).Decode(&configured)
 		m.mu.Lock()
 		m.httpActionLog = append(m.httpActionLog, "configure")
+		configured.AgentArgs = append([]string(nil), configured.AgentArgs...)
+		if configured.Env != nil {
+			env := make(map[string]string, len(configured.Env))
+			for key, value := range configured.Env {
+				env[key] = value
+			}
+			configured.Env = env
+		}
+		m.configuredAgents = append(m.configuredAgents, configured)
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"success":true}`)
@@ -108,9 +131,10 @@ func newMockAgentServer(t *testing.T) *mockAgentServer {
 	mux.HandleFunc("/api/v1/start", func(w http.ResponseWriter, _ *http.Request) {
 		m.mu.Lock()
 		m.httpActionLog = append(m.httpActionLog, "start")
+		generation := m.processGeneration
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"success":true,"command":"cursor-agent acp"}`)
+		_, _ = fmt.Fprintf(w, `{"success":true,"command":"cursor-agent acp","process_generation":%d}`, generation)
 	})
 	mux.HandleFunc("/api/v1/status", func(w http.ResponseWriter, _ *http.Request) {
 		m.mu.Lock()
@@ -154,6 +178,18 @@ func newMockAgentServer(t *testing.T) *mockAgentServer {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(status)
+	})
+	mux.HandleFunc("/api/v1/mcp/builtin-binding", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		binding := m.builtinBinding
+		m.builtinRequests = append(m.builtinRequests, r.Method)
+		m.mu.Unlock()
+		if binding == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(binding)
 	})
 
 	// Agent stream WebSocket endpoint
@@ -288,6 +324,12 @@ func (m *mockAgentServer) materializedUploads() []materializedUpload {
 }
 
 // setFailMaterialize makes the materialization endpoint reject every upload.
+func (m *mockAgentServer) promptAttachmentSets() [][]v1.MessageAttachment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([][]v1.MessageAttachment(nil), m.promptAttachments...)
+}
+
 func (m *mockAgentServer) setFailMaterialize(fail bool) {
 	m.mu.Lock()
 	m.failMaterialize = fail
@@ -332,6 +374,13 @@ func (m *mockAgentServer) defaultHandler(msg ws.Message) *ws.Message {
 		})
 		return resp
 	case "agent.prompt":
+		var request struct {
+			Attachments []v1.MessageAttachment `json:"attachments,omitempty"`
+		}
+		_ = msg.ParsePayload(&request)
+		m.mu.Lock()
+		m.promptAttachments = append(m.promptAttachments, request.Attachments)
+		m.mu.Unlock()
 		resp, _ := ws.NewResponse(msg.ID, msg.Action, map[string]interface{}{
 			"success": true,
 		})
@@ -370,6 +419,26 @@ func (m *mockAgentServer) getHTTPActionLog() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.httpActionLog...)
+}
+
+func (m *mockAgentServer) getConfiguredAgents() []mockAgentConfigureRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	configured := make([]mockAgentConfigureRequest, len(m.configuredAgents))
+	for index, request := range m.configuredAgents {
+		configured[index] = mockAgentConfigureRequest{
+			Command:   request.Command,
+			AgentArgs: append([]string(nil), request.AgentArgs...),
+		}
+		if request.Env != nil {
+			env := make(map[string]string, len(request.Env))
+			for key, value := range request.Env {
+				env[key] = value
+			}
+			configured[index].Env = env
+		}
+	}
+	return configured
 }
 
 func (m *mockAgentServer) Close() {
@@ -2929,10 +2998,11 @@ func TestWaitForPromptDone_PublishesSingleStall(t *testing.T) {
 		sm := NewSessionManager(newSessionTestLogger(), make(chan struct{}))
 		sm.eventPublisher = NewEventPublisher(eventBus, newSessionTestLogger())
 		execution := &AgentExecution{
-			ID:           "test-exec",
-			TaskID:       "test-task",
-			SessionID:    "test-session",
-			promptDoneCh: make(chan PromptCompletionSignal, 1),
+			promptGeneration: 7,
+			ID:               "test-exec",
+			TaskID:           "test-task",
+			SessionID:        "test-session",
+			promptDoneCh:     make(chan PromptCompletionSignal, 1),
 		}
 		execution.lastActivityAt = time.Now()
 
@@ -2963,33 +3033,6 @@ func TestWaitForPromptDone_PublishesSingleStall(t *testing.T) {
 	})
 }
 
-func TestMarkPromptDispatchedArmsActivityAfterDispatch(t *testing.T) {
-	store := NewExecutionStore()
-	execution := &AgentExecution{
-		ID:                         "test-exec",
-		SessionID:                  "test-session",
-		promptGeneration:           3,
-		agentEventSincePrompt:      true,
-		promptActivityEpoch:        2,
-		promptCompletionGeneration: 0,
-	}
-	if err := store.Add(execution); err != nil {
-		t.Fatalf("add execution: %v", err)
-	}
-	sm := NewSessionManager(newSessionTestLogger(), make(chan struct{}))
-	sm.executionStore = store
-
-	sm.markPromptDispatched(execution, 3)
-
-	_, agentEventSeen, epoch := execution.promptActivitySnapshot()
-	if agentEventSeen {
-		t.Fatal("prompt dispatch left the previous activity marker armed")
-	}
-	if epoch != 3 {
-		t.Fatalf("activity epoch = %d, want 3 after dispatch", epoch)
-	}
-}
-
 // TestWaitForPromptDone_StallPayloadDiscriminatesNeverStarted verifies that
 // agentEventSincePrompt (armed false on dispatch, set true only by a genuine
 // agent event) is threaded into the published stall payload's NeverStarted
@@ -3002,10 +3045,11 @@ func TestWaitForPromptDone_StallPayloadDiscriminatesNeverStarted(t *testing.T) {
 		sm := NewSessionManager(newSessionTestLogger(), make(chan struct{}))
 		sm.eventPublisher = NewEventPublisher(eventBus, newSessionTestLogger())
 		execution := &AgentExecution{
-			ID:           "test-exec",
-			TaskID:       "test-task",
-			SessionID:    "test-session",
-			promptDoneCh: make(chan PromptCompletionSignal, 1),
+			promptGeneration: 7,
+			ID:               "test-exec",
+			TaskID:           "test-task",
+			SessionID:        "test-session",
+			promptDoneCh:     make(chan PromptCompletionSignal, 1),
 		}
 		// Mirrors sendPrompt's dispatch bump: activity timestamp moves, but the
 		// discriminator is armed false because no agent event has arrived yet.
@@ -3041,11 +3085,12 @@ func TestWaitForPromptDone_StallPayloadReportsRunningAfterAgentEvent(t *testing.
 		sm := NewSessionManager(newSessionTestLogger(), make(chan struct{}))
 		sm.eventPublisher = NewEventPublisher(eventBus, newSessionTestLogger())
 		execution := &AgentExecution{
-			ID:           "test-exec",
-			TaskID:       "test-task",
-			SessionID:    "test-session",
-			promptDoneCh: make(chan PromptCompletionSignal, 1),
-			Status:       v1.AgentStatusRunning,
+			promptGeneration: 7,
+			ID:               "test-exec",
+			TaskID:           "test-task",
+			SessionID:        "test-session",
+			promptDoneCh:     make(chan PromptCompletionSignal, 1),
+			Status:           v1.AgentStatusRunning,
 		}
 		execution.lastActivityAt = time.Now()
 		execution.agentEventSincePrompt = false
@@ -3125,7 +3170,7 @@ func TestPublishAgentStalledCarriesDeliveryIdentity(t *testing.T) {
 	execution.agentctl = lease.NewBoundInstanceClient(1236, newSessionTestLogger())
 
 	publisher.PublishAgentStalled(
-		context.Background(), execution, 3, time.Now(), 5*time.Minute, 2, true)
+		context.Background(), execution, 3, time.Now(), 5*time.Minute, 2, true, false)
 
 	payload := lastStalledPayload(t, eventBus)
 	if payload.DeliverySubmissionID != "prompt:initial:session:1" {
@@ -3150,7 +3195,7 @@ func TestPublishAgentStalledCarriesDeliveryIdentity(t *testing.T) {
 		SessionID: "test-session",
 	}
 	publisher.PublishAgentStalled(
-		context.Background(), legacy, 1, time.Now(), 5*time.Minute, 0, false)
+		context.Background(), legacy, 1, time.Now(), 5*time.Minute, 0, false, false)
 
 	legacyPayload := lastStalledPayload(t, eventBus)
 	if legacyPayload.AgentExecutionID != "legacy-exec" {

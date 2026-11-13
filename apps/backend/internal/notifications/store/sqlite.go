@@ -119,7 +119,7 @@ func (r *sqliteRepository) initSchema(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_notification_occurrences_user_created ON notification_occurrences(user_id, created_at);
 	`
 
-	if _, err := r.db.Exec(schema); err != nil {
+	if _, err := r.db.Exec(schema + webPushSchema); err != nil {
 		return err
 	}
 	if err := r.migrateDeliveries(); err != nil {

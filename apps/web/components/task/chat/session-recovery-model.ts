@@ -8,9 +8,8 @@ import type { TaskLaunchErrorContextValue } from "../task-launch-error-context";
 import {
   buildRecoveryCardModel,
   automaticRecoveryCauses,
-  causeLabel,
-  operationLabel,
 } from "./session-bootstrap-recovery-model";
+import { causeLabel, operationLabel } from "./session-bootstrap-cause-labels";
 import {
   isSessionRecoveryBusy,
   matchingAutomaticRecovery,
@@ -20,9 +19,12 @@ import {
   addHistoryContinuationChoice,
   sessionRecoveryAction,
 } from "./messages/action-message-recovery";
+import { isProcessExitCause } from "./session-process-exit-recovery";
 import { interruptionRecoveryKey } from "./messages/interruption-recovery-feedback";
 import { managedRuntimeStartupCopy } from "./managed-runtime-startup-copy";
 import { useOptionalAppStore } from "@/components/state-provider";
+import { storageCauseFromError } from "@/lib/session-delivery-storage";
+import { storageFailureCopy, storageRecoveryDetailFields } from "./session-storage-recovery";
 
 type RecoveryCopy = { title: string; summary: string; showSummary: boolean };
 
@@ -63,6 +65,8 @@ export function recoveryCopy(
   model: ActiveSessionRecovery,
   t: ReturnType<typeof useTranslation>["t"],
 ) {
+  const storageCause = storageCauseFromError(model.error);
+  if (storageCause) return storageFailureCopy(storageCause, model.error, t);
   if (model.kind === "delivery_history_gap")
     return {
       title: t("task:deliveryHistoryGapTitle"),
@@ -83,8 +87,8 @@ export function recoveryCopy(
       }),
       showSummary: true,
     };
-  const managedRuntimeCopy = managedRuntimeFailureCopy(model, t);
-  if (managedRuntimeCopy) return managedRuntimeCopy;
+  const earlyCopy = requestLocalOrManagedRuntimeCopy(model, t);
+  if (earlyCopy) return earlyCopy;
   if (model.kind === "provider_quota_limited") return providerQuotaRecoveryCopy(model, t);
   if (model.kind === "managed_clone_relocation_required")
     return {
@@ -99,6 +103,20 @@ export function recoveryCopy(
     summary: safe ? summary : t("task:agentHasStopped"),
     showSummary: true,
   };
+}
+
+function requestLocalOrManagedRuntimeCopy(
+  model: ActiveSessionRecovery,
+  t: ReturnType<typeof useTranslation>["t"],
+): RecoveryCopy | null {
+  if (model.kind === "session_restore_required" && model.requestLocal) {
+    return {
+      title: t("task:sessionRecoveryFailed"),
+      summary: t("task:sessionRecoveryFailedDetail"),
+      showSummary: true,
+    };
+  }
+  return managedRuntimeFailureCopy(model, t);
 }
 
 function providerQuotaRecoveryCopy(
@@ -212,6 +230,7 @@ export function useRecoveryChoices({
     historyContinuationAvailable(actions, managedCloneRelocation),
     () => void actions.handleContinueFromHistory(),
     t("task:continueFromHistory"),
+    { disclosure: t("task:continueFromHistoryDisclosure") },
   );
   return actions.guardDetails ? choices.filter((choice) => choice.kind !== "restore") : choices;
 }
@@ -311,7 +330,10 @@ export function useRecoveryPresentation(
   const { busy, busyAction } = recoveryPresentationBusy(model, automatic, actions);
   const causes = recoveryPresentationCauses(model, bootstrap, automatic, t);
   const details = recoveryPresentationDetails(model, bootstrap, causes, actions, t);
-  const detailFields = bootstrap?.detailFields ?? [];
+  const detailFields = [
+    ...(bootstrap?.detailFields ?? []),
+    ...storageRecoveryDetailFields(storageCauseFromError(model.error), t),
+  ];
   const failure = recoveryFailureCopy(actions, t);
   return {
     copy: withAutomaticNotice(copy, automatic, actions),
@@ -399,6 +421,7 @@ function withAutomaticNotice(
   return notice &&
     !actions.recoveryError &&
     !copy.hasTypedSelectionCause &&
+    (!copy.hasTypedProcessCause || noticeKind === "inspection_busy") &&
     (!copy.hasTypedCleanupCause || noticeKind === "inspection_busy")
     ? { ...copy, summary: notice }
     : copy;
@@ -445,10 +468,28 @@ function recoveryPresentationCopy(
       ...recoveryCopy({ ...model, kind: "managed_clone_relocation_required" }, t),
       hasTypedSelectionCause: false,
       hasTypedCleanupCause: false,
+      hasTypedProcessCause: false,
+      prerequisite: null,
       noPromptSent: false,
       freshStartWarning: false,
       workspaceStatus: null,
     };
+  const managedRuntimeProcess =
+    bootstrap?.primaryCause?.code === "process_exited" &&
+    isManagedRuntimeRecovery(model) &&
+    bootstrap.primaryCause.reason !== "mise_config_untrusted";
+  if (managedRuntimeProcess) {
+    return {
+      ...recoveryCopy(model, t),
+      hasTypedSelectionCause: false,
+      hasTypedCleanupCause: false,
+      hasTypedProcessCause: false,
+      prerequisite: null,
+      noPromptSent: false,
+      freshStartWarning: false,
+      workspaceStatus: null,
+    };
+  }
   if (bootstrap)
     return {
       title: t(bootstrap.titleKey),
@@ -456,6 +497,8 @@ function recoveryPresentationCopy(
       showSummary: bootstrap.showSummary,
       hasTypedSelectionCause: bootstrap.hasTypedSelectionCause,
       hasTypedCleanupCause: bootstrap.hasTypedCleanupCause,
+      hasTypedProcessCause: bootstrap.hasTypedProcessCause,
+      prerequisite: bootstrap.prerequisite,
       noPromptSent: bootstrap.noPromptSent,
       freshStartWarning: bootstrap.freshStartWarning,
       workspaceStatus: bootstrap.workspaceStatus,
@@ -464,6 +507,8 @@ function recoveryPresentationCopy(
     ...recoveryCopy(model, t),
     hasTypedSelectionCause: false,
     hasTypedCleanupCause: false,
+    hasTypedProcessCause: false,
+    prerequisite: null,
     noPromptSent: false,
     freshStartWarning: false,
     workspaceStatus: null,
@@ -477,7 +522,12 @@ function recoveryPresentationDetails(
   actions: SessionRecoveryActions,
   t: ReturnType<typeof useTranslation>["t"],
 ) {
-  if (bootstrap?.hasTypedSelectionCause || bootstrap?.hasTypedCleanupCause) return "";
+  if (
+    bootstrap?.hasTypedSelectionCause ||
+    bootstrap?.hasTypedCleanupCause ||
+    bootstrap?.hasTypedProcessCause
+  )
+    return "";
   const manualFailure = actions.manualRecoveryFailure;
   const ownsManualFailure =
     !manualFailure ||
@@ -512,9 +562,9 @@ function recoveryFailureCopy(
 function isBootstrapRecovery(model: ActiveSessionRecovery) {
   return (
     model.error?.phase === "bootstrap" &&
-    !isManagedRuntimeFailure(model.kind) &&
     model.kind !== "provider_quota_limited" &&
-    model.kind !== "managed_clone_relocation_required"
+    model.kind !== "managed_clone_relocation_required" &&
+    (!isManagedRuntimeFailure(model.kind) || Boolean(model.error?.causes?.some(isProcessExitCause)))
   );
 }
 
@@ -523,5 +573,12 @@ function isManagedRuntimeFailure(kind: string) {
     kind === "managed_runtime_npm_resolution" ||
     kind === "managed_runtime_npm_policy" ||
     kind === "managed_runtime_startup"
+  );
+}
+
+function isManagedRuntimeRecovery(model: ActiveSessionRecovery) {
+  if (isManagedRuntimeFailure(model.kind)) return true;
+  return Boolean(
+    model.metadata?.actions?.some((action) => sessionRecoveryAction(action) === "runtime_retry"),
   );
 }

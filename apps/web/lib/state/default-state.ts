@@ -26,6 +26,7 @@ import {
 } from "./slices";
 import { mergeHydratedQuickChatSessions } from "@/lib/state/slices/ui/quick-chat-sync";
 import type { AgentRuntimeAvailability } from "@/lib/types/agent-runtime";
+import { mergeUserShellsState } from "@/lib/state/user-shell-scope";
 import type { HydrationState } from "./store";
 import { seedSettledSessionBoundaries } from "@/lib/state/slices/session/turn-actions";
 import { migrateSidebarViewDraft, migrateView } from "./slices/ui/ui-slice";
@@ -146,7 +147,6 @@ export const defaultState = {
   gitlabIssueWatches: defaultGitLabState.gitlabIssueWatches,
   gitlabMRWatches: defaultGitLabState.gitlabMRWatches,
   gitlabActionPresets: defaultGitLabState.gitlabActionPresets,
-  gitlabStats: defaultGitLabState.gitlabStats,
   gitlabStatus: defaultGitLabState.gitlabStatus,
   taskMRAutomation: defaultGitLabState.taskMRAutomation,
   jiraIssueWatches: defaultJiraState.jiraIssueWatches,
@@ -195,7 +195,6 @@ function mergeCodeHostFields(
   | "gitlabIssueWatches"
   | "gitlabMRWatches"
   | "gitlabActionPresets"
-  | "gitlabStats"
   | "gitlabStatus"
   | "azureDevOpsTaskPullRequests"
   | "azureDevOpsTaskWorkItems"
@@ -206,7 +205,6 @@ function mergeCodeHostFields(
     gitlabIssueWatches: { ...d.gitlabIssueWatches, ...s.gitlabIssueWatches },
     gitlabMRWatches: { ...d.gitlabMRWatches, ...s.gitlabMRWatches },
     gitlabActionPresets: { ...d.gitlabActionPresets, ...s.gitlabActionPresets },
-    gitlabStats: { ...d.gitlabStats, ...s.gitlabStats },
     gitlabStatus: { ...d.gitlabStatus, ...s.gitlabStatus },
     azureDevOpsTaskPullRequests: {
       ...d.azureDevOpsTaskPullRequests,
@@ -545,7 +543,7 @@ export function mergeInitialState(initialState?: HydrationState): DefaultState {
     contextWindow: { ...defaultState.contextWindow, ...initialState.contextWindow },
     agents: { ...defaultState.agents, ...initialState.agents },
     sessionMode: { ...defaultState.sessionMode, ...initialState.sessionMode },
-    userShells: { ...defaultState.userShells, ...initialState.userShells },
+    userShells: mergeUserShellsState(defaultState.userShells, initialState.userShells),
     prepareProgress: { ...defaultState.prepareProgress, ...initialState.prepareProgress },
     launchWarning: { ...defaultState.launchWarning, ...initialState.launchWarning },
     sessionTodos: { ...defaultState.sessionTodos, ...initialState.sessionTodos },

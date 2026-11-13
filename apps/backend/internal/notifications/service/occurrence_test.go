@@ -98,7 +98,7 @@ func TestOccurrenceRecordedAtDispatch(t *testing.T) {
 				"provider-1": {{ProviderID: "provider-1", EventType: EventTaskSessionTurnFinished, Enabled: true}},
 			},
 		}
-		service := NewService(repo, occurrenceTestTaskGetter("user-1", "Fix delivery"), nil, log, nil)
+		service := NewService(repo, occurrenceTestTaskGetter("user-1", "Fix delivery"), nil, log, nil, false)
 		capture := &captureProvider{}
 		service.providers[models.ProviderTypeLocal] = capture
 
@@ -131,7 +131,7 @@ func TestOccurrenceRecordedAtDispatch(t *testing.T) {
 				"local-2": {{ProviderID: "local-2", EventType: EventSystemUpdateAvailable, Enabled: true}},
 			},
 		}
-		service := NewService(repo, nil, nil, log, nil)
+		service := NewService(repo, nil, nil, log, nil, false)
 		capture := &captureProvider{}
 		service.providers[models.ProviderTypeLocal] = capture
 
@@ -175,7 +175,7 @@ func TestOccurrenceRetentionSweep(t *testing.T) {
 			{UserID: "user-1", EventType: EventTaskSessionTurnFinished, OccurrenceID: "fresh", CreatedAt: base.Add(-time.Hour)},
 		},
 	}
-	service := NewService(repo, occurrenceTestTaskGetter("user-1", "Fix delivery"), nil, log, nil)
+	service := NewService(repo, occurrenceTestTaskGetter("user-1", "Fix delivery"), nil, log, nil, false)
 	capture := &captureProvider{}
 	service.providers[models.ProviderTypeLocal] = capture
 	now := base
